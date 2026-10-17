@@ -62,7 +62,7 @@ describe("the starting CLAUDE.md", () => {
 });
 
 describe("delivering the conventions when CLAUDE.md is someone else's file", () => {
-  const OWNED = "/repo/SUITE_CONVENTIONS.md";
+  const OWNED = "/repo/BURROW_CONVENTIONS.md";
 
   /**
    * THE DEFECT. `exists ? skip : write` cannot tell an agent's brief from a

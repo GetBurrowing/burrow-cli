@@ -66,7 +66,7 @@ export const isSuiteSecretName = (name: string): boolean =>
 
 export class ForbiddenOverride extends Error {
   constructor(name: string) {
-    super(`harnessChildEnv refuses to set ${name}: a harness child never receives a Suite credential in its environment`);
+    super(`harnessChildEnv refuses to set ${name}: a harness child never receives a Burrow credential in its environment`);
     this.name = "ForbiddenOverride";
   }
 }

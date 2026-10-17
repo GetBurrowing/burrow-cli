@@ -1,12 +1,13 @@
 #!/usr/bin/env bun
 /**
- * suite — connects a machine to a Startup Suite install, then sets up and runs
+ * burrow — connects a machine to a Burrow install, then sets up and runs
  * whichever agent harness you use there (Claude Code, DeepSeek, Hermes, OpenClaw).
+ * `suite` is the same command under its pre-0.8.0 name, kept as an alias.
  *
- * Argument passthrough for `suite claude` is deliberately total: the wrapper
+ * Argument passthrough for `burrow claude` is deliberately total: the wrapper
  * parses nothing beyond the verb, so a user flag can never be eaten by us.
  */
-import { VERSION } from "./version.ts";
+import { VERSION, CLI_NAME } from "./version.ts";
 import { row, nextCommand } from "./ui.ts";
 import { liveDeps, runInit } from "./commands/init.ts";
 import { liveClaudeDeps, restoreWirer, runClaude } from "./commands/claude.ts";
@@ -163,24 +164,25 @@ export function parseInitOptions(args: string[]): {
 export function usage(): string {
   return [
     "",
-    row("suite", VERSION),
+    row(CLI_NAME, VERSION),
+    row("", "`suite` is an alias of this command, kept for compatibility"),
     "",
-    row("init", "connect THIS agent folder to a Suite install (url, runtime id, token, watchdog)"),
+    row("init", "connect THIS agent folder to a Burrow install (url, runtime id, token, watchdog)"),
     row("", "--dir PATH: the agent folder (default: here); --from-mcp-json: adopt PATH/.mcp.json"),
-    row("claude", "set up Claude Code for Suite in this folder if needed, then run it in a persistent session"),
+    row("claude", "set up Claude Code for Burrow in this folder if needed, then run it in a persistent session"),
     row("claude new", "force a new session"),
-    row("deepseek", "run a DeepSeek Harness agent federated into Suite"),
+    row("deepseek", "run a DeepSeek Harness agent federated into Burrow"),
     row("hermes", "stamp a Hermes agent root and run its gateway (--stamp-only: JSON contract)"),
     row("openclaw", "stamp an OpenClaw agent root and run its gateway (--stamp-only: JSON contract)"),
-    row("codex", "run a Codex agent through codex app-server, federated into Suite, in a persistent session"),
+    row("codex", "run a Codex agent through codex app-server, federated into Burrow, in a persistent session"),
     row("doctor", "diagnose a broken setup"),
     row("status", "show every agent folder, session state and stamped agents (kind, root, live/stale, last verdict)"),
     row("", "--json [--dir PATH]: one JSON document on stdout (see README, Status contract)"),
     row("watch", "recover halted agent sessions (--dry-run, --once, --interval N, --force SESSION)"),
     row("restore", "bring recorded agents back up (--adopt, --dry-run, --forget NAME)"),
-    row("update", "install the latest suite CLI"),
+    row("update", `install the latest ${CLI_NAME} CLI`),
     "",
-    nextCommand("suite init"),
+    nextCommand(`${CLI_NAME} init`),
   ].join("\n");
 }
 
@@ -219,8 +221,8 @@ export async function run(argv: string[], env: Record<string, string | undefined
   }
   const { verb } = parse(argv);
   if (verb === null) {
-    console.error(`suite: unknown command "${argv[0]}"`);
-    console.error("run: suite --help");
+    console.error(`${CLI_NAME}: unknown command "${argv[0]}"`);
+    console.error(`run: ${CLI_NAME} --help`);
     return 2;
   }
   if (verb === "init") {
@@ -273,7 +275,7 @@ export async function run(argv: string[], env: Record<string, string | undefined
         home: process.env.HOME ?? "",
       };
       const res = await forceRecover(deps, base, opts.force);
-      console.log(`suite watch: ${opts.force}: ${res.reason}`);
+      console.log(`${CLI_NAME} watch: ${opts.force}: ${res.reason}`);
       if (res.prompt) console.log(`--- reorientation sent ---\n${res.prompt}`);
       return res.recovered || !opts.apply ? 0 : 1;
     }
@@ -294,8 +296,8 @@ export async function run(argv: string[], env: Record<string, string | undefined
       const res = await installSupervisor(liveSupervisorIo(), plan);
       console.log(
         res.installed
-          ? `suite watch: running as ${res.summary} — nothing further to set up`
-          : `suite watch: ${res.summary}`,
+          ? `${CLI_NAME} watch: running as ${res.summary} — nothing further to set up`
+          : `${CLI_NAME} watch: ${res.summary}`,
       );
       // One sweep now, so the operator sees the current state immediately
       // rather than waiting a full interval to learn it works.
@@ -327,13 +329,13 @@ export async function run(argv: string[], env: Record<string, string | undefined
       try {
         await runWatch(deps, base);
       } catch (err) {
-        console.error(`suite watch: pass failed: ${(err as Error).message}`);
+        console.error(`${CLI_NAME} watch: pass failed: ${(err as Error).message}`);
       }
       // Bounded by construction. On macOS this is the ONLY memory bound, since
       // launchd has no MemoryMax; the supervisor restarts us clean.
       const over = overCeiling(process.memoryUsage().rss);
       if (over) {
-        console.error(`suite watch: exiting for a clean restart — ${over}`);
+        console.error(`${CLI_NAME} watch: exiting for a clean restart — ${over}`);
         return 1;
       }
       await deps.sleep(opts.intervalSeconds * 1000);
@@ -344,7 +346,7 @@ export async function run(argv: string[], env: Record<string, string | undefined
     const i = args.indexOf("--forget");
     const forget = i === -1 ? undefined : args[i + 1];
     const res = await runRestore(
-      { ...liveRestoreDeps(), wire: restoreWirer(process.env, (line) => console.error(`suite restore: ${line}`)) },
+      { ...liveRestoreDeps(), wire: restoreWirer(process.env, (line) => console.error(`${CLI_NAME} restore: ${line}`)) },
       process.env.HOME ?? "",
       {
         apply: !args.includes("--dry-run"),
@@ -366,7 +368,7 @@ export async function run(argv: string[], env: Record<string, string | undefined
       const input = liveStatusJsonInput(process.env, dir, liveTmuxDeps(process.env));
       const doc = await statusDocument(input);
       io.stdout(renderStatusDocument(doc));
-      io.stderr(`suite status: ${doc.agents.length} agents\n`);
+      io.stderr(`${CLI_NAME} status: ${doc.agents.length} agents\n`);
       if (input.legacy !== null) io.stderr(`${legacyLine(input.legacy)}\n`);
       return 0;
     });

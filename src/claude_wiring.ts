@@ -22,8 +22,8 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import {
   CLAUDE_MD,
-  CONVENTIONS_FILENAME,
-  CONVENTIONS_MD,
+  conventionsFilename,
+  conventionsMd,
   claudeMdPlan,
   conventionsAdvice,
   conventionsPlan,
@@ -56,6 +56,7 @@ import {
   type CheckoutOutcome,
   type Runner,
 } from "./commands/init.ts";
+import { CLI_NAME } from "./version.ts";
 
 type Env = Record<string, string | undefined>;
 
@@ -280,12 +281,16 @@ function ensureClaudeMd(deps: WiringDeps): { claudeMd: "write" | "skip"; convent
     writeFileSync(plan.path, CLAUDE_MD, "utf8");
     deps.out(row("CLAUDE.md", plan.path, "written"));
   }
-  const conventions = conventionsPlan(resolve(deps.cwd, CONVENTIONS_FILENAME), existing);
+  // BURROW_CONVENTIONS.md on a folder with neither file; an existing (or
+  // linked) SUITE_CONVENTIONS.md keeps its name. Never renamed, never moved.
+  const filename = conventionsFilename(existing, (name) => existsSync(resolve(deps.cwd, name)));
+  const content = conventionsMd(filename);
+  const conventions = conventionsPlan(resolve(deps.cwd, filename), existing);
   if (conventions.action === "write") {
     const current = existsSync(conventions.path) ? readFileSync(conventions.path, "utf8") : null;
-    if (current !== CONVENTIONS_MD) {
-      writeFileSync(conventions.path, CONVENTIONS_MD, "utf8");
-      deps.out(row(CONVENTIONS_FILENAME, conventions.path, "written"));
+    if (current !== content) {
+      writeFileSync(conventions.path, content, "utf8");
+      deps.out(row(filename, conventions.path, "written"));
       for (const line of conventionsAdvice(conventions)) deps.out(row("", "", line));
     }
   }
@@ -317,7 +322,7 @@ export async function ensureClaudeWiring(
     const tokenLiteral = plan.want.tokenLiteral;
     // Removing an alias needs no token; writing an entry does.
     if (writes && tokenLiteral === null) {
-      throw new Error("no saved token to write into the Claude MCP entries; run suite init");
+      throw new Error(`no saved token to write into the Claude MCP entries; run ${CLI_NAME} init`);
     }
     const headers = plan.want.headers.map((h) => ({ name: h.name, value: h.value ?? "" }));
     const invocations: string[][] = [];

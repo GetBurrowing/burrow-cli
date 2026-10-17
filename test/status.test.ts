@@ -117,7 +117,7 @@ async function status(options: FakeOptions = {}): Promise<{ text: string; code: 
   return { text: deps.lines.join("\n"), code };
 }
 
-describe("suite status", () => {
+describe("burrow status", () => {
   test("names the runtime this box is federated as, and never the token", async () => {
     const deps = fakeDeps();
     deps.env = { SUITE_TOKEN: TOKEN };
@@ -135,7 +135,7 @@ describe("suite status", () => {
     const { text, code } = await status({ config: null });
     expect(code).toBe(1);
     expect(text).toContain("not federated");
-    expect(text).toContain("suite init");
+    expect(text).toContain("burrow init");
   });
 
   test("the channel is health-checked, not merely assumed from config", async () => {
@@ -196,7 +196,7 @@ describe("suite status", () => {
 
   test("no sessions at all names the command that starts one", async () => {
     const { text } = await status();
-    expect(text).toContain("suite claude starts one");
+    expect(text).toContain("burrow claude starts one");
   });
 });
 

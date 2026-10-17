@@ -92,7 +92,7 @@ describe("plan per platform", () => {
     const plan = supervisorPlan({ ...base, platform: "win32" });
     expect(plan.kind).toBe("unsupported");
     expect(plan.activate).toEqual([]);
-    expect(plan.summary).toContain("suite watch");
+    expect(plan.summary).toContain("burrow watch");
   });
 
   test("the unit invokes an absolute binary, never a bare name", () => {

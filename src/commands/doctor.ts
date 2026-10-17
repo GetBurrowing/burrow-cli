@@ -81,6 +81,7 @@ import {
   type SessionState,
   type TmuxDeps,
 } from "../tmux.ts";
+import { CLI_NAME } from "../version.ts";
 
 /* ------------------------------------------------------------------------- */
 /* The shape of a check result                                                */
@@ -628,7 +629,7 @@ export function summaryLine(checks: CheckResult[], options: RenderOptions): stri
   const failed = checks.filter((c) => c.status === "fail").length;
   const bold = (s: string) => paint(s, SGR.bold, options.color);
   if (failed === 0) return `  ${bold(`${checks.length} checks passed.`)}`;
-  return `  ${bold(`${failed} of ${checks.length} failed.`)}  Fix the first one, run suite doctor again.`;
+  return `  ${bold(`${failed} of ${checks.length} failed.`)}  Fix the first one, run ${CLI_NAME} doctor again.`;
 }
 
 export function renderReport(checks: CheckResult[], options: RenderOptions): string[] {
@@ -729,7 +730,7 @@ export async function runChecks(deps: DoctorDeps): Promise<CheckResult[]> {
           status: "fail",
           value: "not on PATH",
           consequence: [
-            "Agents die with the terminal that started them, mid-task, and Suite",
+            "Agents die with the terminal that started them, mid-task, and Burrow",
             "keeps waiting on a runtime that no longer exists.",
           ],
           remedy: "brew install tmux",
@@ -811,7 +812,7 @@ export async function runChecks(deps: DoctorDeps): Promise<CheckResult[]> {
           value: "not on PATH",
           consequence: [
             "The channel plugin is run by bun, so the suite-channel MCP entry",
-            "fails to start and Suite sees this runtime as offline.",
+            "fails to start and Burrow sees this runtime as offline.",
           ],
           remedy: "curl -fsSL https://bun.sh/install | bash",
         }
@@ -868,9 +869,9 @@ function installCheck(deps: DoctorDeps): CheckResult {
       detail: deps.configFile,
       consequence: [
         "This folder has no saved connection, so no harness started here knows which",
-        "Suite to join or as which runtime. Connections are per agent folder.",
+        "Burrow to join or as which runtime. Connections are per agent folder.",
       ],
-      remedy: "suite init",
+      remedy: `${CLI_NAME} init`,
     };
   }
   const token =
@@ -880,7 +881,7 @@ function installCheck(deps: DoctorDeps): CheckResult {
         ? ""
         : deps.tokenSaved
           ? "token saved"
-          : "token not saved; suite claude asks once if needed";
+          : `token not saved; ${CLI_NAME} claude asks once if needed`;
   return {
     id: "install",
     label: "install",
@@ -951,9 +952,9 @@ export function agentsVerdict(
       consequence: [
         ...crossed.map((r) => `${r.root}: ${claimsPhrase(r.claims)}`),
         ...userLines,
-        "A cross-wired folder joins Suite as another agent's runtime: that agent's work lands here and its own socket is refused.",
+        "A cross-wired folder joins Burrow as another agent's runtime: that agent's work lands here and its own socket is refused.",
       ],
-      remedy: `cd ${first.root} && ${hasMcpJson ? "suite init --from-mcp-json" : "suite init"}`,
+      remedy: `cd ${first.root} && ${hasMcpJson ? `${CLI_NAME} init --from-mcp-json` : `${CLI_NAME} init`}`,
     };
   }
   if (userScope.length > 0) {
@@ -965,7 +966,7 @@ export function agentsVerdict(
       detail: userScope.map((u) => u.name).join(", "),
       consequence: [
         ...userLines,
-        "Run suite init in each agent folder first (suite status lists them), then remove the user-scope entries.",
+        `Run ${CLI_NAME} init in each agent folder first (${CLI_NAME} status lists them), then remove the user-scope entries.`,
       ],
       remedy: userScope.map((u) => `claude mcp remove ${u.name} -s user`).join(" && "),
     };
@@ -1102,9 +1103,9 @@ function pluginCheck(deps: DoctorDeps, claudePath: string | null, entry: RunResu
       value: "not registered",
       consequence: [
         `No ${CHANNEL_SERVER} MCP entry exists, so this runtime never joins the`,
-        "channel and Suite shows it as offline.",
+        "channel and Burrow shows it as offline.",
       ],
-      remedy: "suite claude",
+      remedy: `${CLI_NAME} claude`,
     };
   }
   const path = parseMcpEntryPath(output);
@@ -1122,7 +1123,7 @@ function pluginCheck(deps: DoctorDeps, claudePath: string | null, entry: RunResu
         "We could not find the plugin path in the MCP entry, so we cannot tell",
         "whether the channel will start at all.",
       ],
-      remedy: "suite claude",
+      remedy: `${CLI_NAME} claude`,
     };
   }
   if (!deps.exists(path)) {
@@ -1139,7 +1140,7 @@ function pluginCheck(deps: DoctorDeps, claudePath: string | null, entry: RunResu
       // The canvas said `suite init --repair`; that flag does not exist. `suite
       // claude` re-resolves the checkout and rewrites a stale entry — see the
       // module docstring.
-      remedy: "suite claude",
+      remedy: `${CLI_NAME} claude`,
     };
   }
   return { id: "plugin", label: "plugin", status: "pass", value: "checkout resolves", detail: path };
@@ -1166,10 +1167,10 @@ function credentialsCheck(
       status: "fail",
       value: "no token in the entry",
       consequence: [
-        "The channel authenticates with nothing and is rejected by Suite, which",
+        "The channel authenticates with nothing and is rejected by Burrow, which",
         "looks exactly like a network problem from this side.",
       ],
-      remedy: "suite init",
+      remedy: `${CLI_NAME} init`,
     };
   }
   const runtimeId = deps.config?.runtimeId ?? "";
@@ -1258,11 +1259,11 @@ function tokensCheck(
       consequence: [
         // Two lines, per rule (b). The first says WHAT is wrong and why that is
         // a verdict rather than an observation.
-        `The ${CHANNEL_SERVER} and ${TOOLS_SERVER} entries carry different credentials for one Suite host, and one runtime credential normally serves both, so at least one of the two is wrong.`,
+        `The ${CHANNEL_SERVER} and ${TOOLS_SERVER} entries carry different credentials for one Burrow host, and one runtime credential normally serves both, so at least one of the two is wrong.`,
         // The second says why nothing else will tell you.
         "The wrong one produces a server that registers and exposes nothing at all: no error, no missing entry, just silence — which is why this configuration looks plausible from every surface you can see.",
       ],
-      remedy: "suite init",
+      remedy: `${CLI_NAME} init`,
     };
   }
   return { id, label, status: "pass", value: "both entries agree", detail: channelHost };
@@ -1306,9 +1307,9 @@ async function channelCheck(
       value: "not registered",
       consequence: [
         `claude mcp list does not list ${CHANNEL_SERVER}, so nothing carries`,
-        "Suite's messages to this machine.",
+        "Burrow's messages to this machine.",
       ],
-      remedy: "suite claude",
+      remedy: `${CLI_NAME} claude`,
     };
   }
   if (status.state === "unparseable") {
@@ -1332,7 +1333,7 @@ async function channelCheck(
     value: "not connected",
     detail: status.raw,
     consequence: [
-      "Suite cannot reach this runtime: tasks routed here are never delivered",
+      "Burrow cannot reach this runtime: tasks routed here are never delivered",
       "and the router keeps waiting.",
     ],
     remedy: "claude mcp list",
@@ -1394,10 +1395,10 @@ async function toolsCheck(
       status: "fail",
       value: "not registered",
       consequence: [
-        `No ${TOOLS_SERVER} MCP entry exists, so this runtime has no Suite tools`,
+        `No ${TOOLS_SERVER} MCP entry exists, so this runtime has no Burrow tools`,
         "at all and cannot answer the work the channel delivers.",
       ],
-      remedy: "suite claude",
+      remedy: `${CLI_NAME} claude`,
     };
   }
   const url = parseMcpHttpUrl(output);
@@ -1410,9 +1411,9 @@ async function toolsCheck(
       detail: compact(output),
       consequence: [
         "We could not find the endpoint URL in the MCP entry, so we cannot tell",
-        "whether this runtime's credential is accepted by Suite.",
+        "whether this runtime's credential is accepted by Burrow.",
       ],
-      remedy: "suite claude",
+      remedy: `${CLI_NAME} claude`,
     };
   }
 
@@ -1446,13 +1447,13 @@ async function toolsCheck(
       consequence: [
         // Two lines, per rule (b). The first fixes BLAME — the request reached
         // the application, so the gateway's credentials are not implicated.
-        "The request reached Suite and Suite refused the credential: the entry stays registered and reachable and exposes no Suite tools at all,",
+        "The request reached Burrow and Burrow refused the credential: the entry stays registered and reachable and exposes no Burrow tools at all,",
         // The second is the advice. An expired credential and one that was never
         // valid present identically from here, so this points at re-entering the
         // credential known to work rather than at minting a new one.
         "so this runtime receives work it cannot answer and nothing anywhere prints an error. Re-enter the credential you know works — the same one normally serves both entries — rather than minting a new one.",
       ],
-      remedy: "suite init",
+      remedy: `${CLI_NAME} init`,
     };
   }
   if (verdict === "gateway-challenge") {
@@ -1460,12 +1461,12 @@ async function toolsCheck(
       id,
       label,
       status: "fail",
-      value: "blocked before Suite",
+      value: "blocked before Burrow",
       consequence: [
-        "The gateway in front of Suite answered instead, so the request never reached the application",
+        "The gateway in front of Burrow answered instead, so the request never reached the application",
         "and the credential was not even evaluated: what is wrong is the additional headers, not the token.",
       ],
-      remedy: "suite init",
+      remedy: `${CLI_NAME} init`,
     };
   }
   if (verdict === "unreachable") {
@@ -1522,9 +1523,9 @@ async function sessionCheck(deps: DoctorDeps, tmuxPath: string | null): Promise<
     detail: name,
     consequence: [
       "The tmux session is alive but Claude inside it is not, so attaching shows",
-      "a shell prompt while Suite waits on an agent that already died.",
+      "a shell prompt while Burrow waits on an agent that already died.",
     ],
-    remedy: "suite claude",
+    remedy: `${CLI_NAME} claude`,
   };
 }
 

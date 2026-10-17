@@ -317,11 +317,11 @@ describe("an all-healthy machine", () => {
 });
 
 describe("the install connection is reported apart from the claude harness", () => {
-  test("no saved connection: install fails → suite init, while the claude half still reports on its own", async () => {
+  test("no saved connection: install fails → burrow init, while the claude half still reports on its own", async () => {
     const { text, code, checks } = await report({ config: null });
     const install = byId(checks, "install");
     expect(install.status).toBe("fail");
-    expect(text).toContain("→ suite init");
+    expect(text).toContain("→ burrow init");
     expect(code).toBe(1);
     // The harness half is still checked — it is a different half.
     expect(byId(checks, "claude").status).toBe("pass");
@@ -410,7 +410,7 @@ describe("each check fires on a broken input", () => {
     // The canvas's `suite init --repair` is NOT shipped: rule (b) requires a
     // runnable command, and that flag does not exist.
     expect(text).not.toContain("--repair");
-    expect(text).toContain("→ suite claude");
+    expect(text).toContain("→ burrow claude");
   });
 
   test("5b. an unreadable MCP entry is a loud failure printing the raw line", async () => {
@@ -426,7 +426,7 @@ describe("each check fires on a broken input", () => {
     expect(byId(checks, "credentials").status).toBe("fail");
     expect(code).toBe(1);
     expect(text).toContain("no token in the entry");
-    expect(text).toContain("→ suite init");
+    expect(text).toContain("→ burrow init");
   });
 
   test("6b. a present token is confirmed without any part of its value", async () => {
@@ -482,7 +482,7 @@ describe("each check fires on a broken input", () => {
     expect(code).toBe(1);
     expect(text).toContain("stale");
     expect(text).toContain("Claude inside it is not");
-    expect(text).toContain("→ suite claude");
+    expect(text).toContain("→ burrow claude");
     // A live agent in the same shape of session is green, so "stale" is what
     // is being detected — not merely "a session exists".
     const live = await report({ sessionState: "live" });
@@ -600,7 +600,7 @@ describe("the report obeys the design rules", () => {
     const { text } = await report({ auth: APIKEY_AUTH, exists: () => false });
     const last = text.trimEnd().split("\n").pop() ?? "";
     expect(last).toContain("2 of 12 failed.");
-    expect(last).toContain("Fix the first one, run suite doctor again.");
+    expect(last).toContain("Fix the first one, run burrow doctor again.");
     expect(last.split(".").filter((s) => s.trim() !== "")).toHaveLength(2);
   });
 });
@@ -625,7 +625,7 @@ describe("colour and glyphs", () => {
     expect(ascii.text).toContain("ok");
     // The arrow and the em dash are not ASCII either, and degrade with them.
     expect(ascii.text).not.toContain("→");
-    expect(ascii.text).toContain("-> suite claude");
+    expect(ascii.text).toContain("-> burrow claude");
     expect(ascii.text).toContain("skipped -- needs a working plugin path");
     const column = (text: string) =>
       text
@@ -666,7 +666,7 @@ describe("colour and glyphs", () => {
 afterEach(cleanupCleanEnvs);
 
 describe("piped to a file", () => {
-  test("`suite doctor > report.txt` contains zero escape bytes", async () => {
+  test("`burrow doctor > report.txt` contains zero escape bytes", async () => {
     // A whole-binary run: stdout is a pipe, which is what makes the assertion
     // about the SHIPPED entry point rather than about a hand-built option map.
     const fx = createCleanEnv({
@@ -983,7 +983,7 @@ describe.if(HAVE_TMUX)("against a real tmux", () => {
       const text = real.lines.join("\n");
       expect(code).toBe(1);
       expect(text).toContain("stale");
-      expect(text).toContain("→ suite claude");
+      expect(text).toContain("→ burrow claude");
       // ⋯ means could-not-run; this session ran and died.
       expect(text.split("\n").filter((l) => l.includes("stale")).some((l) => l.includes("⋯"))).toBe(false);
 
@@ -1023,13 +1023,13 @@ describe("the tools api check", () => {
     expect(code).toBe(1);
     expect(text).toContain("credential rejected");
     // The consequence names the invisible symptom, not the status code.
-    expect(text).toContain("exposes no Suite tools");
+    expect(text).toContain("exposes no Burrow tools");
     expect(text).toContain("nothing anywhere prints an error");
     // It reached the application, so nothing in front of Suite is implicated.
-    expect(text).toContain("The request reached Suite");
+    expect(text).toContain("The request reached Burrow");
     // Expired and never-valid look identical from here: re-enter, do not mint.
     expect(text).toContain("rather than minting a new one");
-    expect(text).toContain("→ suite init");
+    expect(text).toContain("→ burrow init");
     // Exactly one runnable line, so the reader has one thing to do.
     expect(text.split("\n").filter((l) => l.includes("→")).length).toBe(1);
     // The secret is nowhere in the report.
@@ -1072,10 +1072,10 @@ describe("the tools api check", () => {
       probe: async () => ({ status: 200, body: "<!DOCTYPE html><html><body>sign in</body></html>", contentType: "text/html; charset=utf-8" }),
     });
     expect(byId(checks, "tools").status).toBe("fail");
-    expect(text).toContain("blocked before Suite");
+    expect(text).toContain("blocked before Burrow");
     expect(text).toContain("never");
     expect(text).toContain("not even evaluated");
-    expect(text).toContain("→ suite init");
+    expect(text).toContain("→ burrow init");
   });
 
   test("a 200 carrying no tools is NEVER green", async () => {
@@ -1099,7 +1099,7 @@ describe("the tools api check", () => {
     const weird = await report({ toolsGet: "Type: http\nno url on any line\n" });
     expect(byId(weird.checks, "tools").status).toBe("fail");
     expect(weird.text).toContain("entry unreadable");
-    expect(weird.text).toContain("→ suite claude");
+    expect(weird.text).toContain("→ burrow claude");
   });
 
   test("without the claude cli it is ⋯ skipped, not red", async () => {
@@ -1207,7 +1207,7 @@ describe("the token match check", () => {
     expect(text).toContain(TOOLS_SERVER);
     // The consequence is the invisible symptom, not the mismatch restated.
     expect(text).toContain("registers and exposes nothing");
-    expect(text).toContain("→ suite init");
+    expect(text).toContain("→ burrow init");
   });
 
   /**

@@ -893,7 +893,7 @@ describe("the gateway session", () => {
     expect(stderr.join("")).toContain(`attaching to ${session}`);
   });
 
-  test("--gateway-only execs `gateway run --port N` with the root-scoped allowlisted env and no Suite credential", async () => {
+  test("--gateway-only execs `gateway run --port N` with the root-scoped allowlisted env and no Burrow credential", async () => {
     await stamp();
     const deps = makeDeps();
     const o = parseOpenclawOptions(stampArgs());
@@ -960,7 +960,7 @@ describe("--stamp-only as a subprocess: the machine contract", () => {
     expect(r.doc.token_ref).toBe(`file:${tokenPath}`);
     expect(r.stdout.trimEnd().endsWith("}")).toBe(true);
     const step = r.doc.human_steps.find((s) => s.kind === "start_agent_session");
-    expect(step?.text.startsWith("suite openclaw ")).toBe(true);
+    expect(step?.text.startsWith("burrow openclaw ")).toBe(true);
     expect(step?.text).not.toContain("--stamp-only");
     expect(stubCalls().some((c) => c.argv[0] === "gateway")).toBe(false);
     expect(readdirSync(join(home, "tmux"))).toEqual([]);

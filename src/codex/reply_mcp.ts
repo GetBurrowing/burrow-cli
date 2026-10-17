@@ -15,6 +15,7 @@ import { createConnection, createServer, type Server, type Socket } from "node:n
 import { chmodSync, mkdirSync, rmSync } from "node:fs";
 import { dirname } from "node:path";
 import { burrowName, envValue, suiteName } from "../env_names.ts";
+import { CLI_NAME } from "../version.ts";
 
 /**
  * The names the bridge writes into Codex's reply-MCP entry: BURROW_ first, and
@@ -30,7 +31,7 @@ export const TOOL_SPECS = [
   {
     name: "suite_reply",
     description:
-      "Send a text reply into a Startup Suite space. Use this to answer a message that arrived via the channel. Pass the space_id attribute from the inbound <channel> tag.",
+      "Send a text reply into a Burrow space. Use this to answer a message that arrived via the channel. Pass the space_id attribute from the inbound <channel> tag.",
     inputSchema: {
       type: "object",
       properties: { space_id: { type: "string" }, content: { type: "string" } },
@@ -61,7 +62,7 @@ export const TOOL_SPECS = [
   },
   {
     name: "suite_typing",
-    description: "Toggle a typing indicator in the Suite space so humans can see that a reply is being composed.",
+    description: "Toggle a typing indicator in the Burrow space so humans can see that a reply is being composed.",
     inputSchema: {
       type: "object",
       properties: { space_id: { type: "string" }, typing: { type: "boolean" } },
@@ -71,7 +72,7 @@ export const TOOL_SPECS = [
   {
     name: "suite_reply_chunk",
     description:
-      "Send a partial reply chunk to a Suite space, appearing to the human as a progressively-revealed message. Call it several times with the same chunk_id, passing the cumulative text each call. Set done:true on the last call.",
+      "Send a partial reply chunk to a Burrow space, appearing to the human as a progressively-revealed message. Call it several times with the same chunk_id, passing the cumulative text each call. Set done:true on the last call.",
     inputSchema: {
       type: "object",
       properties: {
@@ -170,7 +171,7 @@ export async function handleMcpMessage(line: string, io: McpIo, version: string)
       try {
         r = await io.forward(name, args);
       } catch (e) {
-        r = { ok: false, text: `the suite codex bridge is not reachable: ${e instanceof Error ? e.message : String(e)}` };
+        r = { ok: false, text: `the ${CLI_NAME} codex bridge is not reachable: ${e instanceof Error ? e.message : String(e)}` };
       }
       return ok({ content: [{ type: "text", text: r.text }], isError: !r.ok });
     }
@@ -204,7 +205,7 @@ export function socketForwarder(path: string): (tool: string, args: Record<strin
       }
     });
     const fail = (why: string) => {
-      for (const w of waiting.values()) w({ ok: false, text: `the suite codex bridge is not reachable: ${why}` });
+      for (const w of waiting.values()) w({ ok: false, text: `the ${CLI_NAME} codex bridge is not reachable: ${why}` });
       waiting.clear();
       conn = null;
     };
@@ -225,7 +226,7 @@ export function socketForwarder(path: string): (tool: string, args: Record<strin
 export async function runReplyMcp(env: Record<string, string | undefined>, version: string): Promise<number> {
   const path = envValue(env, "CODEX_BRIDGE_SOCKET");
   if (path === undefined || path === "") {
-    process.stderr.write(`suite codex --reply-mcp: ${BRIDGE_SOCKET_ENVS.join(" or ")} is not set\n`);
+    process.stderr.write(`${CLI_NAME} codex --reply-mcp: ${BRIDGE_SOCKET_ENVS.join(" or ")} is not set\n`);
     return 2;
   }
   const io: McpIo = { write: (l) => void process.stdout.write(`${l}\n`), forward: socketForwarder(path) };

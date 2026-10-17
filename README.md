@@ -1,14 +1,14 @@
 ```
-                _ _
-  ___ _   _ _(_) |_ ___
- / __| | | | | | __/ _ \
- \__ \ |_| | | | ||  __/
- |___/\__,_|_|_|\__\___|
+  _
+ | |__  _   _ _ __ _ __ _____      __
+ | '_ \| | | | '__| '__/ _ \ \ /\ / /
+ | |_) | |_| | |  | | | (_) \ V  V /
+ |_.__/ \__,_|_|  |_|  \___/ \_/\_/
 ```
 
-# suite-cli
+# burrow CLI
 
-`suite` connects a machine to a Startup Suite
+`burrow` connects a machine to a Burrow
 install, sets up whichever agent harness you run there (Claude Code, DeepSeek,
 Hermes, OpenClaw), and keeps agents alive when the terminal that started them
 goes away.
@@ -16,26 +16,26 @@ goes away.
 ## The model: an install connection, then harness wiring
 
 * **An install** is the server: a URL, a runtime id and a token.
-  **`suite init`** connects ONE AGENT FOLDER to one — the folder you run it in,
+  **`burrow init`** connects ONE AGENT FOLDER to one — the folder you run it in,
   or `--dir PATH`. It saves those three values for that folder only, checks
   `bun` and `tmux`, and installs the watchdog. A machine running several agents
-  runs `suite init` once in each agent folder; each can be a different runtime
+  runs `burrow init` once in each agent folder; each can be a different runtime
   on a different install. It never runs `claude`
   or any other harness, so it cannot fail because one is missing.
 * **Harness wiring** is what one harness needs on top. Each harness verb does
   its own, from the saved connection, without asking for credentials again,
-  and only the parts that are missing. For **`suite claude`** that is the
+  and only the parts that are missing. For **`burrow claude`** that is the
   channel plugin checkout, `CLAUDE.md`, and both MCP entries for this folder.
 
 Both orders work:
 
 ```sh
-suite init && suite claude      # connect the machine first, then start an agent
-suite claude                    # or start straight away: it asks the init questions itself
+burrow init && burrow claude      # connect the machine first, then start an agent
+burrow claude                    # or start straight away: it asks the init questions itself
 ```
 
-Installing Claude Code before or after `suite init` makes no difference.
-`suite doctor` reports the two halves separately, so you can see which one is
+Installing Claude Code before or after `burrow init` makes no difference.
+`burrow doctor` reports the two halves separately, so you can see which one is
 missing.
 
 macOS and Linux. **Windows is not supported** — the installer refuses it by
@@ -45,31 +45,31 @@ name rather than failing obscurely.
 
 <a id="before-you-start"></a>
 
-`suite` never runs a package manager and never uses `sudo`, so these are
+`burrow` never runs a package manager and never uses `sudo`, so these are
 **checked and named**, never installed for you. Install any that are missing
 with your own package manager first:
 
-* `git` — clones the Suite channel plugin the first time `suite claude` runs.
+* `git` — clones the Burrow channel plugin the first time `burrow claude` runs.
 * `curl` — fetches this installer, and the bun installer if you take that route.
 * `ca-certificates` — without trusted roots every one of those fetches fails at
   TLS rather than at a prompt.
 * `tar` — unpacks what the installer downloads.
 * `unzip` — what **bun's official installer**
   (`curl -fsSL https://bun.sh/install | bash`) needs: it downloads a zip release
-  and unpacks it. `suite` **checks for `unzip` and will not install it** — that
+  and unpacks it. `burrow` **checks for `unzip` and will not install it** — that
   would mean a package manager, which means root, and this tool has no `sudo`
   path at all. Without it you get a named refusal (`unzip is needed to install
   bun, and is not on PATH`) before anything is downloaded, not a half-written
-  bun. If your distro packages `bun` directly, `suite init` takes that route
+  bun. If your distro packages `bun` directly, `burrow init` takes that route
   instead and needs no `unzip`.
 
 ### Claude Code is installed on demand, not up front
 
 <a id="claude-on-demand"></a>
 
-**Claude Code is not a prerequisite.** Nothing above installs it and `suite
-init` neither asks about it nor needs it. The first time you launch an agent with `suite
-claude`, if `claude` is not on `PATH`, `suite` says so, **offers to install it**
+**Claude Code is not a prerequisite.** Nothing above installs it and `burrow
+init` neither asks about it nor needs it. The first time you launch an agent with `burrow
+claude`, if `claude` is not on `PATH`, `burrow` says so, **offers to install it**
 with the official installer (`curl -fsSL https://claude.ai/install.sh | bash`,
 which lands a launcher in `~/.local/bin` and needs no `sudo`), and — once it is
 in place — carries straight on into the run you asked for.
@@ -79,7 +79,7 @@ missing `curl` or `bash`, a failing installer, and an installer that claims
 success without leaving a binary: each prints what is missing and stops. There
 is no half-installed state to clean up.
 
-**Logging in is still your step.** `suite` installs a binary and never touches
+**Logging in is still your step.** `burrow` installs a binary and never touches
 your Anthropic credentials — running `claude` opens the browser login, and the
 offer says so before you answer it.
 
@@ -91,44 +91,47 @@ curl -fsSL https://raw.githubusercontent.com/Startup-Suite/suite-cli/main/instal
 
 The installer never uses `sudo`. It installs to `$XDG_BIN_HOME`, or
 `~/.local/bin` when that is unset, tells you if that directory is not on your
-`PATH`, and prints the exact `export PATH=` line to add. If a `suite` is
-already installed it names the version it would replace and asks first.
+`PATH`, and prints the exact `export PATH=` line to add. It installs two
+launchers, `burrow` and `suite` (the pre-0.8.0 name, kept as an alias; see
+[Compatibility](#compatibility)). If either is already installed it names the
+version it would replace and asks first. Its last line is the next command,
+`burrow init`.
 
 The command above names the GitHub org the CLI is published under today. URLs
 under the old org keep working through GitHub's rename redirects after an org
-rename. To install from, or `suite update` against, another org explicitly, set
-`SUITE_GITHUB_OWNER` in the environment (process env only; no config file sets
+rename. To install from, or `burrow update` against, another org explicitly, set
+`BURROW_GITHUB_OWNER` (or the older `SUITE_GITHUB_OWNER`) in the environment (process env only; no config file sets
 it). It changes the org of every repo the CLI fetches or clones: its own
 installer and tarball, the Claude Code plugin, and the OpenClaw and Hermes
-channels. `suite update` prints the `owner/repo` it resolved.
+channels. `burrow update` prints the `owner/repo` it resolved.
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/<owner>/suite-cli/main/install.sh | SUITE_GITHUB_OWNER=<owner> sh
+curl -fsSL https://raw.githubusercontent.com/<owner>/suite-cli/main/install.sh | BURROW_GITHUB_OWNER=<owner> sh
 ```
 
 ## Connect an agent folder
 
 ```sh
-cd ~/agents/brosnan && suite init          # this folder
-suite init --dir ~/agents/moore            # or name the folder explicitly
-suite init --dir ~/agents/moore --from-mcp-json   # adopt that folder's own .mcp.json
+cd ~/agents/brosnan && burrow init          # this folder
+burrow init --dir ~/agents/moore            # or name the folder explicitly
+burrow init --dir ~/agents/moore --from-mcp-json   # adopt that folder's own .mcp.json
 ```
 
 `init` detects `bun` and `tmux` (offering to install either, never unasked),
-asks for the Suite URL, runtime id and token, saves them **for this folder**,
+asks for the Burrow URL, runtime id and token, saves them **for this folder**,
 and installs the watchdog. That is all it does. It prints
 `agent <dir> connected as <runtime> (<url>)`. Re-run it to fix a URL or rotate a
-token. The next `suite claude` in that folder rewrites any MCP entry that no
+token. The next `burrow claude` in that folder rewrites any MCP entry that no
 longer matches.
 
-**The connection is per agent folder.** `suite init` in folder B cannot change
+**The connection is per agent folder.** `burrow init` in folder B cannot change
 folder A's connection: each folder's record is its own file pair (see
-[Credentials and config](#credentials-and-config)). `suite init` in `$HOME`
+[Credentials and config](#credentials-and-config)). `burrow init` in `$HOME`
 warns that agents in other folders will not use that record.
 
 **`--from-mcp-json`** reads the folder's own `.mcp.json` — the `suite-channel`
-entry's `SUITE_RUNTIME_ID` and `SUITE_TOKEN`, the `startup-suite` entry's URL
-(the Suite URL is that minus `/mcp`) and headers — and saves that as the
+entry's `BURROW_RUNTIME_ID` and `BURROW_TOKEN` (or their `SUITE_*` names), the `startup-suite` entry's URL
+(the Burrow URL is that minus `/mcp`) and headers — and saves that as the
 folder's connection, so no token passes through an argv, a shell or a terminal.
 It refuses, naming fields and never values, and writes nothing, when either
 entry or field is missing, when the two entries name different hosts, or when
@@ -136,26 +139,26 @@ the channel token and the tools bearer differ. A `${VAR}` token is recorded as
 the variable name, not resolved.
 
 **`init --from-mcp-json` alone does not rewrite a folder's existing Claude
-entries.** `suite init` never runs `claude`. A folder whose local entries name
-another runtime keeps them until the next `suite claude` in that folder, or the
-next `suite restore` that STARTS that folder's agent; either compares the
-entries with the folder's record and rewrites the ones that differ. `suite
+entries.** `burrow init` never runs `claude`. A folder whose local entries name
+another runtime keeps them until the next `burrow claude` in that folder, or the
+next `burrow restore` that STARTS that folder's agent; either compares the
+entries with the folder's record and rewrites the ones that differ. `burrow
 restore` skips an agent whose session is already live, and does not rewire it.
 
 **Upgrading from 0.7.0 or earlier.** Those versions kept one connection per
 machine in `config.json` / `credentials.json`. That connection is now *legacy*:
-it is still read and reported (`suite status` prints it as `legacy`), but it is
+it is still read and reported (`burrow status` prints it as `legacy`), but it is
 assigned to no folder and never used to wire one, and nothing deletes it. Run
-`suite init` (or `suite init --from-mcp-json`) once in each agent folder. Until
-you do, `suite claude` in a folder that has Claude entries and no record leaves
+`burrow init` (or `burrow init --from-mcp-json`) once in each agent folder. Until
+you do, `burrow claude` in a folder that has Claude entries and no record leaves
 the entries exactly as they are, registers nothing and says so; in a folder with
 neither, it asks the init questions when it has a terminal. Existing roster entries are repaired
-at the next `suite restore` that starts them, or the next `suite claude` in
+at the next `burrow restore` that starts them, or the next `burrow claude` in
 their folder, once the folder has a record.
 
-## Claude Code's wiring (done by `suite claude`)
+## Claude Code's wiring (done by `burrow claude`)
 
-Before each launch, `suite claude` checks this folder's wiring and does only
+Before each launch, `burrow claude` checks this folder's wiring and does only
 what is missing or stale:
 
 * **the channel plugin** — cloned once and `bun install`ed. An existing
@@ -167,9 +170,9 @@ what is missing or stale:
 * **`CLAUDE.md`** — described below.
 
 A fully wired folder runs no `git`, no `bun` and no `claude mcp` at all. With no
-saved connection, `suite claude` asks the same questions `suite init` does,
+saved connection, `burrow claude` asks the same questions `burrow init` does,
 saves the answers, then wires and launches. Without a terminal to ask in, it
-says so and starts Claude without Suite wiring.
+says so and starts Claude without Burrow wiring.
 
 ### It also seeds a `CLAUDE.md`
 
@@ -194,13 +197,18 @@ them apart — so a skip used to mean the agent got **none** of the conventions,
 silently.
 
 When your `CLAUDE.md` exists and states none of them, the wiring leaves it alone
-and writes `SUITE_CONVENTIONS.md` beside it — a file the CLI **owns and keeps
+and writes `BURROW_CONVENTIONS.md` beside it — a file the CLI **owns and keeps
 current**, so keep your own notes in `CLAUDE.md`. It then prints what is
 missing and the single line that loads it:
 
 ```
-@SUITE_CONVENTIONS.md
+@BURROW_CONVENTIONS.md
 ```
+
+A folder set up before 0.8.0 already has `SUITE_CONVENTIONS.md`, and its
+`CLAUDE.md` may load it by that name. That file keeps its name and is still the
+one refreshed; it is never renamed or moved. `BURROW_CONVENTIONS.md` is written
+only in a folder that has neither file and whose `CLAUDE.md` names neither.
 
 A `CLAUDE.md` that already states the conventions, or that already loads that
 file, gets no second copy and no nagging.
@@ -211,7 +219,7 @@ no hostnames — because it lands in a directory that may well be a git repo.
 ## Run an agent
 
 ```sh
-suite claude
+burrow claude
 ```
 
 That is the whole daily loop. Claude Code runs inside a `tmux` session named
@@ -222,25 +230,25 @@ again from the same place and you are back in the same session.
 
 | Command | What it does |
 | --- | --- |
-| `suite init [--dir PATH] [--from-mcp-json]` | Connects ONE agent folder (here, or `--dir`) to a Suite install: detects `bun` and `tmux`, saves the URL, runtime id and token for that folder, installs the watchdog. Harness-neutral. `--from-mcp-json` adopts the folder's own `.mcp.json` |
-| `suite claude [...]` | Sets up this folder's Claude wiring if anything is missing (plugin, MCP entries, `CLAUDE.md`), then runs Claude Code in the persistent session for this directory; re-attaches when one is already live. Every argument passes through verbatim |
-| `suite claude new [...]` | **The force-new verb.** Creates a second session even when one exists, under the next free name (`…-2`) |
-| `suite claude -p '…'` | One-shot, non-interactive: **bypasses tmux entirely** and execs Claude directly |
-| `suite claude --session NAME` | Per-invocation override of the derived session name. The one option the wrapper owns; not persisted |
-| `suite claude -- …` | `--` terminates wrapper options; everything after it is Claude's, including the literal word `new` |
-| `suite deepseek [...]` | Runs a DeepSeek Harness agent federated into Suite. Installs the harness on demand; every argument after ours passes through to `dsh` |
-| `suite deepseek --root DIR` | The agent's root folder — its cwd, its `DSH_HOME`, and where a per-agent identity may live |
-| `suite hermes --root DIR [...]` | Stamps a Hermes agent root and runs its gateway in tmux. See [`suite hermes`](#suite-hermes) |
-| `suite openclaw --root DIR [...]` | Stamps an OpenClaw agent root and runs its gateway in tmux. See [`suite openclaw`](#suite-openclaw) |
-| `suite codex [--root DIR]` | Runs a Codex agent through `codex app-server`, federated into Suite, in tmux. Logs Codex in with its own device-code flow if needed. See [`suite codex`](#suite-codex) |
-| `suite hermes\|openclaw --stamp-only` | Stamps only, and prints one JSON document. See [the stamp contract](#stamp-contract---stamp-only) |
-| `suite update` | Re-runs the installer to replace this install with the latest published CLI |
-| `suite doctor` | Diagnoses a broken setup in two halves, **install connection** (`→ suite init`) and **claude harness** (mostly `→ suite claude`), with one runnable remedy per failure. A stale session is never reported green. The `agents` check reports any cross-wired agent folder on the machine |
-| `suite status` | Shows every agent folder with its runtime and install (and a legacy machine connection, if any), the state and age of each session, and each stamped agent's kind, root, state and last verdict |
-| `suite status --json [--dir PATH]` | One JSON document on stdout for every agent on the machine. See [the status contract](#status-contract-status---json) |
-| `suite --version`, `suite --help` | Version, and the verb list |
+| `burrow init [--dir PATH] [--from-mcp-json]` | Connects ONE agent folder (here, or `--dir`) to a Burrow install: detects `bun` and `tmux`, saves the URL, runtime id and token for that folder, installs the watchdog. Harness-neutral. `--from-mcp-json` adopts the folder's own `.mcp.json` |
+| `burrow claude [...]` | Sets up this folder's Claude wiring if anything is missing (plugin, MCP entries, `CLAUDE.md`), then runs Claude Code in the persistent session for this directory; re-attaches when one is already live. Every argument passes through verbatim |
+| `burrow claude new [...]` | **The force-new verb.** Creates a second session even when one exists, under the next free name (`…-2`) |
+| `burrow claude -p '…'` | One-shot, non-interactive: **bypasses tmux entirely** and execs Claude directly |
+| `burrow claude --session NAME` | Per-invocation override of the derived session name. The one option the wrapper owns; not persisted |
+| `burrow claude -- …` | `--` terminates wrapper options; everything after it is Claude's, including the literal word `new` |
+| `burrow deepseek [...]` | Runs a DeepSeek Harness agent federated into Burrow. Installs the harness on demand; every argument after ours passes through to `dsh` |
+| `burrow deepseek --root DIR` | The agent's root folder — its cwd, its `DSH_HOME`, and where a per-agent identity may live |
+| `burrow hermes --root DIR [...]` | Stamps a Hermes agent root and runs its gateway in tmux. See [`burrow hermes`](#burrow-hermes) |
+| `burrow openclaw --root DIR [...]` | Stamps an OpenClaw agent root and runs its gateway in tmux. See [`burrow openclaw`](#burrow-openclaw) |
+| `burrow codex [--root DIR]` | Runs a Codex agent through `codex app-server`, federated into Burrow, in tmux. Logs Codex in with its own device-code flow if needed. See [`burrow codex`](#burrow-codex) |
+| `burrow hermes\|openclaw --stamp-only` | Stamps only, and prints one JSON document. See [the stamp contract](#stamp-contract---stamp-only) |
+| `burrow update` | Re-runs the installer to replace this install with the latest published CLI |
+| `burrow doctor` | Diagnoses a broken setup in two halves, **install connection** (`→ burrow init`) and **claude harness** (mostly `→ burrow claude`), with one runnable remedy per failure. A stale session is never reported green. The `agents` check reports any cross-wired agent folder on the machine |
+| `burrow status` | Shows every agent folder with its runtime and install (and a legacy machine connection, if any), the state and age of each session, and each stamped agent's kind, root, state and last verdict |
+| `burrow status --json [--dir PATH]` | One JSON document on stdout for every agent on the machine. See [the status contract](#status-contract-status---json) |
+| `burrow --version`, `burrow --help` | Version, and the verb list |
 
-### What `suite doctor` checks that nothing else does
+### What `burrow doctor` checks that nothing else does
 
 Most of a broken setup announces itself. Two states do not, and both are why
 this command exists.
@@ -252,13 +260,13 @@ loads, `claude mcp list` shows it, and it simply exposes no tools. It presents
 as silence, not as an error. So `tools api` makes a real authenticated
 `tools/list` call and asserts a non-empty tool list. It also keeps apart the two
 ways that call can fail, because they need opposite fixes: a JSON-RPC refusal
-from Suite itself is the *credential*, while an HTML login page from something
-in front of Suite means the request never reached the application at all and the
+from Burrow itself is the *credential*, while an HTML login page from something
+in front of Burrow means the request never reached the application at all and the
 credential was never evaluated.
 
 **Both entries should carry one credential.** `suite-channel` keeps it in
-`SUITE_TOKEN`, `startup-suite` in an `Authorization: Bearer` header. When both
-point at the same Suite host and the two values differ, at least one is wrong —
+`BURROW_TOKEN` and `SUITE_TOKEN`, `startup-suite` in an `Authorization: Bearer` header. When both
+point at the same Burrow host and the two values differ, at least one is wrong —
 and the wrong one produces a server that registers and exposes nothing. The
 `token match` check compares them by non-reversible fingerprint, so neither
 value is ever read out, and it names only the two entries. When the entries
@@ -268,13 +276,13 @@ correct configuration, so the check reports `⋯ skipped` rather than inventing 
 verdict.
 
 **Each agent folder should be wired as itself.** The `agents` check looks at
-every folder that has a saved record, Suite entries in `~/.claude.json`, or a
-roster entry. For each one it compares the runtime id and Suite host named by
+every folder that has a saved record, Burrow entries in `~/.claude.json`, or a
+roster entry. For each one it compares the runtime id and Burrow host named by
 the folder's record, its local Claude entry and its own `.mcp.json`. Any
 disagreement fails as `cross-wired`, naming the folder and each source's runtime
 id (`recorded rt-a, entry rt-b, .mcp.json rt-a`). Runtime ids are not secrets,
-and no token is read. The remedy is `cd <dir> && suite init`, or
-`suite init --from-mcp-json` when the folder has a `.mcp.json`. A user-scope
+and no token is read. The remedy is `cd <dir> && burrow init`, or
+`burrow init --from-mcp-json` when the folder has a `.mcp.json`. A user-scope
 `suite-channel` or `startup-suite` entry (top-level `mcpServers` in
 `~/.claude.json`) also fails, because it applies to every folder that has no
 local entry of its own. The check reads `~/.claude.json` directly and never runs
@@ -286,18 +294,18 @@ a *project-approval* state, not a connectivity verdict. A pending server is
 routinely delivering messages, so doctor reports it as `⋯ skipped — awaiting
 project approval` and does not fail the run on that account.
 
-## `suite deepseek`
+## `burrow deepseek`
 
-A second kind of agent, and deliberately a different shape from `suite claude`.
-`suite claude` wraps a binary you already installed and passes everything
+A second kind of agent, and deliberately a different shape from `burrow claude`.
+`burrow claude` wraps a binary you already installed and passes everything
 through. `dsh` composes itself from a profile plus ordered patch files, so this
 verb's real job is **materialising that composition on this machine** and then
 getting out of the way.
 
 ```
-suite deepseek --root ~/agents/oddjob
+burrow deepseek --root ~/agents/oddjob
 # or, equivalently, from the agent's own folder:
-cd ~/agents/oddjob && suite deepseek
+cd ~/agents/oddjob && burrow deepseek
 ```
 
 Without `--root`, the current directory is the agent root when it holds its own
@@ -312,14 +320,14 @@ plugin with no separate publish step.
 
 ### One machine, several agents
 
-`suite claude` federates the BOX, so the machine config names one runtime. An
+`burrow claude` federates the BOX, so the machine config names one runtime. An
 agent root may instead carry its own identity, and when it does it wins
 outright — a half-inherited identity is how an agent ends up connecting as its
 neighbour:
 
 | File | Holds |
 | --- | --- |
-| `<root>/suite.json` | Suite URL, runtime id, header **names**. No secret |
+| `<root>/suite.json` | Burrow URL, runtime id, header **names**. No secret |
 | `<root>/.suite-state.json` | The runtime token, header values, and an optional `env` block. Mode `0600` |
 
 The `env` block is the agent's model setup: `OPENROUTER_API_KEY`, and `DSH_`
@@ -364,7 +372,7 @@ of them by name: whatever `headerNames` the config carries is forwarded from
 the credential store as `SUITE_HEADER_<NORMALISED_NAME>`, and a deployment with
 none works unchanged.
 
-## `suite hermes`
+## `burrow hermes`
 
 Stamps a [Hermes Agent](https://github.com/NousResearch/hermes-agent) root
 Suite-ready, then runs its gateway (`hermes gateway run`) in the tmux session
@@ -373,7 +381,7 @@ Suite-ready, then runs its gateway (`hermes gateway run`) in the tmux session
 `~/.hermes`.
 
 ```
-suite hermes --root ~/agents/scribe \
+burrow hermes --root ~/agents/scribe \
   --suite-url https://suite.example.invalid --runtime-id <id> \
   --token-ref file:/home/me/.config/suite/tokens/scribe \
   --model-base-url http://127.0.0.1:8080/v1 --model some-model
@@ -382,7 +390,7 @@ suite hermes --root ~/agents/scribe \
 | Flag | Meaning |
 | --- | --- |
 | `--root DIR` | Required. The agent root; its directory name is the agent name |
-| `--suite-url URL`, `--runtime-id ID` | The Suite runtime. Recorded in `<root>/suite.json`, so a re-run may omit them |
+| `--suite-url URL`, `--runtime-id ID` | The Burrow runtime. Recorded in `<root>/suite.json`, so a re-run may omit them |
 | `--token-ref REF`, `--keychain-service SVC` | The runtime token, by reference only (see [token refs](#token-refs)) |
 | `--model-base-url URL`, `--model ID` | Required. The inference endpoint and model id |
 | `--model-provider PROVIDER` | Optional Hermes provider override. Defaults to `openai-codex` for the official ChatGPT Codex backend, otherwise `custom` |
@@ -391,7 +399,7 @@ suite hermes --root ~/agents/scribe \
 | `--allowed-users LIST` | Passed to the channel installer; without it, `--allow-all-users` |
 | `--hermes BIN`, `--install-hermes` | Which Hermes to use, or install the pinned one if absent |
 | `--hermes-home DIR` | Override `HERMES_HOME` |
-| `--full-toolset` | Leave the Suite platform's toolset to Hermes's own default instead of the bounded headless set (see [the toolset](#the-suite-platforms-headless-defaults)) |
+| `--full-toolset` | Leave the Burrow platform's toolset to Hermes's own default instead of the bounded headless set (see [the toolset](#the-burrow-platforms-headless-defaults)) |
 | `--stamp-only` | [The stamp contract](#stamp-contract---stamp-only): stamp, print one JSON document, start nothing |
 | `--no-session` | Run the gateway in the foreground instead of in tmux |
 | `-- ARGS` | Everything after `--` goes to `hermes gateway run` |
@@ -400,7 +408,7 @@ What it writes, and with what mode:
 
 | Path | Written by | Mode | Holds |
 | --- | --- | --- | --- |
-| `<root>/suite.json` | this CLI | default (`0644` under a `022` umask) | Suite URL, runtime id, the token **ref**. No secret |
+| `<root>/suite.json` | this CLI | default (`0644` under a `022` umask) | Burrow URL, runtime id, the token **ref**. No secret |
 | `<root>/.suite-stamp.json` | this CLI | default | Stamp record: harness, writer and harness version, plugin ref, inputs digest, token ref, last verdict. A run that fails after its first write records `fail`, so an older `pass` never outlives it and `--gateway-only` refuses the root. A refusal before any write leaves it as it was. No secret |
 | `$HERMES_HOME/mcp-tokens/startup-suite-platform.runtime-token` | the channel installer | `0600` | The runtime token: the one sanctioned copy |
 | `$HERMES_HOME/.env` | the channel installer; this CLI adds `CUSTOM_MODEL_API_KEY` | `0600` for this CLI's write | Channel keys; the model key when `--model-api-key-ref` is given |
@@ -435,12 +443,12 @@ the `Install directory` that `hermes --version` prints, else the local
 `g<sha>` of that line. Never its `upstream <sha>`, which is the remote tip Hermes
 last fetched (measured: 49 commits ahead of the pinned install).
 
-### The Suite platform's headless defaults
+### The Burrow platform's headless defaults
 
-`suite hermes` stamps an unattended coding harness, so it sets a bounded
+`burrow hermes` stamps an unattended coding harness, so it sets a bounded
 platform toolset: **`[hermes-webhook, terminal, file, todo, skills, web]`**.
 This supplies shell/process and workspace file access without loading Hermes's
-entire catalog. Enabled MCP servers are still merged, so the Suite MCP bridge
+entire catalog. Enabled MCP servers are still merged, so the Burrow MCP bridge
 remains available.
 
 It also sets the persistent gateway equivalents of `--yolo --accept-hooks`:
@@ -459,7 +467,7 @@ is preserved and reported in the stamp warnings.
   one `config set` or `config unset`, reported under
   `config_set platform_toolsets.startup_suite`.
 
-## `suite openclaw`
+## `burrow openclaw`
 
 Stamps an [OpenClaw](https://www.npmjs.com/package/openclaw) root Suite-ready
 through OpenClaw's own non-interactive path, then runs `openclaw gateway run` in
@@ -486,7 +494,7 @@ is added to the list.
 | Flag | Meaning |
 | --- | --- |
 | `--root DIR` | Required. The agent root; its directory name is the agent id |
-| `--suite-url URL`, `--runtime-id ID` | The Suite runtime |
+| `--suite-url URL`, `--runtime-id ID` | The Burrow runtime |
 | `--token-ref REF`, `--keychain-service SVC` | The runtime token, by reference only. The plugin resolves the ref itself: this CLI never reads the token |
 | `--model-base-url URL`, `--model ID` | Required. The custom model provider |
 | `--model-compat openai\|openai-responses\|anthropic` | Provider API shape. Default `openai` |
@@ -501,7 +509,7 @@ What it writes, and with what mode:
 
 | Path | Written by | Mode | Holds |
 | --- | --- | --- | --- |
-| `<root>/suite.json` | this CLI | default | Suite URL, runtime id, the token ref. No secret |
+| `<root>/suite.json` | this CLI | default | Burrow URL, runtime id, the token ref. No secret |
 | `<root>/.suite-stamp.json` | this CLI | default | Stamp record, as for Hermes. No secret |
 | `<root>/.openclaw/` | this CLI | `0700` | OpenClaw's state directory |
 | `<root>/.openclaw/openclaw.json` | `openclaw onboard` / `openclaw config set` | OpenClaw's own | `gateway.port`, `plugins.load.paths`, `plugins.allow`, the plugin and channel entries, the account (its `token` is the **ref string**), one route binding |
@@ -515,26 +523,26 @@ With `--install-openclaw` it also writes `~/.local/share/suite/openclaw/`
 `CUSTOM_API_KEY`, and each launch resolves `--model-api-key-ref` into the
 gateway's environment.
 
-## `suite codex`
+## `burrow codex`
 
 A Codex agent, driven through `codex app-server` (JSON-RPC over stdio), the
 same interface OpenClaw and Hermes use. Run it from the agent's folder:
 
 ```
-cd ~/agents/oddjob && suite codex
-suite codex --root ~/agents/oddjob --approvals decline --sandbox workspace-write
+cd ~/agents/oddjob && burrow codex
+burrow codex --root ~/agents/oddjob --approvals decline --sandbox workspace-write
 ```
 
 ```
-suite codex                    connection, Codex login, then tmux session suite-<agent>
-  └ suite codex --no-session   the bridge: Suite runtime socket ⇄ app-server
-      └ codex app-server       Suite MCP servers passed as -c overrides
-          └ suite codex --reply-mcp   the suite-channel MCP server (suite_reply …)
+burrow codex                    connection, Codex login, then tmux session suite-<agent>
+  └ burrow codex --no-session   the bridge: Burrow runtime socket ⇄ app-server
+      └ codex app-server       Burrow MCP servers passed as -c overrides
+          └ burrow codex --reply-mcp   the suite-channel MCP server (suite_reply …)
 ```
 
-- **Connection.** The one `suite init` saved for this folder (`agents/<key>.credentials.json`),
-  or the init questions asked inline from a terminal, as `suite claude` does.
-- **Login is Codex's.** If `codex login status` says no, `suite codex` runs
+- **Connection.** The one `burrow init` saved for this folder (`agents/<key>.credentials.json`),
+  or the init questions asked inline from a terminal, as `burrow claude` does.
+- **Login is Codex's.** If `codex login status` says no, `burrow codex` runs
   `codex login --device-auth`: a code you enter on any device, so it works over
   ssh. ChatGPT subscription login is that flow's default. This CLI never sees a
   token. Off a terminal it refuses and prints the command to run.
@@ -551,7 +559,7 @@ suite codex                    connection, Codex login, then tmux session suite-
     schemas as the Claude channel plugin. Codex runs it as a child process. It
     forwards each call over a unix socket to the bridge, which owns the one
     runtime connection.
-- **One persistent thread per Suite space.** A space is a conversation, and
+- **One persistent thread per Burrow space.** A space is a conversation, and
   each task already dispatches into its own execution space. Thread ids are
   saved in `<root>/.suite-codex/threads.json`, so a restart resumes them with
   `thread/resume`. Turns run one at a time per space and in parallel across
@@ -560,14 +568,14 @@ suite codex                    connection, Codex login, then tmux session suite-
   calls `suite_reply`, exactly as a Claude agent does. A turn that **fails** is
   reported in the space, so a failure is never mistaken for being ignored.
 - **Approvals: `--approvals accept|decline`, `--sandbox MODE`.** The defaults,
-  `accept` and `danger-full-access`, match `suite claude`'s
+  `accept` and `danger-full-access`, match `burrow claude`'s
   `--dangerously-skip-permissions`: Codex runs with approval policy `never`.
   With `decline`, Codex runs with `on-request`, and every command, file-change
   or permission request is refused. Forms meant for a human (MCP elicitations,
   requests for user input) are declined under both settings. Every decision is
   logged in the pane.
-- **Supervision.** The same as `suite claude`: tmux session `suite-<agent>`,
-  recorded for `suite restore`, and the watchdog ensured on create.
+- **Supervision.** The same as `burrow claude`: tmux session `suite-<agent>`,
+  recorded for `burrow restore`, and the watchdog ensured on create.
   `--no-session` runs the bridge in the foreground for a service manager. If
   the app-server exits, the bridge exits non-zero rather than idling.
 - **Not yet:** meeting transcripts are not bridged. Also, core's runtime
@@ -584,7 +592,7 @@ inside tmux.
 
 **Per-root isolation.** Each agent's harness state lives under its root, and
 every harness child runs with an allowlisted environment: it inherits no
-`SUITE_*`, `HERMES_*` or `OPENCLAW_*` from the operator's shell. What two
+`BURROW_*`, `SUITE_*`, `HERMES_*` or `OPENCLAW_*` from the operator's shell. What two
 agents on one machine do share lives under `~/.local/share/suite/`: the pinned
 plugin checkouts and any managed harness install. Those are programs, not agent
 state.
@@ -594,14 +602,14 @@ headers. A root whose `suite.json` names operator headers (for a deployment
 behind an access proxy) is refused with exit `2` and `headers_unsupported`,
 before anything is written.
 
-`suite status` lists every stamped agent with its kind, root, session state and
+`burrow status` lists every stamped agent with its kind, root, session state and
 last stamp verdict. A gateway that died takes its tmux session with it, so the
 state comes from the roster, and a recorded agent that is not running is
 reported `stale`, never absent.
 
 ## Stamp contract (`--stamp-only`)
 
-`suite hermes --stamp-only` and `suite openclaw --stamp-only` are a stable,
+`burrow hermes --stamp-only` and `burrow openclaw --stamp-only` are a stable,
 machine-callable interface. **The intended caller is core's installer `setup
 channel` step (task 01a0d6b9)**, which calls these verbs rather than
 reimplementing them.
@@ -696,7 +704,7 @@ Hermes env ships `ruamel.yaml`, because Hermes needs it to read its own config.
 
 ## Status contract (`status --json`)
 
-`suite status --json` is a machine-callable view of every agent on this machine.
+`burrow status --json` is a machine-callable view of every agent on this machine.
 stdout carries **exactly one JSON document** (indent 2, trailing newline) and
 nothing else; human lines go to stderr. `--dir PATH` chooses which folder's
 record is reported as `connection` (default: the working directory). It exits 0.
@@ -713,13 +721,13 @@ optional.
 | `suite_version` | string | This CLI's version |
 | `connection` | object or null | `{dir, suite_url, runtime_id}`: the record for `--dir` (or the working directory), or null when that folder has none |
 | `legacy_connection` | object or null | `{suite_url, runtime_id}`: a machine-level connection saved by 0.7.0 or earlier. It is assigned to no folder, and no agent row ever takes its runtime id |
-| `agents` | array | One row per roster entry, plus one per folder that has a record or Suite entries in `~/.claude.json` and no roster entry. Ordered by root, then session |
+| `agents` | array | One row per roster entry, plus one per folder that has a record or Burrow entries in `~/.claude.json` and no roster entry. Ordered by root, then session |
 
 Each `agents` row:
 
 | Field | Type | Meaning |
 | --- | --- | --- |
-| `session` | string | Always a string. The roster's session, or for an agent never launched, the name `suite claude` would give it |
+| `session` | string | Always a string. The roster's session, or for an agent never launched, the name `burrow claude` would give it |
 | `kind` | string or null | `claude`, `deepseek`, `hermes`, `openclaw` or `codex` from the roster; null for an agent never launched |
 | `root` | string | The agent folder |
 | `runtime_id` | string or null | The folder's record, else its own local Claude entry, else its own `suite.json`. Never the legacy or machine connection |
@@ -752,14 +760,88 @@ than left to be inferred from behaviour:
 5. [**What happens when tmux is absent**](#when-tmux-is-absent) — a direct run
    with a loud warning. **Never a silent fallback.**
 
+## Compatibility
+
+0.8.0 renamed the command from `suite` to `burrow`. Nothing an existing host
+depends on moved, and nothing was deleted.
+
+**`suite` keeps working.** The installer writes two launchers, `burrow` and
+`suite`, as two rendered files (no symlink). `suite` runs the same command and
+prints one line on **stderr**:
+`suite: this command is now burrow; suite keeps working as an alias`.
+Its stdout is the same bytes as `burrow`'s, because `suite --version`,
+`suite status --json` and `--stamp-only` are read by machines.
+`BURROW_NO_DEPRECATION=1` silences the line.
+
+**Environment variables: `BURROW_*` first, then `SUITE_*`.** Each name below is
+read as `BURROW_<NAME>`; if that is unset or empty, `SUITE_<NAME>` is read, and
+one stderr line says that name is deprecated. When both are set, `BURROW_*`
+wins and nothing is printed. The list is hand-written in `src/env_names.ts`
+(`FALLBACK_SUFFIXES`) and a test pins it.
+
+| `BURROW_` name | Old `SUITE_` name |
+| --- | --- |
+| `BURROW_GITHUB_OWNER` | `SUITE_GITHUB_OWNER` |
+| `BURROW_CLI_REF` | `SUITE_CLI_REF` |
+| `BURROW_CLI_TARBALL_URL` | `SUITE_CLI_TARBALL_URL` |
+| `BURROW_LIB_DIR` | `SUITE_LIB_DIR` |
+| `BURROW_VERSION` | `SUITE_VERSION` |
+| `BURROW_MCP_URL` | `SUITE_MCP_URL` |
+| `BURROW_WS_URL` | `SUITE_WS_URL` |
+| `BURROW_RUNTIME_ID` | `SUITE_RUNTIME_ID` |
+| `BURROW_RUNTIME_TOKEN` | `SUITE_RUNTIME_TOKEN` |
+| `BURROW_TOKEN` | `SUITE_TOKEN` |
+| `BURROW_URL` | `SUITE_URL` |
+| `BURROW_TELEMETRY_AUTH` | `SUITE_TELEMETRY_AUTH` |
+| `BURROW_WATCH_SUPERVISED` | `SUITE_WATCH_SUPERVISED` |
+| `BURROW_CODEX_BRIDGE_SOCKET` | `SUITE_CODEX_BRIDGE_SOCKET` |
+| `BURROW_ALLOW_PERMISSION_RELAY` | `SUITE_ALLOW_PERMISSION_RELAY` |
+| `BURROW_CLI_ALLOW_NO_TMUX` | `SUITE_CLI_ALLOW_NO_TMUX` |
+| `BURROW_CLI_ALLOW_NO_CODEX` | `SUITE_CLI_ALLOW_NO_CODEX` |
+
+Values this CLI **writes** for other programs (the channel MCP entry's env, the
+launcher's exports, the installer's environment during `burrow update`) are
+written under **both** names. The pinned channel plugins and an older CLI
+reached by a pinned `burrow update` read only `SUITE_*`. A harness child never
+receives either prefix.
+
+**Config dir: chosen once, by what exists.** `<config>` is `$XDG_CONFIG_HOME` or
+`~/.config`. If `<config>/burrow` exists it is used. Otherwise, if
+`<config>/suite` exists, that is used, for reads and writes, so an upgraded host
+keeps writing where its records already are. A host with neither gets
+`<config>/burrow`. When both exist, an agent record missing from `burrow` is
+also looked up in `<config>/suite/agents/`, read-only. Nothing is copied, moved
+or deleted. Core's agent-host writes `~/.config/suite/agents/`, so a container
+it set up keeps resolving to `suite`.
+
+**MCP server names are unchanged: `startup-suite` and `suite-channel`.** Every
+agent's permission allowlists, skills and `CLAUDE.md` name the
+`mcp__startup-suite__*` tools, and Claude Code's channel dialog is keyed on
+`server:suite-channel`. `burrow init` registers exactly those two names and
+removes leftover `suite` or `burrow` alias entries, printing each removal.
+
+**The lib and data dirs are unchanged: `~/.local/share/suite/`.** Core's
+agent-host imports `/usr/local/share/suite/cli/src/claude_md.ts` and reads its
+`SUITE_CONVENTIONS` export (now an alias of `BURROW_CONVENTIONS`, the same
+string), and installed MCP entries and supervisor units record absolute paths
+under the data dir.
+
+**Also still named `suite`, for the same reason (renaming would create a second
+copy beside the live one):** the watchdog and restore units (`suite-watch`,
+`suite-agents`, and their launchd labels), the binary path those units run
+(`~/.local/bin/suite`), tmux session names (`suite-<agent>`), the
+`--suite-url` flag (`--burrow-url` is accepted too, and wins), the
+`SUITE_CONVENTIONS.md` file in folders that have it, and the GitHub repo
+`Startup-Suite/suite-cli` and the channel plugin repo names.
+
 ## Versioning
 
 `package.json` holds the version, and it is the only place it lives —
-`suite --version`, the POSIX launcher and `install.sh`'s banner all read it.
+`burrow --version`, the POSIX launcher and `install.sh`'s banner all read it.
 
 **Bump it in the same PR as the change**, and add the `CHANGELOG.md` entry in
 that same PR. Someone running an installed CLI answers "is there anything new
-since mine?" by comparing `suite --version` against the changelog; a change that
+since mine?" by comparing `burrow --version` against the changelog; a change that
 ships without a bump is invisible to them, and a bump without an entry tells
 them something moved but not what.
 
@@ -769,7 +851,7 @@ the shipped version, so the two cannot drift apart silently.
 
 ## Credentials and config
 
-Credentials are **pasted in**: you click Federate in the Suite UI and paste the
+Credentials are **pasted in**: you click Federate in the Burrow UI and paste the
 values at the prompt. There is deliberately no device-code or `suite login`
 flow yet — it is deferred, and when it lands it becomes another provider behind
 the same credential store, changing nothing else.
@@ -778,10 +860,13 @@ Nothing you paste is echoed. The token confirmation is a character count
 (`set, 44 chars`) and never a prefix or a last-four tail: a tail is still a
 partial echo, and a count already answers the only question you have.
 
-Each agent folder's connection is a file pair under the user config dir
-(`~/.config/suite`, or `$XDG_CONFIG_HOME/suite`), **outside the agent folder**:
+Each agent folder's connection is a file pair under the user config dir,
+**outside the agent folder**. That dir is `~/.config/burrow` (or
+`$XDG_CONFIG_HOME/burrow`), except on a host that already has `~/.config/suite`
+and no `~/.config/burrow`, which keeps using `~/.config/suite` (see
+[Compatibility](#compatibility)):
 
-* `agents/<key>.json` holds the folder, the Suite URL, the runtime id and the
+* `agents/<key>.json` holds the folder, the Burrow URL, the runtime id and the
   **names** of any extra headers. **It never holds a secret value** — a test
   asserts the serialised bytes contain neither the token nor any header value.
 * `agents/<key>.credentials.json`, mode 600, holds the token and header values,
@@ -792,18 +877,18 @@ rule tmux session names use. `config.json` keeps the machine-level settings
 (session naming, telemetry). Its connection fields, and `credentials.json`,
 are what 0.7.0 and earlier wrote; they are the legacy connection, read only for
 reporting, never written, deleted or used to wire a folder. With
-`suite init --token-from-env VAR`, only the variable name is saved and the
+`burrow init --token-from-env VAR`, only the variable name is saved and the
 token is not written to disk.
 
 Writes default to **user scope**. If a write would land inside a git
-repository, `suite` asks `git check-ignore` and **refuses** — non-zero exit, a
+repository, `burrow` asks `git check-ignore` and **refuses** — non-zero exit, a
 message naming the path — unless the path is ignored. Refusal rather than a
 warning, because a warned-then-written credential file is a committed one.
 
 ## Persistent sessions
 
 Agents run inside `tmux`, so closing the terminal does not kill the agent. An
-agent that dies with its terminal stops mid-task, and from Suite's side that is
+agent that dies with its terminal stops mid-task, and from Burrow's side that is
 indistinguishable from an agent that is merely slow.
 
 **The backend is tmux specifically.** There is no multiplexer abstraction and
@@ -815,7 +900,7 @@ interface, and one implementation behind one is just indirection.
 The session name is `suite-<directory name>-<8 hex of sha256 of the absolute
 path>`, e.g. `suite-ledger-3f2a91c0`. Two requirements decide this:
 
-* **`suite claude` twice from the same place must find the same session.** The
+* **`burrow claude` twice from the same place must find the same session.** The
   name is a pure function of the resolved absolute path, so nothing has to be
   remembered, looked up, or kept in sync with a state file that can drift.
 * **Two projects must not collide.** The digest is of the absolute path, so
@@ -843,20 +928,20 @@ half of the name is a hash of the *unsanitised* path.
 
 "A session already exists" is **not** the question `tmux has-session` answers.
 It answers "is there a session with this name", which stays true long after the
-agent inside it has died. `suite` treats a session as existing-and-usable only
+agent inside it has died. `burrow` treats a session as existing-and-usable only
 when an **agent process is running inside it** — anything else is a name, not an
 agent.
 
-So `suite claude` resolves to exactly one of three outcomes:
+So `burrow claude` resolves to exactly one of three outcomes:
 
-| Detected | What `suite claude` does |
+| Detected | What `burrow claude` does |
 | --- | --- |
 | **live** | Attaches. Same agent, same history, nothing restarted |
 | **stale** | **Names it on stdout, kills that one session by name, starts a fresh agent.** Never a silent attach |
 | **none** | Creates the session detached, then attaches |
 
 **A stale session is recycled, not adopted and not ignored.** Adopting it
-presents a dead agent as a healthy one: you get a shell prompt, Suite gets
+presents a dead agent as a healthy one: you get a shell prompt, Burrow gets
 nothing, and nothing anywhere says why. Ignoring it and picking a different
 name breaks the one property the naming rule exists to provide — one context,
 one session. The kill is `tmux kill-session -t <name>`, scoped to that single
@@ -865,7 +950,7 @@ down every other agent on the box.
 
 ### Scrolling: sessions are created with mouse mode on
 
-A session `suite` creates gets `mouse on`, **scoped to that session** — never
+A session `burrow` creates gets `mouse on`, **scoped to that session** — never
 `-g`, because a global set would reach tmux sessions this CLI never created.
 
 Without it, tmux translates a wheel event inside a full-screen application into
@@ -888,7 +973,7 @@ tmux set-option -t <session> mouse on    # or: off
 
 ### Three states, not two
 
-`suite` reports **live**, **stale**, or **none** for a session:
+`burrow` reports **live**, **stale**, or **none** for a session:
 
 | State | Meaning |
 | --- | --- |
@@ -900,7 +985,7 @@ tmux set-option -t <session> mouse on    # or: off
 problem. A tmux session routinely outlives the process it was created for: the
 agent exits, the pane's shell remains, and `has-session` answers yes forever.
 Attaching to that corpse is worse than starting fresh, because it looks like a
-live agent — you see a prompt, Suite sees nothing, and nothing says why.
+live agent — you see a prompt, Burrow sees nothing, and nothing says why.
 
 So detection lists panes (`tmux list-panes -a -F` with `#{pane_pid}` and
 `#{pane_current_command}`) and **walks the pane's process descendants**. The
@@ -925,7 +1010,7 @@ for byte. One audited single-quote escaper exists for the display-only case.
 
 A command line is world-readable through `ps`, and a `tmux new-session` command
 line stays in the process table for the life of the agent. Credentials reach
-Claude through the MCP config written by `suite claude`. The composed argv is
+Claude through the MCP config written by `burrow claude`. The composed argv is
 checked against the credential store before it is run, and `send-keys` is never
 used — typing a secret into a live shell would add its history to the exposure.
 
@@ -933,14 +1018,14 @@ used — typing a secret into a live shell would add its history to the exposure
 
 <a id="inside-tmux"></a>
 
-Running `suite claude` from inside a tmux pane must not put tmux inside tmux.
-`suite` reads `$TMUX`, and when it is set it **switches the current client** to
+Running `burrow claude` from inside a tmux pane must not put tmux inside tmux.
+`burrow` reads `$TMUX`, and when it is set it **switches the current client** to
 the target session (`tmux switch-client -t <name>`) instead of attaching. A
 nested attach produces a session you cannot detach from without thinking about
 which prefix key you are talking to, and it is the shape people accidentally
 create when a wrapper ignores the variable.
 
-Where switching is not possible, `suite` **refuses with a non-zero exit and
+Where switching is not possible, `burrow` **refuses with a non-zero exit and
 names the command to run instead**. It never quietly produces a nested session:
 the two failure modes here are "nothing happens" and "something confusing
 happens", and a refusal that says what to do is neither.
@@ -949,20 +1034,20 @@ happens", and a refusal that says what to do is neither.
 
 <a id="when-tmux-is-absent"></a>
 
-`suite` runs the agent **directly**, and prints a warning on stderr saying, in
+`burrow` runs the agent **directly**, and prints a warning on stderr saying, in
 words, that the session will die with this terminal and naming the install
 command for this platform.
 
 **The fallback is never silent.** A silent one would reproduce exactly the
 failure this feature exists to prevent — an agent that vanishes with its
-terminal, which from Suite's side is indistinguishable from an agent that is
-merely slow. `suite init` also offers to install tmux, and `suite doctor` fails
+terminal, which from Burrow's side is indistinguishable from an agent that is
+merely slow. `burrow init` also offers to install tmux, and `burrow doctor` fails
 the tmux check with a runnable remedy, so a box in this state announces itself
 three separate times.
 
-## `suite update`
+## `burrow update`
 
-`suite update` replaces this install with the latest published CLI. It does that
+`burrow update` replaces this install with the latest published CLI. It does that
 by **re-running `install.sh`** — the same script the cold-start
 `curl … | sh` runs — rather than fetching and unpacking a tarball itself. One
 install path, not two: a second mechanism is a second thing to keep true, and
@@ -980,10 +1065,10 @@ auto-answered. That prompt exists to stop a silent overwrite, and an update that
 answers it for you defeats it; the installer inherits your terminal and you
 answer it directly.
 
-`SUITE_CLI_REF` selects a branch, tag or commit instead of `main`. Both halves —
+`BURROW_CLI_REF` (or the older `SUITE_CLI_REF`) selects a branch, tag or commit instead of `main`. Both halves —
 the URL the installer is fetched from *and* the ref exported into its
 environment — come from that one value. This matters more than it looks:
-`install.sh` **defaults `SUITE_CLI_REF` to `main` and infers nothing from the
+`install.sh` **defaults the ref to `main` and infers nothing from the
 URL it was downloaded from**, so fetching a tag's installer without exporting
 the ref installs `main` and prints a perfectly successful-looking install of the
 wrong thing. A ref containing anything other than letters, digits, `.`, `_`,
@@ -993,9 +1078,9 @@ Update needs `curl` or `wget`, plus `tar` and `sh`. A missing one is named up
 front, before the announcement, rather than surfacing as broken-pipe noise three
 commands later.
 
-## `suite claude`
+## `burrow claude`
 
-`suite claude [...]` runs
+`burrow claude [...]` runs
 `claude --dangerously-load-development-channels server:suite-channel
 --dangerously-skip-permissions --continue <your args>`
 inside the session for this directory. Channel plugins must be on Anthropic's
@@ -1005,7 +1090,7 @@ disappears from one place and nobody's muscle memory changes.
 
 The other two are what make an agent a **participant** rather than a prompt:
 
-* `--dangerously-skip-permissions` — a Suite runtime is unattended. Without it
+* `--dangerously-skip-permissions` — a Burrow runtime is unattended. Without it
   the agent stops on the first tool-call prompt and waits for somebody who is
   not there, and the task reads as hung when it is only asking a question.
 * `--continue` — without it every launch is a cold session, so re-attaching to
@@ -1018,19 +1103,19 @@ instructions is how you get the wrong one. Neither flag is added twice if you
 pass it. Passthrough is otherwise unchanged and still total.
 
 * **live** → attach. **none** → create detached, then attach. `Ctrl-b d`, or
-  closing the terminal, leaves the agent running; `suite claude` again
+  closing the terminal, leaves the agent running; `burrow claude` again
   re-attaches to the *same* session.
 * **stale** → **recycled, out loud.** The dead session is named on stdout, then
   killed by name (`kill-session -t`, never `kill-server`) and a fresh agent
   starts. Silently attaching would present a dead agent as a healthy one.
-* `suite claude new [...]` is the **one** explicit way to force a second
+* `burrow claude new [...]` is the **one** explicit way to force a second
   session; it picks the next free name (`…-2`, `…-3`) rather than colliding.
-* The child's exit code is `suite`'s exit code, and the attach path keeps the
+* The child's exit code is `burrow`'s exit code, and the attach path keeps the
   real TTY.
 
 ### `-p` bypasses tmux — a decision, not an accident
 
-`suite claude -p '…'` **execs Claude directly and never touches tmux**, not even
+`burrow claude -p '…'` **execs Claude directly and never touches tmux**, not even
 to detect session state. `-p` is a one-shot scripted call whose output the
 caller captures: forcing it through an interactive attach would hide its stdout
 inside a pane, hand it a terminal it does not want, and leave a session behind
@@ -1045,7 +1130,7 @@ Every other argument reaches Claude **verbatim and in order**, after the
 injected flag — `--resume`, `--version`, `-p`, and arguments that look like
 flags a wrapper might want to own. Nothing goes near a shell, so `$HOME`,
 quotes and spaces are literal bytes. Tests assert the exact delivered argv for
-each of those cases. `suite claude -- new` is how you send the literal word
+each of those cases. `burrow claude -- new` is how you send the literal word
 `new` to Claude.
 
 ### Two agents on one machine
@@ -1054,8 +1139,8 @@ Two runtimes on the same box, each wanting its own persistent session, is what
 `--session` is for:
 
 ```
-suite claude --session brosnan
-suite claude --session moore
+burrow claude --session brosnan
+burrow claude --session moore
 ```
 
 Each name resolves to its own tmux session, from the same directory, and each
@@ -1070,7 +1155,7 @@ same session, so `--session` remains the way to run two agents in one directory.
 
 ### The first-run notice
 
-On the **first run on a machine only**, `suite claude` prints one line saying it
+On the **first run on a machine only**, `burrow claude` prints one line saying it
 is loading a development channel plugin that is not yet on Anthropic's
 allowlist and is skipping permission checks — a `!` in yellow, the sentence at default weight, a blank line, and
 silence on every run after that. No box and no border: a box is recurring chrome
@@ -1082,7 +1167,7 @@ look at the next one.** The seen-flag is stored in
 
 ## MCP registration
 
-`suite claude` writes both MCP entries with `claude mcp add` rather than editing
+`burrow claude` writes both MCP entries with `claude mcp add` rather than editing
 `.mcp.json` by hand — the file format is Claude Code's to change. They are
 registered at **local scope** (`-s local`, passed explicitly), run from the
 agent directory: private to that directory, stored in `~/.claude.json` under
@@ -1091,10 +1176,10 @@ never written into the directory itself.
 
 **Not user scope.** User scope is one entry for every Claude on the machine, so
 before 0.5.0 installing a second agent silently re-pointed the first at the
-second one's Suite and runtime. **Not project scope** (`.mcp.json`) either:
+second one's Burrow and runtime. **Not project scope** (`.mcp.json`) either:
 that puts the token inside the agent directory, where a repository can commit
 it, and each server then needs approving. A user-scope entry left by an older
-`suite init` is **left alone** — another agent directory may still be running
+`burrow init` is **left alone** — another agent directory may still be running
 on it — and the wiring warns when it names a different runtime; this directory's
 local entry takes precedence here regardless.
 
@@ -1118,13 +1203,13 @@ That last case decides the default. An env reference that quietly hands
 `${SUITE_TOKEN}` to the channel as a bearer token produces a session that
 authenticates with garbage and names no cause. So the **default is an inline
 value at local scope** (in the mode-600 `~/.claude.json`), and the reference form is opt-in for operators keeping
-secrets in a manager: `suite init --token-from-env SUITE_TOKEN`, which then
+secrets in a manager: `burrow init --token-from-env BURROW_TOKEN`, which then
 requires that variable to be exported wherever `claude` is launched.
 
 ## Language
 
 TypeScript on [bun](https://bun.sh). `bun` is already a hard dependency of the
-Suite channel plugin, so it adds no new requirement, and the prompt loops, JSON
+Burrow channel plugin, so it adds no new requirement, and the prompt loops, JSON
 parsing and `tmux` argument composition are meaningfully safer there than in
 shell.
 
@@ -1163,7 +1248,7 @@ terminal that started it**. So the test starts an agent through the shipped CLI
 **from a child shell**, records the pid of the process inside the pane,
 **kills that parent shell** (SIGHUP, as a closing terminal delivers, then
 SIGKILL as a backstop), and then from a **new shell** asserts the *same pid* is
-still running and that `suite claude` re-attaches to the same session. It also
+still running and that `burrow claude` re-attaches to the same session. It also
 asserts the parent really died, and finishes by killing the agent to prove the
 liveness probe can report death at all.
 
@@ -1217,7 +1302,7 @@ Every example value in this repository is invented —
 `https://suite.example.invalid`,
 `runtime_00000000-0000-0000-0000-000000000000`. Header names are
 operator-specific: none are hardcoded, and whatever fronts your deployment is
-asked for at `suite init` time.
+asked for at `burrow init` time.
 
 ## Licence
 

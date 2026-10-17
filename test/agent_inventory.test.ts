@@ -209,7 +209,7 @@ describe("doctor: the agents check", () => {
     expect(text).toContain(`entry ${B.runtime}`);
     expect(text).toContain(`.mcp.json ${A.runtime}`);
     expect(text).toContain(`user-scope ${CHANNEL_SERVER} names ${B.runtime}`);
-    expect(agentsCheck.status === "fail" && agentsCheck.remedy).toBe(`cd ${bx.a} && suite init --from-mcp-json`);
+    expect(agentsCheck.status === "fail" && agentsCheck.remedy).toBe(`cd ${bx.a} && burrow init --from-mcp-json`);
     // b/ is wired as itself and is not reported as cross-wired.
     expect(text).not.toContain(`${bx.b}:`);
 

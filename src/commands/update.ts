@@ -24,7 +24,7 @@
  * into the installer's environment, and the installer and the tarball cannot
  * come from two orgs. The resolved `owner/repo` is printed on every update.
  */
-import { VERSION } from "../version.ts";
+import { VERSION, CLI_NAME } from "../version.ts";
 import { burrowName, envSource, suiteName } from "../env_names.ts";
 import { OWNER_ENV_BURROW, apiCommitUrl, ownerFrom, rawUrl, repoSlug, type Env } from "../repo_source.ts";
 
@@ -285,14 +285,14 @@ export function failureLines(code: number): string[] {
   const lines: string[] = [];
   if (code === SIGPIPE_EXIT) {
     lines.push(
-      "suite: the installer was cut off because its output had nowhere to go — `suite update` was piped into something that exited first (`| head`, `| grep -q`, a closed pager).",
+      `${CLI_NAME}: the installer was cut off because its output had nowhere to go — \`${CLI_NAME} update\` was piped into something that exited first (\`| head\`, \`| grep -q\`, a closed pager).`,
     );
-    lines.push("suite: NOTHING WAS INSTALLED. Re-run it without the pipe.");
+    lines.push(`${CLI_NAME}: NOTHING WAS INSTALLED. Re-run it without the pipe.`);
   } else {
-    lines.push(`suite: the installer exited ${code} — the update did not complete.`);
+    lines.push(`${CLI_NAME}: the installer exited ${code} — the update did not complete.`);
   }
   lines.push(
-    "suite: your previous version is intact; install.sh stages the new one and swaps only at the end, so a failure here leaves the working install alone.",
+    `${CLI_NAME}: your previous version is intact; install.sh stages the new one and swaps only at the end, so a failure here leaves the working install alone.`,
   );
   return lines;
 }

@@ -25,6 +25,7 @@ import { statSync } from "node:fs";
 import { basename, resolve } from "node:path";
 import { assertNoSecretsInArgv, type CredentialStore } from "./secrets.ts";
 import type { SuiteConfig } from "./config.ts";
+import { CLI_NAME } from "./version.ts";
 
 export const TMUX = "tmux";
 
@@ -55,6 +56,7 @@ export function nameDigest(input: string): string {
   return createHash("sha256").update(input).digest("hex").slice(0, 8);
 }
 
+// Not renamed to burrow in 0.8.0: restore, status and watch find live sessions by this prefix.
 export const SESSION_PREFIX = "suite";
 
 export interface SessionNameInput {
@@ -99,7 +101,7 @@ export function sessionNameFor(input: SessionNameInput): string {
   }
   if (input.naming === "runtime") {
     const id = (input.runtimeId ?? "").trim();
-    if (id === "") throw new Error('sessionNaming is "runtime" but no runtimeId is configured; run suite init');
+    if (id === "") throw new Error(`sessionNaming is "runtime" but no runtimeId is configured; run ${CLI_NAME} init`);
     return `${SESSION_PREFIX}-${sanitizeSessionName(id)}`;
   }
   const abs = resolve(input.cwd);
@@ -331,6 +333,7 @@ export function looksLikeAgent(proc: ProcessRow, name: string = AGENT_NAME): boo
  * claude.ts already imports restore.ts. It is a whole argv element, so it
  * appears in `ps` output as its own whitespace-separated token.
  */
+// Not renamed to burrow in 0.8.0: running agents' process trees are matched on this exact argv token.
 export const CONTINUE_WRAPPER_NAME = "suite-claude-continue";
 
 /**
@@ -480,9 +483,9 @@ export function nestingPlan(
  */
 export const TMUX_MISSING_WARNING = [
   "warning: tmux is not installed, so this agent will run directly in this terminal.",
-  "  it will be KILLED when this terminal closes, mid-task, and Suite will keep",
+  "  it will be KILLED when this terminal closes, mid-task, and Burrow will keep",
   "  waiting on a runtime that no longer exists.",
-  "  install tmux and re-run suite init to get persistent sessions.",
+  `  install tmux and re-run ${CLI_NAME} init to get persistent sessions.`,
 ].join("\n");
 
 export type LaunchPlan =

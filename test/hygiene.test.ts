@@ -181,7 +181,7 @@ describe("the README documents the real minimum", () => {
     // claim the README still makes (or, inverted, make a refutation vacuous).
     const onDemand = flat(section(text, "### Claude Code is installed on demand, not up front"));
     // The positive claims, each of which the code actually implements.
-    expect(onDemand).toContain("suite claude");
+    expect(onDemand).toContain("burrow claude");
     expect(onDemand).toContain("offers to install it");
     expect(onDemand).toContain("exits non-zero");
     expect(/logging in is still your step/i.test(onDemand)).toBe(true);

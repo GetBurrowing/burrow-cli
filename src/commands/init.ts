@@ -54,6 +54,7 @@ import {
   supervisorPlan,
   writeRestoreUnit,
 } from "../supervisor.ts";
+import { CLI_NAME } from "../version.ts";
 
 /* ------------------------------------------------------------------------- */
 /* Empirical finding — ${ENV_VAR} interpolation                               */
@@ -154,6 +155,7 @@ export interface InitOptions {
 }
 
 /** The Claude Code channel plugin's repo name. Its owner comes from repo_source.ts. */
+// Not renamed to burrow in 0.8.0: the channel repo rename is task C's; the old name redirects on GitHub.
 export const PLUGIN_REPO_NAME = "claude-code-suite-channel";
 
 /** The plugin's clone URL under the owner `env` names (SUITE_GITHUB_OWNER). */
@@ -516,7 +518,7 @@ function isSecureScheme(protocol: string): boolean {
       return false;
     default:
       throw new Error(
-        `suite: ${protocol}// is not a Suite URL — paste the https:// address you open in a browser, or the wss:// runtime URL.`,
+        `${CLI_NAME}: ${protocol}// is not a Burrow URL — paste the https:// address you open in a browser, or the wss:// runtime URL.`,
       );
   }
 }
@@ -774,7 +776,7 @@ export function userScopeLines(found: { present: boolean; runtimeId: string | nu
   return [
     row("warning", "", `a user-scope ${CHANNEL_SERVER} entry names ${named}, not ${runtimeId}; left alone`),
     row("", "", "this directory uses its own entry, which takes precedence here. Any other agent"),
-    row("", "", "directory WITHOUT its own entry still runs as that runtime: run suite init there."),
+    row("", "", `directory WITHOUT its own entry still runs as that runtime: run ${CLI_NAME} init there.`),
   ];
 }
 
@@ -1159,7 +1161,7 @@ export async function runInit(deps: InitDeps, options: InitOptions = {}): Promis
     }
     const result: AdoptResult = text === null ? { ok: false, problems: [`${file} cannot be read`] } : adoptMcpJson(text);
     if (!result.ok) {
-      complain(`suite init: refusing --from-mcp-json for ${dir}; nothing was written:`);
+      complain(`${CLI_NAME} init: refusing --from-mcp-json for ${dir}; nothing was written:`);
       for (const p of result.problems) complain(`  ${p}`);
       return { supervisor: null, exitCode: 1, tmuxMissing: false, configPath: "" };
     }
@@ -1182,7 +1184,7 @@ export async function runInit(deps: InitDeps, options: InitOptions = {}): Promis
       throw new Error(
         `the ${plan.manager} installer needs ${missingTools.join(", ")}, ` +
           `${missingTools.length === 1 ? "which is" : "which are"} not on PATH. ` +
-          `install ${missingTools.join(" and ")} with your system package manager, then re-run suite init`,
+          `install ${missingTools.join(" and ")} with your system package manager, then re-run ${CLI_NAME} init`,
       );
     }
     if (await confirm(deps.prompter, `bun is not installed. install it with ${plan.manager}?`)) {
@@ -1211,12 +1213,12 @@ export async function runInit(deps: InitDeps, options: InitOptions = {}): Promis
     say(row("tmux", tmux.version, "present"));
   } else {
     say(row("tmux", "not installed"));
-    say(row("", "", "agents will stop when you close the terminal; suite claude cannot persist them"));
-    say(row("", "", "install tmux and re-run suite init to fix this"));
+    say(row("", "", `agents will stop when you close the terminal; ${CLI_NAME} claude cannot persist them`));
+    say(row("", "", `install tmux and re-run ${CLI_NAME} init to fix this`));
   }
 
   if (options.checkout !== undefined) {
-    say(row("", "", "--checkout is ignored: suite claude sets up the plugin checkout, under the data dir"));
+    say(row("", "", `--checkout is ignored: ${CLI_NAME} claude sets up the plugin checkout, under the data dir`));
   }
 
   // 3. the install connection -------------------------------------------
@@ -1268,7 +1270,7 @@ export async function runInit(deps: InitDeps, options: InitOptions = {}): Promis
   say(row("agent", dir, `connected as ${connectedAs.runtimeId} (${connectedAs.suiteUrl})`));
   const home = deps.env.HOME ?? "";
   if (home !== "" && dir === canonicalDir(home)) {
-    say(row("", "", "this is your home folder: agents in OTHER folders will not use this connection; run suite init in each agent folder"));
+    say(row("", "", `this is your home folder: agents in OTHER folders will not use this connection; run ${CLI_NAME} init in each agent folder`));
   }
 
   // 4. the watchdog, installed unless explicitly declined ---------------
@@ -1279,6 +1281,7 @@ export async function runInit(deps: InitDeps, options: InitOptions = {}): Promis
       home,
       // Absolute path: a service inherits a minimal PATH, and a bare name there
       // fails to start with no useful signal.
+      // Still `suite`, not `burrow`: the path is baked into installed units, and      // changing it rewrites every live host\'s watchdog unit (see supervisor.ts).
       binary: `${home}/.local/bin/suite`,
       inheritedPath: deps.env.PATH,
       inheritedLocale: deps.env.LANG ?? deps.env.LC_ALL,
@@ -1298,6 +1301,7 @@ export async function runInit(deps: InitDeps, options: InitOptions = {}): Promis
     const restore = restoreUnitPlan({
       platform: deps.platform,
       home,
+      // Still `suite`, not `burrow`: the path is baked into installed units, and      // changing it rewrites every live host\'s watchdog unit (see supervisor.ts).
       binary: `${home}/.local/bin/suite`,
       inheritedPath: deps.env.PATH,
       intervalSeconds: 60,
@@ -1312,7 +1316,7 @@ export async function runInit(deps: InitDeps, options: InitOptions = {}): Promis
 
   say("");
   say(`agent ${dir} connected as ${connectedAs.runtimeId} (${connectedAs.suiteUrl}). start it from its folder:`);
-  say(nextCommand(`cd ${dir} && suite claude`));
+  say(nextCommand(`cd ${dir} && ${CLI_NAME} claude`));
 
   return {
     supervisor,

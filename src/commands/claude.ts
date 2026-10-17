@@ -57,6 +57,7 @@ import {
   type SessionState,
   type TmuxDeps,
 } from "../tmux.ts";
+import { CLI_NAME } from "../version.ts";
 
 /* ------------------------------------------------------------------------- */
 /* 1. The argv delivered to Claude                                            */
@@ -133,7 +134,7 @@ const realSleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r
 export function installOfferLines(plan: InstallPlan): string[] {
   return [
     `${AGENT} is not on PATH. ${CLAUDE_CODE_URL}`,
-    `  suite can install it with the ${plan.manager} installer (no sudo; it lands in ~/.local/bin).`,
+    `  ${CLI_NAME} can install it with the ${plan.manager} installer (no sudo; it lands in ~/.local/bin).`,
     `  you will still have to log in yourself: running ${AGENT} opens the browser login.`,
   ];
 }
@@ -301,7 +302,7 @@ export const CONTINUE_FALLBACK_SCRIPT = [
   "found=0",
   `for a in "$@"; do shift; if [ "$found" = 0 ] && [ "$a" = ${CONTINUE_ARG} ]; then found=1; else set -- "$@" "$a"; fi; done`,
   '[ "$found" = 1 ] || exit "$rc"',
-  `echo "suite: exit $rc with ${CONTINUE_ARG}; starting a fresh session (no conversation here to continue)" >&2`,
+  `echo "${CLI_NAME}: exit $rc with ${CONTINUE_ARG}; starting a fresh session (no conversation here to continue)" >&2`,
   'exec "$@"',
 ].join("; ");
 
@@ -373,7 +374,7 @@ export function isNonInteractive(userArgs: string[]): boolean {
  * reserved for this notice and is used nowhere else in `suite claude`.
  */
 export const NOTICE_BODY =
-  "loading a development channel plugin that is not yet on Anthropic's allowlist, via --dangerously-load-development-channels, and running with --dangerously-skip-permissions so an unattended Suite runtime does not stop on a tool-call prompt nobody is there to answer.";
+  "loading a development channel plugin that is not yet on Anthropic's allowlist, via --dangerously-load-development-channels, and running with --dangerously-skip-permissions so an unattended Burrow runtime does not stop on a tool-call prompt nobody is there to answer.";
 
 const YELLOW = "[33m";
 const RESET = "[0m";
@@ -449,7 +450,7 @@ export function attachedNotice(session: string): string {
 }
 
 export function createdNotice(session: string): string {
-  return `started ${session} — it survives this terminal; suite claude re-attaches.`;
+  return `started ${session} — it survives this terminal; ${CLI_NAME} claude re-attaches.`;
 }
 
 /**
@@ -779,6 +780,7 @@ export async function runClaude(deps: ClaudeDeps, options: ClaudeOptions): Promi
         // and treats anything else as unsupported, so narrowing here is safe.
         platform: deps.platform as NodeJS.Platform,
         home,
+        // Still `suite`, not `burrow`: the path is baked into installed units, and        // changing it rewrites every live host\'s watchdog unit (see supervisor.ts).
         binary: `${home}/.local/bin/suite`,
         inheritedPath: deps.env.PATH,
         inheritedLocale: deps.env.LANG ?? deps.env.LC_ALL,
@@ -814,11 +816,11 @@ export async function runClaude(deps: ClaudeDeps, options: ClaudeOptions): Promi
   }
   const finish = async (code: number): Promise<number> => {
     if (answering === null) return code;
-    if (!answeringDone) deps.err(`suite: still watching ${session} for Claude's launch dialogs…`);
+    if (!answeringDone) deps.err(`${CLI_NAME}: still watching ${session} for Claude's launch dialogs…`);
     const result = await answering;
     if (result.answered.length > 0) {
       const list = result.answered.map((a) => `${a.dialog} (${a.keys.join(" ")})`).join(", ");
-      deps.err(`suite: answered Claude's launch dialogs in ${session}: ${list} — logged to ${sessionLogPath(deps.env.HOME ?? "", session)}`);
+      deps.err(`${CLI_NAME}: answered Claude's launch dialogs in ${session}: ${list} — logged to ${sessionLogPath(deps.env.HOME ?? "", session)}`);
     }
     return code;
   };
@@ -873,8 +875,8 @@ export async function wireClaude(deps: WireDeps, wiring: WiringIo): Promise<Suit
   // a warning that says only "this folder" cannot be told apart in a log that
   // restore or a supervisor wrote for all of them.
   const unwired = (why: string): SuiteConfig => {
-    deps.err(`suite: ${why}; starting Claude Code without Suite wiring.`);
-    deps.err(`suite: run \`suite init\` in ${deps.cwd}, or \`suite claude\` from a terminal there, to connect it.`);
+    deps.err(`${CLI_NAME}: ${why}; starting Claude Code without Burrow wiring.`);
+    deps.err(`${CLI_NAME}: run \`${CLI_NAME} init\` in ${deps.cwd}, or \`${CLI_NAME} claude\` from a terminal there, to connect it.`);
     return deps.config;
   };
   try {
@@ -891,13 +893,13 @@ export async function wireClaude(deps: WireDeps, wiring: WiringIo): Promise<Suit
       if (entries === null || entries[CHANNEL_SERVER] !== undefined || entries[TOOLS_SERVER] !== undefined) {
         // (b)
         deps.err(
-          `suite: no saved connection for ${deps.cwd}; its Claude entries were left as they are. Run suite init in ${deps.cwd}`,
+          `${CLI_NAME}: no saved connection for ${deps.cwd}; its Claude entries were left as they are. Run ${CLI_NAME} init in ${deps.cwd}`,
         );
         return deps.config;
       }
       // (d)
       if (!wiring.canPrompt) {
-        return unwired(`${deps.cwd} is not connected to a Suite install and there is no terminal to ask in`);
+        return unwired(`${deps.cwd} is not connected to a Burrow install and there is no terminal to ask in`);
       }
       // (c)
       const ensured = await ensureConnection(io, deps.cwd);
@@ -917,7 +919,7 @@ export async function wireClaude(deps: WireDeps, wiring: WiringIo): Promise<Suit
     );
     return config;
   } catch (error) {
-    deps.err(`suite: could not set up Claude Code for Suite: ${error instanceof Error ? error.message : String(error)}`);
+    deps.err(`${CLI_NAME}: could not set up Claude Code for Burrow: ${error instanceof Error ? error.message : String(error)}`);
     return WIRING_FAILED_EXIT;
   }
 }

@@ -310,7 +310,7 @@ describe("approval requests follow the configured policy", () => {
     expect(
       (await t.server.serverRequest("item/permissions/requestApproval", { threadId: "t", turnId: "u", itemId: "p", reason: null, permissions: { network: true } })).result,
     ).toEqual({ permissions: {}, scope: "turn" });
-    expect((await t.server.serverRequest("execCommandApproval", {})).result).toEqual({ decision: { denied: { rejection: "declined by the suite codex approval policy" } } });
+    expect((await t.server.serverRequest("execCommandApproval", {})).result).toEqual({ decision: { denied: { rejection: "declined by the burrow codex approval policy" } } });
   });
 
   test("forms for a human are declined under either policy", async () => {

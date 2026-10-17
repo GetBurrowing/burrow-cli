@@ -22,6 +22,7 @@
  * pinned channel plugins keep being written as `SUITE_*`; whether a write also
  * carries the `BURROW_*` name is decided at the write site.
  */
+import { CLI_NAME } from "./version.ts";
 
 type Env = Record<string, string | undefined>;
 
@@ -75,7 +76,7 @@ let sink: (line: string) => void = (line) => void process.stderr.write(`${line}\
 
 /** The exact deprecation line for `suffix`. */
 export const deprecationLine = (suffix: FallbackSuffix): string =>
-  `burrow: ${suiteName(suffix)} is deprecated, set ${burrowName(suffix)}`;
+  `${CLI_NAME}: ${suiteName(suffix)} is deprecated, set ${burrowName(suffix)}`;
 
 /**
  * Test hook: route deprecation lines to `next` and forget which suffixes have

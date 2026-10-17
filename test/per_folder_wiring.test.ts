@@ -228,7 +228,7 @@ describe("init is per folder", () => {
     await initIn(bx, bx.a, A);
     const text = bx.output.join("\n");
     expect(text).toContain(`agent ${bx.a} connected as ${A.runtime} (${A.url})`);
-    expect(text).toContain(`cd ${bx.a} && suite claude`);
+    expect(text).toContain(`cd ${bx.a} && burrow claude`);
     expect(text).not.toContain("home folder");
   });
 
@@ -600,7 +600,7 @@ describe("status lists every agent folder", () => {
     const legacy = lines.filter((l) => l.includes(L.runtime));
     expect(legacy).toHaveLength(1);
     expect(legacy[0]).toContain("legacy");
-    expect(legacy[0]).toContain("not assigned to any folder; run suite init in each agent folder");
+    expect(legacy[0]).toContain("not assigned to any folder; run burrow init in each agent folder");
     expect(text).not.toContain("not federated");
     for (const t of [A.token, B.token, L.token]) expect(scanTexts({ text }, t)).toEqual([]);
   });
@@ -649,7 +649,7 @@ describe("status lists every agent folder", () => {
       const line = lines.find((l) => l.includes(r.root)) ?? "";
       expect(line).toContain(r.runtime_id ?? "no runtime id");
       if (r.recorded) expect(line).not.toContain("unrecorded");
-      else expect(line).toContain("(unrecorded — run suite init)");
+      else expect(line).toContain("(unrecorded — run burrow init)");
     }
     // Neither view gives the legacy runtime to a folder, and no token is printed.
     expect(doc.agents.some((r) => r.runtime_id === L.runtime)).toBe(false);

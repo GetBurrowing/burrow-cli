@@ -31,6 +31,7 @@ import {
 } from "../tmux.ts";
 import { resolveTmux } from "../halt.ts";
 import { answerLaunchDialogs, liveDialogIo, type AnswerResult, type DialogIo } from "../claude_dialogs.ts";
+import { CLI_NAME } from "../version.ts";
 
 export interface RestoreDeps {
   tmux: TmuxDeps;
@@ -67,8 +68,8 @@ export function liveRestoreDeps(env = process.env): RestoreDeps {
       writeFileSync(p, contents);
     },
     now: () => new Date(),
-    log: (line) => console.log(`suite restore: ${line}`),
-    dialogs: liveDialogIo(liveTmuxDeps(env), env.HOME ?? "", (line) => console.log(`suite restore: ${line}`)),
+    log: (line) => console.log(`${CLI_NAME} restore: ${line}`),
+    dialogs: liveDialogIo(liveTmuxDeps(env), env.HOME ?? "", (line) => console.log(`${CLI_NAME} restore: ${line}`)),
   };
 }
 
@@ -253,7 +254,7 @@ export async function runRestore(
       const code = await deps.wire(entry);
       if (code !== null) {
         result.failed.push(entry.session);
-        deps.log(`${entry.session}: FAILED — could not check its Suite wiring (exit ${code}); not started`);
+        deps.log(`${entry.session}: FAILED — could not check its Burrow wiring (exit ${code}); not started`);
         continue;
       }
     }

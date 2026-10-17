@@ -397,16 +397,16 @@ describe("init on a machine where nothing is installed", () => {
     expect(await Bun.file(mine).text()).toBe(theirs);
 
     // And yet the agent ends up with the conventions.
-    const owned = resolve(fx.root, "SUITE_CONVENTIONS.md");
+    const owned = resolve(fx.root, "BURROW_CONVENTIONS.md");
     expect(existsSync(owned)).toBe(true);
     expect(await Bun.file(owned).text()).toContain("assignment IS the authorization");
     expect(result.conventions).toBe("unlinked");
 
     // Silence is what let this survive, so the run says it plainly.
     const printed = deps.lines.join("\n");
-    expect(printed).toContain("SUITE_CONVENTIONS.md");
-    expect(printed).toContain("states no Suite conventions");
-    expect(printed).toContain("@SUITE_CONVENTIONS.md");
+    expect(printed).toContain("BURROW_CONVENTIONS.md");
+    expect(printed).toContain("states no Burrow conventions");
+    expect(printed).toContain("@BURROW_CONVENTIONS.md");
   });
 
   test("a CLAUDE.md that already carries the conventions gets no second copy", async () => {
@@ -419,15 +419,41 @@ describe("init on a machine where nothing is installed", () => {
     const { wiring: result } = await initThenWire(deps);
 
     expect(result.conventions).toBe("carries");
-    expect(existsSync(resolve(fx.root, "SUITE_CONVENTIONS.md"))).toBe(false);
-    expect(deps.lines.join("\n")).not.toContain("states no Suite conventions");
+    expect(existsSync(resolve(fx.root, "BURROW_CONVENTIONS.md"))).toBe(false);
+    expect(deps.lines.join("\n")).not.toContain("states no Burrow conventions");
   });
 
   test("a freshly seeded CLAUDE.md needs no second file either", async () => {
     const fx = makeFixture();
     const { wiring: result } = await initThenWire(makeDeps(fx, scriptedPrompter(credentialAnswers())));
     expect(result.conventions).toBe("seeded");
-    expect(existsSync(resolve(fx.root, "SUITE_CONVENTIONS.md"))).toBe(false);
+    expect(existsSync(resolve(fx.root, "BURROW_CONVENTIONS.md"))).toBe(false);
+  });
+
+  test("an upgraded folder keeps its SUITE_CONVENTIONS.md: refreshed in place, never renamed", async () => {
+    /*
+     * Constraint (b): never move a user's file. A pre-0.8.0 folder has the old
+     * owned file and a CLAUDE.md that loads it by that name; renaming would
+     * break that line. The control is the test above: a folder with neither
+     * gets BURROW_CONVENTIONS.md, so this one is not passing on a CLI that
+     * never writes the new name.
+     */
+    const fx = makeFixture();
+    const theirs = "# mine\n\n@SUITE_CONVENTIONS.md\n";
+    await Bun.write(resolve(fx.root, "CLAUDE.md"), theirs);
+    const legacy = resolve(fx.root, "SUITE_CONVENTIONS.md");
+    await Bun.write(legacy, "# stale copy from 0.7.3\n");
+    const deps = makeDeps(fx, scriptedPrompter(credentialAnswers()));
+
+    const { wiring: result } = await initThenWire(deps);
+
+    expect(result.conventions).toBe("linked");
+    expect(existsSync(resolve(fx.root, "BURROW_CONVENTIONS.md"))).toBe(false);
+    const text = await Bun.file(legacy).text();
+    expect(text).toContain("assignment IS the authorization");
+    // It tells the operator the name their CLAUDE.md already uses.
+    expect(text).toContain("@SUITE_CONVENTIONS.md");
+    expect(await Bun.file(resolve(fx.root, "CLAUDE.md")).text()).toBe(theirs);
   });
 
   test("offers the bun install rather than performing it unasked", async () => {
@@ -899,16 +925,16 @@ describe("url derivation", () => {
     expect(channelWsUrl("ws://localhost:4000/runtime/ws")).toBe("ws://localhost:4000/runtime/ws");
   });
 
-  test("either paste of the same Suite produces the same pair", () => {
+  test("either paste of the same Burrow produces the same pair", () => {
     const fromBrowser = "https://suite.example.invalid";
     const fromRuntime = "wss://suite.example.invalid/runtime/ws";
     expect(channelWsUrl(fromBrowser)).toBe(channelWsUrl(fromRuntime));
     expect(toolsHttpUrl(fromBrowser)).toBe(toolsHttpUrl(fromRuntime));
   });
 
-  test("a scheme that is not a Suite URL is refused by name, not coerced", () => {
-    expect(() => toolsHttpUrl("ftp://suite.example.invalid")).toThrow(/not a Suite URL/);
-    expect(() => channelWsUrl("ftp://suite.example.invalid")).toThrow(/not a Suite URL/);
+  test("a scheme that is not a Burrow URL is refused by name, not coerced", () => {
+    expect(() => toolsHttpUrl("ftp://suite.example.invalid")).toThrow(/not a Burrow URL/);
+    expect(() => channelWsUrl("ftp://suite.example.invalid")).toThrow(/not a Burrow URL/);
   });
 });
 

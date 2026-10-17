@@ -45,13 +45,13 @@ describe("output primitives", () => {
   });
 
   test("the next command carries zero indent", () => {
-    expect(nextCommand("suite init")).toBe("suite init");
+    expect(nextCommand("burrow init")).toBe("burrow init");
   });
 
   test("usage ends with the next command at zero indent", () => {
     const lines = usage().split("\n").filter((l) => l.trim() !== "");
     const last = lines[lines.length - 1] ?? "";
-    expect(last).toBe("suite init");
+    expect(last).toBe("burrow init");
     expect(last).toBe(last.trimStart());
   });
 

@@ -103,6 +103,7 @@ import {
   type DeepseekDeps,
 } from "./deepseek.ts";
 import { shellJoin } from "./hermes.ts";
+import { CLI_NAME } from "../version.ts";
 
 type Env = Record<string, string | undefined>;
 
@@ -121,6 +122,7 @@ type Env = Record<string, string | undefined>;
  */
 export const OPENCLAW_CHANNEL_REF = "b220c8b1240dc337f48fe2f92967816f84344582";
 /** The channel repo's name. Its owner comes from repo_source.ts (SUITE_GITHUB_OWNER). */
+// Not renamed to burrow in 0.8.0: the channel repo rename is task C's; the old name redirects on GitHub.
 export const OPENCLAW_CHANNEL_REPO_NAME = "openclaw-suite-channel";
 
 export function openclawChannelRepo(env: Env = process.env): string {
@@ -202,6 +204,10 @@ export interface OpenclawOptions {
 
 const VALUE_FLAGS: Record<string, string> = {
   "--root": "root",
+  // `--burrow-url` is the 0.8.0 name; `--suite-url` stays accepted (stamped
+  // agents' recorded session commands and core's agent-host pass it). When
+  // both are given, --burrow-url wins, as BURROW_* wins over SUITE_*.
+  "--burrow-url": "suiteUrl",
   "--suite-url": "suiteUrl",
   "--runtime-id": "runtimeId",
   "--model-base-url": "modelBaseUrl",
@@ -252,8 +258,8 @@ export function parseOpenclawOptions(args: string[], cwd: string = process.cwd()
     throw refused(
       "unknown_argument",
       arg.startsWith("--")
-        ? `suite openclaw: unknown option ${flag}`
-        : "suite openclaw: unexpected positional argument (not repeated here, in case it is a value); gateway arguments go after --",
+        ? `${CLI_NAME} openclaw: unknown option ${flag}`
+        : `${CLI_NAME} openclaw: unexpected positional argument (not repeated here, in case it is a value); gateway arguments go after --`,
     );
   }
   const rootArg = raw["--root"];
@@ -296,7 +302,7 @@ export function parseOpenclawOptions(args: string[], cwd: string = process.cwd()
 
   return {
     root,
-    suiteUrl: raw["--suite-url"],
+    suiteUrl: raw["--burrow-url"] ?? raw["--suite-url"],
     runtimeId: raw["--runtime-id"],
     tokenRef,
     keychainService,
@@ -843,7 +849,7 @@ export function openclawWriter(ctx: { opts: OpenclawOptions | null }, deps: Open
     if (!existsSync(join(dir, "package.json"))) {
       writeFileSync(join(dir, "package.json"), `${JSON.stringify({ name: "suite-openclaw", private: true }, null, 2)}\n`);
     }
-    deps.stderr(`suite: installing ${OPENCLAW_PACKAGE} into ${dir} (pinned; nothing global)\n`);
+    deps.stderr(`${CLI_NAME}: installing ${OPENCLAW_PACKAGE} into ${dir} (pinned; nothing global)\n`);
     const r = await spawn([npm, "install", "--prefix", dir, "--no-audit", "--no-fund", "--save-exact", OPENCLAW_PACKAGE], {
       cwd: dir,
       env: harnessChildEnv(deps.env),
@@ -1120,7 +1126,7 @@ export function openclawWriter(ctx: { opts: OpenclawOptions | null }, deps: Open
 
       if (state.modelKey !== undefined) {
         state.warnings.push(
-          `the model API key is not stored: openclaw.json holds an env ref to ${MODEL_KEY_ENV}, and \`suite openclaw\` resolves ` +
+          `the model API key is not stored: openclaw.json holds an env ref to ${MODEL_KEY_ENV}, and \`${CLI_NAME} openclaw\` resolves ` +
             `--model-api-key-ref into the gateway's environment at each launch, where same-user processes can read it`,
         );
       }
@@ -1141,7 +1147,7 @@ export function openclawWriter(ctx: { opts: OpenclawOptions | null }, deps: Open
     },
 
     humanSteps(): HumanStep[] {
-      return [{ kind: "start_agent_session", text: shellJoin(["suite", "openclaw", ...opts().sessionArgs]) }];
+      return [{ kind: "start_agent_session", text: shellJoin([CLI_NAME, "openclaw", ...opts().sessionArgs]) }];
     },
 
     warnings() {
@@ -1210,7 +1216,7 @@ async function execGateway(opts: OpenclawOptions, deps: OpenclawDeps, bin: strin
   const portInUse = deps.portInUse ?? probePortInUse;
   if (await portInUse(port)) {
     deps.stderr(
-      `suite: 127.0.0.1:${port} is already in use; is this agent's gateway already running outside its session? Not starting a second one.\n`,
+      `${CLI_NAME}: 127.0.0.1:${port} is already in use; is this agent's gateway already running outside its session? Not starting a second one.\n`,
     );
     return EXIT_REFUSED;
   }
@@ -1228,16 +1234,16 @@ async function execGateway(opts: OpenclawOptions, deps: OpenclawDeps, bin: strin
 async function runGateway(opts: OpenclawOptions, deps: OpenclawDeps): Promise<number> {
   const record = await readStampRecord(opts.root);
   if (record === null || record.harness !== "openclaw" || record.verdict !== "pass") {
-    deps.stderr(`suite: ${join(opts.root, STAMP_FILE)} records no passing openclaw stamp; run suite openclaw without --gateway-only first\n`);
+    deps.stderr(`${CLI_NAME}: ${join(opts.root, STAMP_FILE)} records no passing openclaw stamp; run ${CLI_NAME} openclaw without --gateway-only first\n`);
     return EXIT_REFUSED;
   }
   const bin = resolveOpenclawBin(opts, deps);
   if (bin === null) {
-    deps.stderr("suite: openclaw is not installed; pass --openclaw BIN\n");
+    deps.stderr(`${CLI_NAME}: openclaw is not installed; pass --openclaw BIN\n`);
     return EXIT_REFUSED;
   }
   if (opts.gatewayPort === undefined) {
-    deps.stderr("suite: --gateway-only needs --gateway-port (the relaunch always passes it)\n");
+    deps.stderr(`${CLI_NAME}: --gateway-only needs --gateway-port (the relaunch always passes it)\n`);
     return EXIT_REFUSED;
   }
   return await execGateway(opts, deps, bin, opts.gatewayPort);
@@ -1281,7 +1287,7 @@ export async function runOpenclaw(args: string[], deps: OpenclawDeps): Promise<n
     opts = parseOpenclawOptions(args);
   } catch (e) {
     if (e instanceof StampFailure) {
-      deps.stderr(`suite: ${e.message}\n`);
+      deps.stderr(`${CLI_NAME}: ${e.message}\n`);
       return e.exitCode;
     }
     throw e;

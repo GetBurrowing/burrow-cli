@@ -176,7 +176,7 @@ describe("init saves the connection where every harness can read it", () => {
   });
 });
 
-describe("suite claude wires this folder from the saved connection", () => {
+describe("burrow claude wires this folder from the saved connection", () => {
   test("init → claude: registers ONLY the missing entry, with the saved token, asking nothing", async () => {
     const fx = machine();
     useWritingClaude(fx);
@@ -249,7 +249,7 @@ describe("suite claude wires this folder from the saved connection", () => {
   });
 });
 
-describe("no saved connection: suite claude asks the init questions itself", () => {
+describe("no saved connection: burrow claude asks the init questions itself", () => {
   test("claude straight away: prompts url, runtime id, token; saves them; wires; launches", async () => {
     const fx = machine();
     expect(readAgentConnection(fx.env, fx.root).connection).toBeNull();
@@ -259,11 +259,11 @@ describe("no saved connection: suite claude asks the init questions itself", () 
     const code = await runClaude(deps, { userArgs: ["-p", "hello"], force: false });
 
     expect(code).toBe(0);
-    expect(prompter.asked.some((q) => q.startsWith("suite url"))).toBe(true);
+    expect(prompter.asked.some((q) => q.startsWith("burrow url"))).toBe(true);
     expect(prompter.asked.some((q) => q.startsWith("runtime id"))).toBe(true);
     expect(prompter.asked.some((q) => q.startsWith("token"))).toBe(true);
     // Never the old refusal.
-    expect(deps.errLines.join("\n")).not.toContain("run suite init first");
+    expect(deps.errLines.join("\n")).not.toContain("run burrow init first");
     // Saved, so the next harness (or the next launch) asks nothing.
     expect(savedRuntime(fx)).toBe(RUNTIME_ID);
     expect(savedToken(fx)).toBe(TOKEN);
@@ -283,9 +283,9 @@ describe("no saved connection: suite claude asks the init questions itself", () 
 
     expect(prompter.asked).toEqual([]);
     expect(adds(fx)).toEqual([]);
-    expect(deps.errLines.join("\n")).toContain("not connected to a Suite install");
-    expect(deps.errLines.join("\n")).toContain("suite init");
-    expect(deps.errLines.join("\n")).toContain(`suite init\` in ${fx.root}`);
+    expect(deps.errLines.join("\n")).toContain("not connected to a Burrow install");
+    expect(deps.errLines.join("\n")).toContain("burrow init");
+    expect(deps.errLines.join("\n")).toContain(`burrow init\` in ${fx.root}`);
     expect(deps.execed).toHaveLength(1);
   });
 
@@ -301,7 +301,7 @@ describe("no saved connection: suite claude asks the init questions itself", () 
     expect(adds(fx)).toEqual([]);
     const err = deps.errLines.join("\n");
     expect(err).toContain(`the Claude MCP entries for ${fx.root} need writing`);
-    expect(err).toContain(`suite init\` in ${fx.root}`);
+    expect(err).toContain(`burrow init\` in ${fx.root}`);
     expect(err).not.toContain("this folder");
     expect(deps.execed).toHaveLength(1);
   });
@@ -315,7 +315,7 @@ describe("no saved connection: suite claude asks the init questions itself", () 
 
     expect(await runClaude(deps, { userArgs: ["-p", "x"], force: false })).toBe(0);
 
-    expect(prompter.asked.some((q) => q.startsWith("suite url"))).toBe(false);
+    expect(prompter.asked.some((q) => q.startsWith("burrow url"))).toBe(false);
     expect(prompter.asked.some((q) => q.startsWith("runtime id"))).toBe(false);
     expect(prompter.asked.some((q) => q.startsWith("token"))).toBe(true);
     expect(savedToken(fx)).toBe(TOKEN);

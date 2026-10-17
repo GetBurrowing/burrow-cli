@@ -102,7 +102,7 @@ describe("session naming", () => {
   });
 
   test('sessionNaming "runtime" without a runtime id fails loudly', () => {
-    expect(() => sessionNameFor({ naming: "runtime", cwd: "/projects/ledger" })).toThrow(/suite init/);
+    expect(() => sessionNameFor({ naming: "runtime", cwd: "/projects/ledger" })).toThrow(/burrow init/);
   });
 });
 

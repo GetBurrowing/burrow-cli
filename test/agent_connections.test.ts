@@ -284,17 +284,17 @@ describe("migration from the 0.7.0 single machine connection", () => {
     expect(inA.code).toBe(0);
     expect(addsShown(bx)).toEqual([]);
     expect(inA.err.join("\n")).toContain(`no saved connection for ${bx.a}`);
-    expect(inA.err.join("\n")).toContain("suite init");
+    expect(inA.err.join("\n")).toContain("burrow init");
 
     const inB = await claudeIn(bx, bx.b, mute(), false);
     expect(inB.code).toBe(0);
     expect(addsShown(bx)).toEqual([]);
-    expect(inB.err.join("\n")).toContain("suite init");
+    expect(inB.err.join("\n")).toContain("burrow init");
     // b/ (no record, no entries, nobody to ask) names ITS folder, as a/ does:
     // on a machine of several agents "this folder" identifies none of them.
     // Both lines: what is wrong, and where to run `suite init`.
-    expect(inB.err.find((l) => l.includes("not connected to a Suite install"))).toContain(bx.b);
-    expect(inB.err.find((l) => l.includes("suite init"))).toContain(`suite init\` in ${bx.b}`);
+    expect(inB.err.find((l) => l.includes("not connected to a Burrow install"))).toContain(bx.b);
+    expect(inB.err.find((l) => l.includes("burrow init"))).toContain(`burrow init\` in ${bx.b}`);
     expect(inB.err.join("\n")).not.toContain("this folder");
 
     // I4: the legacy files are never written or deleted, and ~/.claude.json is untouched.
@@ -353,7 +353,7 @@ describe("unknown config: entries left alone, nothing stamped", () => {
     for (const canPrompt of [false, true]) {
       const r = await claudeIn(bx, bx.a, mute(), canPrompt);
       expect(r.code).toBe(0);
-      expect(r.err.join("\n")).toContain("suite init");
+      expect(r.err.join("\n")).toContain("burrow init");
     }
     expect(addsShown(bx)).toEqual([]);
     expect(existsSync(agentsDir(bx.fx.env))).toBe(false);

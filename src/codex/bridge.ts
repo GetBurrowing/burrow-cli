@@ -46,6 +46,7 @@ import {
   type TurnCompletedNotification,
   type TurnStartResponse,
 } from "./protocol.ts";
+import { CLI_NAME } from "../version.ts";
 
 export const NO_SPACE = "suite:no-space";
 export const MAX_PENDING_PER_SPACE = 5;
@@ -74,13 +75,13 @@ export interface BridgeOptions {
 
 /** What the model is told once per thread. Adapted from the Claude channel plugin's instructions. */
 export const DEVELOPER_INSTRUCTIONS = [
-  "You are an agent federated into Startup Suite. Messages from Suite arrive in your turns wrapped as",
+  "You are an agent federated into Burrow. Messages from Burrow arrive in your turns wrapped as",
   '<channel source="startup-suite" space_id="..." message_id="..." task_id="..." reason="..." author="...">…</channel>.',
-  "Your final message is NOT delivered to anyone. To say something in Suite, call the `suite_reply` tool on the",
+  "Your final message is NOT delivered to anyone. To say something in Burrow, call the `suite_reply` tool on the",
   "`suite-channel` MCP server, passing the `space_id` attribute from the inbound tag. Call `suite_typing` with",
   "`typing: true` before composing a reply. For long replies use `suite_reply_chunk` with one `chunk_id` and the",
   "cumulative `text`, finishing with `done: true`. `suite_reply_with_media` attaches base64 files.",
-  "The `startup-suite` MCP server carries the rest of the Suite tools (tasks, plans, memory, canvases), the same",
+  "The `startup-suite` MCP server carries the rest of the Burrow tools (tasks, plans, memory, canvases), the same",
   "bundles a Claude agent has. A task dispatch carries task_id; do the work it describes.",
   "Only reply to a real space id from the tag, never a task id.",
 ].join(" ");
@@ -366,7 +367,7 @@ export class CodexBridge {
       case SERVER_REQUESTS.legacyExecCommand:
       case SERVER_REQUESTS.legacyApplyPatch:
         this.opts.log(`approval: ${verdict} ${method}`);
-        return { decision: accept ? "approved" : { denied: { rejection: "declined by the suite codex approval policy" } } };
+        return { decision: accept ? "approved" : { denied: { rejection: `declined by the ${CLI_NAME} codex approval policy` } } };
       case SERVER_REQUESTS.elicitation:
         this.opts.log("approval: decline MCP elicitation (no human to answer it)");
         return { action: "decline", content: null, _meta: null };
@@ -375,7 +376,7 @@ export class CodexBridge {
         return { answers: {} };
       default:
         this.opts.log(`refused server request ${method}`);
-        throw new RpcError(-32601, `suite codex does not handle ${method}`);
+        throw new RpcError(-32601, `${CLI_NAME} codex does not handle ${method}`);
     }
   }
 

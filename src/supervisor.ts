@@ -1,6 +1,7 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { webUrl, type Env } from "./repo_source.ts";
 import { burrowName, envValue, suiteName } from "./env_names.ts";
+import { CLI_NAME } from "./version.ts";
 
 /**
  * Keeping `suite watch` running without anyone remembering to start it.
@@ -96,6 +97,7 @@ export function tmuxSupervisorArgv(binary: string, intervalSeconds: number): str
   ];
 }
 
+// Not renamed to burrow in 0.8.0: a new unit name would install a second watchdog beside the live one.
 export const SERVICE_NAME = "suite-watch";
 
 /**
@@ -129,6 +131,7 @@ export const isSupervised = (env: Record<string, string | undefined>): boolean =
  * equally protected by the unit files alone.
  */
 export const RSS_CEILING_BYTES = 512 * 1024 * 1024;
+// Not renamed to burrow in 0.8.0: a new label would load a second launchd job beside the live one.
 export const LAUNCHD_LABEL = "technology.milvenan.suite-watch";
 
 /**
@@ -192,6 +195,7 @@ export function envFilePath(home: string): string {
 }
 
 export function systemdUnit(input: SupervisorInput): string {
+  // Unit text unchanged in 0.8.0 (Description says Suite): new text rewrites every live unit.
   return `[Unit]
 Description=Suite agent session watchdog
 Documentation=${webUrl("suite-cli", input.env)}
@@ -308,7 +312,7 @@ export function supervisorPlan(input: SupervisorInput): SupervisorPlan {
     path: "",
     contents: "",
     activate: [],
-    summary: `no supported service manager on ${input.platform}; run "suite watch" yourself`,
+    summary: `no supported service manager on ${input.platform}; run "${CLI_NAME} watch" yourself`,
   };
 }
 
@@ -379,6 +383,7 @@ export function resolveSelfBinary(
   argv: string[],
 ): string {
   const home = env.HOME ?? "";
+  // Still `suite`: this path is baked into installed units' ExecStart/ProgramArguments.
   const installed = `${home}/.local/bin/suite`;
   const self = argv[1];
   if (self && self.startsWith("/") && self.endsWith("/suite")) return self;
@@ -439,6 +444,7 @@ export function liveSupervisorIo(): SupervisorIo {
 /* Agent restore on boot — written, never enabled                             */
 /* ------------------------------------------------------------------------- */
 
+// Not renamed to burrow in 0.8.0: a new unit/label would leave a second restore job beside the first.
 export const RESTORE_SERVICE_NAME = "suite-agents";
 export const RESTORE_LAUNCHD_LABEL = "technology.milvenan.suite-agents";
 
