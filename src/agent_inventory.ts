@@ -34,6 +34,7 @@ import type { RosterEntry } from "./roster.ts";
 import { STAMP_FILE } from "./stamp.ts";
 import { sessionNameFor, type SessionState } from "./tmux.ts";
 import { CHANNEL_SERVER, TOOLS_SERVER } from "./commands/init.ts";
+import { entryValue } from "./env_names.ts";
 
 /** The per-folder config file stamped and DeepSeek agents carry in their root. Mirrors deepseek.ts AGENT_CONFIG_FILE. */
 export const ROOT_CONFIG_FILE = "suite.json";
@@ -76,9 +77,9 @@ export function lastVerdict(text: string | null): string {
 
 /** One folder's Suite entries, as identity only. Never a token. */
 export interface EntryIdentity {
-  /** suite-channel env SUITE_RUNTIME_ID, or null. */
+  /** suite-channel env BURROW_RUNTIME_ID, else SUITE_RUNTIME_ID, or null. */
   runtimeId: string | null;
-  /** suite-channel env SUITE_URL, or null. */
+  /** suite-channel env BURROW_URL, else SUITE_URL, or null. */
   channelUrl: string | null;
   /** startup-suite url, or null. */
   toolsUrl: string | null;
@@ -105,8 +106,8 @@ function identityOf(servers: unknown): EntryIdentity | null {
   if (!hasChannel && !hasTools) return null;
   const env = hasChannel && typeof channel.env === "object" && channel.env !== null ? channel.env : {};
   return {
-    runtimeId: str(env.SUITE_RUNTIME_ID),
-    channelUrl: str(env.SUITE_URL),
+    runtimeId: entryValue(env, "RUNTIME_ID") ?? null,
+    channelUrl: entryValue(env, "URL") ?? null,
     toolsUrl: hasTools ? str(tools.url) : null,
   };
 }
@@ -135,7 +136,7 @@ export function parseClaudeJson(text: string): ClaudeJsonView | null {
       const entry = top[name];
       if (typeof entry !== "object" || entry === null) continue;
       const env = (entry as { env?: Record<string, unknown> }).env;
-      userScope.push({ name, runtimeId: name === CHANNEL_SERVER ? str(env?.SUITE_RUNTIME_ID) : null });
+      userScope.push({ name, runtimeId: name === CHANNEL_SERVER ? (entryValue(env, "RUNTIME_ID") ?? null) : null });
     }
   }
   return { projects, userScope };

@@ -163,3 +163,22 @@ export function stubsFor(tools: readonly string[]): Record<string, string> {
   for (const t of tools) out[t] = DEFAULT_STUBS[t] ?? "exit 0";
   return out;
 }
+
+/** The `claude` stub that REALLY writes `~/.claude.json` (local and user scope). */
+export const WRITING_CLAUDE_STUB = resolve(import.meta.dir, "..", "fixtures", "stub_claude_local_scope.ts");
+
+/**
+ * Replace this machine's `claude` with {@link WRITING_CLAUDE_STUB}, so a test
+ * can see what a registration left behind (and registration's convergence
+ * check, which reads it back, sees what the real CLI would have written). The
+ * TS stub logs its own argv to STUB_LOG; it is not wrapped in the shell
+ * prelude, which would log it twice.
+ */
+export function useWritingClaude(fx: CleanEnv): void {
+  writeFileSync(
+    resolve(fx.bin, "claude"),
+    `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(WRITING_CLAUDE_STUB)} "$@"\n`,
+    { mode: 0o755 },
+  );
+  chmodSync(resolve(fx.bin, "claude"), 0o755);
+}

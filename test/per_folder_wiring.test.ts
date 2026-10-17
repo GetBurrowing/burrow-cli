@@ -338,6 +338,23 @@ describe("init --from-mcp-json", () => {
     expect(existsSync(resolve(configDir(bx.fx.env), "agents"))).toBe(false);
   });
 
+  test("adoptMcpJson reads BURROW_* first: a disagreeing SUITE_RUNTIME_ID loses, and SUITE_* alone still adopts", () => {
+    const tok = canary("adopt");
+    const file = (env: Record<string, string>) =>
+      JSON.stringify({
+        mcpServers: {
+          [CHANNEL_SERVER]: { env },
+          [TOOLS_SERVER]: { url: "https://one.example.invalid/mcp", headers: { Authorization: `Bearer ${tok}` } },
+        },
+      });
+    const both = adoptMcpJson(file({ BURROW_RUNTIME_ID: "rt-new", SUITE_RUNTIME_ID: "rt-old", BURROW_TOKEN: tok, SUITE_TOKEN: canary("stale") }));
+    expect(both.ok && both.connection.runtimeId).toBe("rt-new");
+    // BURROW_TOKEN agrees with the bearer, so the stale SUITE_TOKEN is not what was compared.
+    expect(both.ok).toBe(true);
+    const old = adoptMcpJson(file({ SUITE_RUNTIME_ID: "rt-old", SUITE_TOKEN: tok }));
+    expect(old.ok && old.connection.runtimeId).toBe("rt-old");
+  });
+
   test("adoptMcpJson names fields, never values", () => {
     const secret = canary("val");
     const r = adoptMcpJson(
@@ -748,6 +765,84 @@ describe("session naming", () => {
 });
 
 /* ------------------------------------------------------------------------- */
+
+describe("registration converges on one startup-suite and one suite-channel (01a14b9f stage 3)", () => {
+  const OLD = "https://old.example.invalid";
+
+  test("KELLY e2e: a user-scope `suite` naming the old host is removed at the next wiring, printed, and stays gone", async () => {
+    const { A } = agents();
+    const bx = box();
+    await initIn(bx, bx.a, A);
+    await restoreOnce(bx, rosterFor(bx, [bx.a]), []);
+    expectNames(bx, bx.a, A);
+    // Kelly's Mac: a 0.4.x-era user-scope alias naming an install the host has left.
+    const raw = JSON.parse(readFileSync(claudeJson(bx), "utf8")) as { mcpServers?: Record<string, unknown> };
+    raw.mcpServers = { suite: { type: "http", url: `${OLD}/mcp`, headers: { Authorization: `Bearer ${canary("old")}` } } };
+    writeFileSync(claudeJson(bx), JSON.stringify(raw), { mode: 0o600 });
+
+    const before = adds(bx).length;
+    bx.output.length = 0;
+    const r = await restoreOnce(bx, rosterFor(bx, [bx.a]), []);
+    expect(r.failed).toEqual([]);
+    // Both entries were current: nothing re-added, only the alias removed.
+    expect(adds(bx).length).toBe(before);
+    const after = JSON.parse(readFileSync(claudeJson(bx), "utf8")) as { mcpServers?: Record<string, unknown> };
+    expect(after.mcpServers ?? {}).toEqual({});
+    expectNames(bx, bx.a, A);
+    const removal = bx.output.find((l) => l.includes("removed"));
+    expect(removal).toContain("suite");
+    expect(removal).toContain("user scope");
+    expect(removal).toContain("old.example.invalid");
+
+    // A third pass does nothing at all.
+    bx.output.length = 0;
+    await restoreOnce(bx, rosterFor(bx, [bx.a]), []);
+    expect(adds(bx).length).toBe(before);
+    expect(bx.output.some((l) => l.includes("removed"))).toBe(false);
+    expectNoLeaks(bx, [A.token]);
+  });
+
+  test("KITE e2e: a local startup-suite naming the OLD host is replaced by one naming the new host", async () => {
+    const { A } = agents();
+    const bx = box();
+    await initIn(bx, bx.a, A);
+    await restoreOnce(bx, rosterFor(bx, [bx.a]), []);
+    const raw = JSON.parse(readFileSync(claudeJson(bx), "utf8")) as {
+      projects: Record<string, { mcpServers: Record<string, unknown> }>;
+    };
+    (raw.projects[bx.a] as { mcpServers: Record<string, unknown> }).mcpServers[TOOLS_SERVER] = {
+      type: "http",
+      url: `${OLD}/mcp`,
+      headers: { Authorization: `Bearer ${A.token}` },
+    };
+    writeFileSync(claudeJson(bx), JSON.stringify(raw), { mode: 0o600 });
+
+    const r = await restoreOnce(bx, rosterFor(bx, [bx.a]), []);
+    expect(r.failed).toEqual([]);
+    expectNames(bx, bx.a, A);
+    expect(bx.output.some((l) => l.includes(TOOLS_SERVER) && l.includes("replaced"))).toBe(true);
+    expectNoLeaks(bx, [A.token]);
+  });
+
+  test("UPGRADE: a 0.7.3 entry pair carrying only SUITE_* reads CURRENT, so the upgrade rewrites nothing", async () => {
+    const { A } = agents();
+    const bx = box();
+    await initIn(bx, bx.a, A);
+    await restoreOnce(bx, rosterFor(bx, [bx.a]), []);
+    // Strip every BURROW_* name: exactly what 0.7.3 wrote.
+    const raw = JSON.parse(readFileSync(claudeJson(bx), "utf8")) as {
+      projects: Record<string, { mcpServers: Record<string, { env?: Record<string, string> }> }>;
+    };
+    const ch = raw.projects[bx.a]?.mcpServers[CHANNEL_SERVER] as { env: Record<string, string> };
+    for (const k of Object.keys(ch.env)) if (k.startsWith("BURROW_")) delete ch.env[k];
+    writeFileSync(claudeJson(bx), JSON.stringify(raw), { mode: 0o600 });
+    const bytes = readFileSync(claudeJson(bx));
+    const before = adds(bx).length;
+    await restoreOnce(bx, rosterFor(bx, [bx.a]), []);
+    expect(adds(bx).length).toBe(before);
+    expect(readFileSync(claudeJson(bx)).equals(bytes)).toBe(true);
+  });
+});
 
 test("the local-scope stub really writes and reads back (positive control for the cycle tests)", async () => {
   const { A } = agents();

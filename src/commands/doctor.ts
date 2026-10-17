@@ -53,6 +53,7 @@ import {
 import { claimsPhrase, inventoryRows, parseClaudeJson, type InventoryRow, type InventorySource } from "../agent_inventory.ts";
 import { projectKeys } from "../claude_wiring.ts";
 import { parseRoster, rosterPath } from "../roster.ts";
+import { burrowName, suiteName, type FallbackSuffix } from "../env_names.ts";
 import {
   CHANNEL_SERVER,
   PENDING_APPROVAL_REMEDY,
@@ -270,7 +271,8 @@ export function parseMcpEntryPath(output: string): string | null {
  */
 export function mcpEntryHasToken(output: string): boolean {
   for (const line of output.split("\n")) {
-    const m = /SUITE_TOKEN\s*[=:]\s*(.*)$/.exec(line.trim());
+    // Either generation's name: a 0.7.3 entry carries only SUITE_TOKEN.
+    const m = /(?:BURROW|SUITE)_TOKEN\s*[=:]\s*(.*)$/.exec(line.trim());
     if (m === null) continue;
     const value = (m[1] ?? "").trim().replace(/^["']|["']$/g, "");
     if (value !== "" && value !== "${}") return true;
@@ -305,6 +307,15 @@ export function mcpEntryEnvValue(output: string, name: string): string | null {
     if (value !== "" && value !== "${}") return value;
   }
   return null;
+}
+
+/**
+ * {@link mcpEntryEnvValue} for `BURROW_<suffix>`, else `SUITE_<suffix>`: the
+ * entry-env precedence rule of env_names.ts, over `claude mcp get` output.
+ * Same restriction: the value may be a secret and must never be rendered.
+ */
+export function mcpEntryEnvFirst(output: string, suffix: FallbackSuffix): string | null {
+  return mcpEntryEnvValue(output, burrowName(suffix)) ?? mcpEntryEnvValue(output, suiteName(suffix));
 }
 
 /**
@@ -1215,9 +1226,9 @@ function tokensCheck(
   const channelOut = `${channelEntry.stdout}\n${channelEntry.stderr}`;
   const toolsOut = `${toolsEntry.stdout}\n${toolsEntry.stderr}`;
 
-  const channelToken = mcpEntryEnvValue(channelOut, "SUITE_TOKEN");
+  const channelToken = mcpEntryEnvFirst(channelOut, "TOKEN");
   if (channelToken === null) {
-    return { id, label, status: "skip", reason: `no SUITE_TOKEN on the ${CHANNEL_SERVER} entry` };
+    return { id, label, status: "skip", reason: `no ${burrowName("TOKEN")} or ${suiteName("TOKEN")} on the ${CHANNEL_SERVER} entry` };
   }
   const authorization = parseMcpHeaderValue(toolsOut, "Authorization");
   const toolsToken = authorization === null ? null : bearerOf(authorization);
@@ -1225,7 +1236,7 @@ function tokensCheck(
     return { id, label, status: "skip", reason: `no bearer on the ${TOOLS_SERVER} entry` };
   }
 
-  const channelUrl = mcpEntryEnvValue(channelOut, "SUITE_URL");
+  const channelUrl = mcpEntryEnvFirst(channelOut, "URL");
   const toolsUrl = parseMcpHttpUrl(toolsOut);
   const channelHost = channelUrl === null ? null : suiteHostOf(channelUrl);
   const toolsHost = toolsUrl === null ? null : suiteHostOf(toolsUrl);

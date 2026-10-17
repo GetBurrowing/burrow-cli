@@ -11,6 +11,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, statSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { runClaude, type ClaudeDeps } from "../src/commands/claude.ts";
+import { channelState, legacyAliases, needsRegistration } from "../src/claude_wiring.ts";
 import { CHANNEL_SERVER, TOOLS_SERVER, channelWsUrl, defaultCheckout, runInit, toolsHttpUrl } from "../src/commands/init.ts";
 import {
   agentConfigPath,
@@ -22,7 +23,7 @@ import {
 import { emptyConfig } from "../src/config.ts";
 import { createStore, spawnWithSecrets, type Prompter } from "../src/secrets.ts";
 import type { RunResult, TmuxDeps } from "../src/tmux.ts";
-import { cleanupCleanEnvs, createCleanEnv, stubsFor, type CleanEnv } from "./clean-env/fixture.ts";
+import { cleanupCleanEnvs, createCleanEnv, stubsFor, useWritingClaude, type CleanEnv } from "./clean-env/fixture.ts";
 
 const SUITE_URL = "https://suite.example.invalid";
 const RUNTIME_ID = "runtime_00000000-0000-0000-0000-000000000000";
@@ -178,6 +179,7 @@ describe("init saves the connection where every harness can read it", () => {
 describe("suite claude wires this folder from the saved connection", () => {
   test("init → claude: registers ONLY the missing entry, with the saved token, asking nothing", async () => {
     const fx = machine();
+    useWritingClaude(fx);
     await init(fx);
     // The channel entry is already current; the tools entry is missing.
     writeClaudeJson(fx, { [CHANNEL_SERVER]: currentChannel(fx) });
@@ -337,5 +339,49 @@ describe("re-running init", () => {
     });
     expect(savedToken(fx)).toBe(TOKEN);
     expect(readAgentConnection(fx.env, fx.root).connection?.record.suiteUrl).toBe(SUITE_URL);
+  });
+});
+
+describe("channel staleness reads both generations (01a14b9f stage 3)", () => {
+  const want = {
+    suiteUrl: SUITE_URL,
+    runtimeId: RUNTIME_ID,
+    indexPath: "/x/src/index.ts",
+    tokenLiteral: TOKEN,
+    headers: [],
+  };
+  const entry = (env: Record<string, string>) => ({ type: "stdio", command: "bun", args: ["/x/src/index.ts"], env });
+  const suiteOnly = { SUITE_URL: channelWsUrl(SUITE_URL), SUITE_RUNTIME_ID: RUNTIME_ID, SUITE_TOKEN: TOKEN };
+  const burrowOnly = { BURROW_URL: channelWsUrl(SUITE_URL), BURROW_RUNTIME_ID: RUNTIME_ID, BURROW_TOKEN: TOKEN };
+
+  test("a 0.7.3 entry carrying only SUITE_* with current values is CURRENT, not stale", () => {
+    expect(channelState(entry(suiteOnly), want)).toBe("current");
+  });
+
+  test("an entry carrying both, agreeing, is current; BURROW_* alone is current", () => {
+    expect(channelState(entry({ ...suiteOnly, ...burrowOnly }), want)).toBe("current");
+    expect(channelState(entry(burrowOnly), want)).toBe("current");
+  });
+
+  test("BURROW_* right but SUITE_* wrong is STALE: the pinned plugin reads SUITE_*, so it runs on the wrong half", () => {
+    expect(channelState(entry({ ...burrowOnly, SUITE_URL: "wss://old.example.invalid/socket", SUITE_RUNTIME_ID: RUNTIME_ID, SUITE_TOKEN: TOKEN }), want)).toBe(
+      "stale",
+    );
+    expect(channelState(entry({ ...suiteOnly, BURROW_RUNTIME_ID: "rt-other" }), want)).toBe("stale");
+  });
+
+  test("a stale SUITE-only entry is still stale", () => {
+    expect(channelState(entry({ ...suiteOnly, SUITE_RUNTIME_ID: "rt-other" }), want)).toBe("stale");
+  });
+
+  test("a legacy alias makes registration run even when both entries are current", () => {
+    const fx = machine();
+    writeFileSync(
+      resolve(fx.home, ".claude.json"),
+      JSON.stringify({ mcpServers: { suite: { type: "http", url: "https://old.example.invalid/mcp" } }, projects: {} }),
+    );
+    expect(legacyAliases(fx.env, fx.root)).toEqual(["user:suite"]);
+    expect(needsRegistration({ channel: "current", tools: "current", want, legacy: ["user:suite"] })).toBe(true);
+    expect(needsRegistration({ channel: "current", tools: "current", want, legacy: [] })).toBe(false);
   });
 });

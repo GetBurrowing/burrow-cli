@@ -5,6 +5,8 @@ import {
   burrowName,
   deprecationLine,
   envSource,
+  entryAgrees,
+  entryValue,
   envValue,
   FALLBACK_SUFFIXES,
   setDeprecationSink,
@@ -99,6 +101,35 @@ describe("bothNames", () => {
   });
 });
 
+describe("entryValue / entryAgrees: an MCP entry's env, both generations", () => {
+  test("BURROW wins when both are set and disagree; SUITE alone is the fallback; empty or non-string is absent", () => {
+    expect(entryValue({ BURROW_URL: "new", SUITE_URL: "old" }, "URL")).toBe("new");
+    expect(entryValue({ SUITE_URL: "old" }, "URL")).toBe("old");
+    expect(entryValue({ BURROW_URL: " ", SUITE_URL: "old" }, "URL")).toBe("old");
+    expect(entryValue({ BURROW_URL: 7, SUITE_URL: "old" }, "URL")).toBe("old");
+    expect(entryValue({}, "URL")).toBeUndefined();
+    expect(entryValue(undefined, "URL")).toBeUndefined();
+  });
+
+  test("reading an entry never prints a deprecation line: the file is not the operator's environment", () => {
+    const lines: string[] = [];
+    const prev = setDeprecationSink((l) => void lines.push(l));
+    entryValue({ SUITE_URL: "old" }, "URL");
+    entryAgrees({ SUITE_URL: "old" }, "URL", "old");
+    setDeprecationSink(prev);
+    expect(lines).toEqual([]);
+  });
+
+  test("entryAgrees: every present name must equal the wanted value, and at least one must be present", () => {
+    expect(entryAgrees({ SUITE_URL: "u" }, "URL", "u")).toBe(true);
+    expect(entryAgrees({ BURROW_URL: "u" }, "URL", "u")).toBe(true);
+    expect(entryAgrees({ BURROW_URL: "u", SUITE_URL: "u" }, "URL", "u")).toBe(true);
+    expect(entryAgrees({ BURROW_URL: "u", SUITE_URL: "old" }, "URL", "u")).toBe(false);
+    expect(entryAgrees({ BURROW_URL: "old", SUITE_URL: "u" }, "URL", "u")).toBe(false);
+    expect(entryAgrees({}, "URL", "u")).toBe(false);
+  });
+});
+
 describe("FALLBACK_SUFFIXES", () => {
   test("is exactly this raw list, in this order: a missed or an extra name fails here", () => {
     // Hand-written on purpose. Do not derive it from the module under test.
@@ -166,35 +197,24 @@ async function hits(pattern: RegExp): Promise<string[]> {
  * correctly stay on the legacy name. Matched by file and full line text (not
  * line number), so an added read anywhere fails the test.
  *
- *  - agent_inventory / claude_wiring / init / doctor read the `suite-channel`
- *    MCP ENTRY's env in ~/.claude.json. The pinned channel plugin consumes
- *    those names, so they are written (and therefore read back) as SUITE_*.
- *  - deepseek's `!!js process.env.SUITE_*` lines are generated code run inside
- *    the dsh child, reading names this CLI itself sets in that child's env
- *    (publicEnv / secretEnv).
+ *  - deepseek's `!!js process.env.BURROW_* || process.env.SUITE_*` lines are
+ *    generated code run inside the dsh child, reading names this CLI itself
+ *    sets (BOTH generations) in that child's env (publicEnv / secretEnv).
+ *
+ * Reads of an MCP ENTRY's env (agent_inventory, claude_wiring, init, doctor)
+ * used to be listed here; since 01a14b9f stage 3 they go through
+ * `entryValue` / `entryAgrees` / `burrowName`+`suiteName`, BURROW first, so
+ * none of them names a SUITE_* variable directly any more.
  */
 const DIRECT_READ_ALLOWED = [
-  "src/agent_inventory.ts| channelUrl: str(env.SUITE_URL),",
-  "src/agent_inventory.ts| runtimeId: str(env.SUITE_RUNTIME_ID),",
-  "src/agent_inventory.ts| userScope.push({ name, runtimeId: name === CHANNEL_SERVER ? str(env?.SUITE_RUNTIME_ID) : null });",
-  'src/claude_wiring.ts| if (env.SUITE_RUNTIME_ID !== want.runtimeId) return "stale";',
-  'src/claude_wiring.ts| if (env.SUITE_URL !== channelWsUrl(want.suiteUrl)) return "stale";',
-  'src/claude_wiring.ts| if (want.tokenLiteral !== null && env.SUITE_TOKEN !== want.tokenLiteral) return "stale";',
-  "src/commands/deepseek.ts| Authorization: !!js '\\`Bearer \\${process.env.SUITE_RUNTIME_TOKEN}\\`'",
-  "src/commands/deepseek.ts| runtimeId: !!js process.env.SUITE_RUNTIME_ID",
-  "src/commands/deepseek.ts| token: !!js process.env.SUITE_RUNTIME_TOKEN",
-  "src/commands/deepseek.ts| url: !!js process.env.SUITE_MCP_URL",
-  "src/commands/deepseek.ts| url: !!js process.env.SUITE_WS_URL",
-  "src/commands/init.ts| const channelToken = str(env.SUITE_TOKEN);",
-  "src/commands/init.ts| const channelUrl = str(env.SUITE_URL);",
-  "src/commands/init.ts| const id = entry.env?.SUITE_RUNTIME_ID;",
-  "src/commands/init.ts| const runtimeId = str(env.SUITE_RUNTIME_ID);",
+  "src/commands/deepseek.ts| Authorization: !!js '\\`Bearer \\${process.env.BURROW_RUNTIME_TOKEN || process.env.SUITE_RUNTIME_TOKEN}\\`'",
+  "src/commands/deepseek.ts| runtimeId: !!js process.env.BURROW_RUNTIME_ID || process.env.SUITE_RUNTIME_ID",
+  "src/commands/deepseek.ts| token: !!js process.env.BURROW_RUNTIME_TOKEN || process.env.SUITE_RUNTIME_TOKEN",
+  "src/commands/deepseek.ts| url: !!js process.env.BURROW_MCP_URL || process.env.SUITE_MCP_URL",
+  "src/commands/deepseek.ts| url: !!js process.env.BURROW_WS_URL || process.env.SUITE_WS_URL",
 ].sort();
 
-const QUOTED_NAME_ALLOWED = [
-  'src/commands/doctor.ts| const channelToken = mcpEntryEnvValue(channelOut, "SUITE_TOKEN");',
-  'src/commands/doctor.ts| const channelUrl = mcpEntryEnvValue(channelOut, "SUITE_URL");',
-].sort();
+const QUOTED_NAME_ALLOWED: string[] = [];
 
 describe("only env_names.ts reads SUITE_* from the process environment", () => {
   test("anti-vacuity: the scan sees the source tree, and the patterns match a known read", () => {
@@ -211,7 +231,7 @@ describe("only env_names.ts reads SUITE_* from the process environment", () => {
     expect(await hits(DIRECT_READ)).toEqual(DIRECT_READ_ALLOWED);
   });
 
-  test("no quoted SUITE_* name outside env_names.ts except the MCP-entry lookups", async () => {
+  test("no quoted SUITE_* name outside env_names.ts at all", async () => {
     expect(await hits(QUOTED_NAME)).toEqual(QUOTED_NAME_ALLOWED);
   });
 });

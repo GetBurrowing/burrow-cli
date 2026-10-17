@@ -19,6 +19,7 @@ import {
   parseMcpHeaderValue,
   parseMcpHttpUrl,
   mcpEntryEnvValue,
+  mcpEntryEnvFirst,
   bearerOf,
   classifyProbe,
   suiteHostOf,
@@ -1258,7 +1259,7 @@ describe("the token match check", () => {
     const noToken = await report({ mcpGet: channelEntry("") });
     const a = byId(noToken.checks, "tokens");
     expect(a.status).toBe("skip");
-    expect(a.status === "skip" && a.reason).toBe(`no SUITE_TOKEN on the ${CHANNEL_SERVER} entry`);
+    expect(a.status === "skip" && a.reason).toBe(`no BURROW_TOKEN or SUITE_TOKEN on the ${CHANNEL_SERVER} entry`);
 
     const noBearer = await report({ toolsGet: toolsGetOutput().replace(/Authorization:.*/, "") });
     const b = byId(noBearer.checks, "tokens");
@@ -1281,6 +1282,16 @@ describe("the token match check", () => {
     // A header line is not an environment line, however much `Name: value`
     // resembles `NAME=value`.
     expect(mcpEntryEnvValue(toolsGetOutput(), "Authorization")).toBeNull();
+  });
+
+  test("BURROW-first: BURROW_TOKEN / BURROW_URL win when they disagree with SUITE_*, and SUITE_* alone still reads", () => {
+    const both = `${channelEntry("tok_suite_side")}    BURROW_TOKEN=tok_burrow_side\n    BURROW_URL=wss://new.example.invalid/runtime/ws\n`;
+    expect(mcpEntryEnvFirst(both, "TOKEN")).toBe("tok_burrow_side");
+    expect(mcpEntryEnvFirst(both, "URL")).toBe("wss://new.example.invalid/runtime/ws");
+    expect(mcpEntryEnvFirst(channelEntry("tok_suite_only"), "TOKEN")).toBe("tok_suite_only");
+    // Presence: a BURROW-only entry carries a token too.
+    expect(mcpEntryHasToken("  Environment:\n    BURROW_TOKEN=tok_b\n")).toBe(true);
+    expect(mcpEntryHasToken("  Environment:\n    BURROW_TOKEN=\n")).toBe(false);
   });
 });
 

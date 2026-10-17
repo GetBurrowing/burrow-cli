@@ -19,7 +19,7 @@
  * fully wired folder runs no git, no bun and no `claude mcp` at all.
  */
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { resolve } from "node:path";
 import {
   CLAUDE_MD,
   CONVENTIONS_FILENAME,
@@ -32,8 +32,10 @@ import {
 import type { SuiteConfig } from "./config.ts";
 import { TOKEN_KEY, type CredentialStore } from "./secrets.ts";
 import { row } from "./ui.ts";
+import { entryAgrees } from "./env_names.ts";
 import {
   CHANNEL_SERVER,
+  LEGACY_ALIASES,
   PLUGIN_DIRNAME,
   TOOLS_SERVER,
   channelAddArgs,
@@ -44,7 +46,9 @@ import {
   defaultCheckout,
   envReference,
   packageCount,
+  projectKeys,
   registerServers,
+  scopeView,
   spinner,
   toolsAddArgs,
   toolsHttpUrl,
@@ -83,25 +87,8 @@ export interface McpEntry {
   headers?: Record<string, string>;
 }
 
-/**
- * The directories Claude Code may key this folder's local-scope entries under:
- * the folder itself, and the enclosing git work tree's root when there is one
- * (measured, see `MCP_SCOPE` in init.ts).
- */
-export function projectKeys(cwd: string): string[] {
-  const keys = [resolve(cwd)];
-  let dir = resolve(cwd);
-  for (;;) {
-    if (existsSync(resolve(dir, ".git"))) {
-      if (!keys.includes(dir)) keys.push(dir);
-      break;
-    }
-    const parent = dirname(dir);
-    if (parent === dir) break;
-    dir = parent;
-  }
-  return keys;
-}
+/** Re-exported from init.ts, where registration's convergence check needs it too. */
+export { projectKeys };
 
 /**
  * This folder's local-scope MCP entries, or null when `~/.claude.json` cannot
@@ -150,10 +137,15 @@ export function channelState(entry: McpEntry | undefined, want: DesiredEntries):
   if (entry === undefined) return "missing";
   const env = entry.env ?? {};
   const args = entry.args ?? [];
-  if (env.SUITE_URL !== channelWsUrl(want.suiteUrl)) return "stale";
-  if (env.SUITE_RUNTIME_ID !== want.runtimeId) return "stale";
+  // BOTH GENERATIONS. A 0.7.3 entry carrying only SUITE_* with the right
+  // values is CURRENT, so an upgrade does not rewrite a live agent's entry. An
+  // entry whose BURROW_* and SUITE_* disagree is STALE even when the BURROW
+  // half is right: the pinned plugin reads SUITE_*, so it is running on the
+  // wrong half (see `entryAgrees`).
+  if (!entryAgrees(env, "URL", channelWsUrl(want.suiteUrl))) return "stale";
+  if (!entryAgrees(env, "RUNTIME_ID", want.runtimeId)) return "stale";
   if (args[args.length - 1] !== want.indexPath) return "stale";
-  if (want.tokenLiteral !== null && env.SUITE_TOKEN !== want.tokenLiteral) return "stale";
+  if (want.tokenLiteral !== null && !entryAgrees(env, "TOKEN", want.tokenLiteral)) return "stale";
   return "current";
 }
 
@@ -181,6 +173,30 @@ export interface McpPlan {
   channel: EntryState;
   tools: EntryState;
   want: DesiredEntries;
+  /**
+   * Legacy-alias entries (`suite`, `burrow`) this folder sees, as `scope:name`.
+   * Non-empty means registration must run even when both entries are current,
+   * because that is where they are removed (see `LEGACY_ALIASES`).
+   */
+  legacy: string[];
+}
+
+/** The `scope:name` of every legacy alias this folder sees, or [] when ~/.claude.json is unreadable. */
+export function legacyAliases(env: Env, cwd: string): string[] {
+  let text: string;
+  try {
+    text = readFileSync(claudeJsonPath(env), "utf8");
+  } catch {
+    return [];
+  }
+  const view = scopeView(text, cwd);
+  if (view === null) return [];
+  const found: string[] = [];
+  for (const name of LEGACY_ALIASES) {
+    if (view.local[name] !== undefined) found.push(`local:${name}`);
+    if (view.user[name] !== undefined) found.push(`user:${name}`);
+  }
+  return found;
 }
 
 export function planMcp(deps: Pick<WiringDeps, "env" | "cwd" | "store">, config: SuiteConfig, checkout: string): McpPlan {
@@ -192,13 +208,19 @@ export function planMcp(deps: Pick<WiringDeps, "env" | "cwd" | "store">, config:
     headers: config.headerNames.map((name) => ({ name, value: deps.store.get(name) })),
   };
   const entries = localEntries(deps.env, deps.cwd);
-  if (entries === null) return { channel: "missing", tools: "missing", want };
-  return { channel: channelState(entries[CHANNEL_SERVER], want), tools: toolsState(entries[TOOLS_SERVER], want), want };
+  const legacy = legacyAliases(deps.env, deps.cwd);
+  if (entries === null) return { channel: "missing", tools: "missing", want, legacy };
+  return {
+    channel: channelState(entries[CHANNEL_SERVER], want),
+    tools: toolsState(entries[TOOLS_SERVER], want),
+    want,
+    legacy,
+  };
 }
 
-/** True when the plan has an entry to write. */
+/** True when the plan has an entry to write, or a legacy alias to remove. */
 export function needsRegistration(plan: McpPlan): boolean {
-  return plan.channel !== "current" || plan.tools !== "current";
+  return plan.channel !== "current" || plan.tools !== "current" || plan.legacy.length > 0;
 }
 
 /* ------------------------------------------------------------------------- */
@@ -291,24 +313,26 @@ export async function ensureClaudeWiring(
   const registered: string[] = [];
   let connected = true;
   if (needsRegistration(plan)) {
+    const writes = plan.channel !== "current" || plan.tools !== "current";
     const tokenLiteral = plan.want.tokenLiteral;
-    if (tokenLiteral === null) {
+    // Removing an alias needs no token; writing an entry does.
+    if (writes && tokenLiteral === null) {
       throw new Error("no saved token to write into the Claude MCP entries; run suite init");
     }
     const headers = plan.want.headers.map((h) => ({ name: h.name, value: h.value ?? "" }));
     const invocations: string[][] = [];
-    if (plan.channel !== "current") {
+    if (plan.channel !== "current" && tokenLiteral !== null) {
       invocations.push(
         channelAddArgs({ suiteUrl: config.suiteUrl, runtimeId: config.runtimeId, tokenLiteral, indexPath: plan.want.indexPath }),
       );
       registered.push(CHANNEL_SERVER);
     }
-    if (plan.tools !== "current") {
+    if (plan.tools !== "current" && tokenLiteral !== null) {
       invocations.push(toolsAddArgs(config.suiteUrl, tokenLiteral, headers));
       registered.push(TOOLS_SERVER);
     }
-    for (const line of await registerServers(deps, invocations, config.runtimeId)) deps.out(line);
-    if (config.tokenEnv !== undefined) {
+    for (const line of await registerServers(deps, invocations, config.runtimeId, config.suiteUrl)) deps.out(line);
+    if (writes && config.tokenEnv !== undefined) {
       deps.out(row("", "", `token read from ${config.tokenEnv} at launch; export it or the channel will not authenticate`));
     }
     // WRITTEN IS NOT CONNECTED — checked only after a write, because listing

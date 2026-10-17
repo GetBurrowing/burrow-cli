@@ -119,3 +119,45 @@ export function envValue(env: Env, suffix: FallbackSuffix): string | undefined {
 export function bothNames(suffix: FallbackSuffix, value: string): Record<string, string> {
   return { [burrowName(suffix)]: value, [suiteName(suffix)]: value };
 }
+
+/* Reads of a WRITTEN entry's env ------------------------------------------- */
+
+/**
+ * The value an MCP entry's `env` map (or a `.mcp.json`) carries for `suffix`,
+ * by the same precedence rule as {@link envValue}: `BURROW_<suffix>` when it is
+ * a non-empty string, else `SUITE_<suffix>` when that is one, else undefined.
+ *
+ * NOT the process environment, so no deprecation line: an entry written by
+ * 0.7.3 carries only `SUITE_*`, and that is a fact about the file, not about
+ * anything the operator set. Values are trimmed; a non-string is absent.
+ */
+export function entryValue(env: Record<string, unknown> | undefined | null, suffix: FallbackSuffix): string | undefined {
+  if (env === undefined || env === null) return undefined;
+  for (const name of [burrowName(suffix), suiteName(suffix)]) {
+    const v = env[name];
+    if (typeof v === "string" && v.trim() !== "") return v.trim();
+  }
+  return undefined;
+}
+
+/**
+ * Does every name an entry carries for `suffix` equal `want`, with at least one
+ * present? A `SUITE_*`-only entry (0.7.3) with the wanted value AGREES.
+ *
+ * STRICTER THAN {@link entryValue} ON PURPOSE. The pinned channel plugin reads
+ * only `SUITE_*`, so an entry whose `BURROW_X` is right and whose `SUITE_X` is
+ * wrong runs on the WRONG value today. Reading it BURROW-first would call that
+ * entry current and never rewrite it; this calls it stale. Compared untrimmed:
+ * it answers "is the file exactly what we would write".
+ */
+export function entryAgrees(env: Record<string, unknown> | undefined | null, suffix: FallbackSuffix, want: string): boolean {
+  if (env === undefined || env === null) return false;
+  let seen = 0;
+  for (const name of [burrowName(suffix), suiteName(suffix)]) {
+    const v = env[name];
+    if (v === undefined) continue;
+    seen++;
+    if (v !== want) return false;
+  }
+  return seen > 0;
+}

@@ -35,7 +35,7 @@ import { emptyConfig, serializeConfig } from "../src/config.ts";
 import { configDir, WriteRefused, type GitProbe } from "../src/paths.ts";
 import { createStore, spawnWithSecrets, type Prompter } from "../src/secrets.ts";
 import type { RunResult, TmuxDeps } from "../src/tmux.ts";
-import { cleanupCleanEnvs, createCleanEnv, stubsFor, type CleanEnv } from "./clean-env/fixture.ts";
+import { cleanupCleanEnvs, createCleanEnv, stubsFor, useWritingClaude, type CleanEnv } from "./clean-env/fixture.ts";
 import { canary, scanText, scanTexts, scanTree } from "./leak-scan.ts";
 
 afterEach(cleanupCleanEnvs);
@@ -228,6 +228,8 @@ describe("the named regression", () => {
   test("two agents: claude in the first folder keeps the first runtime", async () => {
     const { A, B } = agents();
     const bx = box();
+    // A claude that really writes: registration reads back what it wrote.
+    useWritingClaude(bx.fx);
     await initIn(bx, bx.a, A);
     await initIn(bx, bx.b, B);
     // As 0.7.0 left a real box: the machine connection names the LAST init, B.
@@ -251,7 +253,8 @@ describe("the named regression", () => {
     const r = await claudeIn(bx, bx.a, mute(), false);
     expect(r.code).toBe(0);
     const added = adds(bx);
-    expect(added.map((p) => p[3]).sort()).toEqual([CHANNEL_SERVER, TOOLS_SERVER].sort());
+    // Each stale entry: an add refused as "already exists", a local remove, the add again.
+    expect([...new Set(added.map((p) => p[3]))].sort()).toEqual([CHANNEL_SERVER, TOOLS_SERVER].sort());
     const channel = added.find((p) => p[3] === CHANNEL_SERVER) ?? [];
     const tools = added.find((p) => p[3] === TOOLS_SERVER) ?? [];
     const mask = (p: string[]): string[] => p.map((a) => (/TOKEN=|Bearer /.test(a) ? "<token masked>" : a));
@@ -323,6 +326,7 @@ describe("migration from the 0.7.0 single machine connection", () => {
     writeClaudeJson(bx, { [bx.a]: A });
     const C: Agent = { url: "https://three.example.invalid", runtime: "rt-c-00000000", token: canary("tokC") };
     const prompter = scripted([C.url, C.runtime, C.token, ""]);
+    useWritingClaude(bx.fx);
 
     const r = await claudeIn(bx, bx.b, prompter, true);
 
