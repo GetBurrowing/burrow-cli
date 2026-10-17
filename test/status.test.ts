@@ -24,6 +24,7 @@ import { rosterPath, serializeRoster, type RosterEntry } from "../src/roster.ts"
 import { STAMP_FILE } from "../src/stamp.ts";
 import { HERMES_AGENT_COMM } from "../src/commands/hermes.ts";
 import { OPENCLAW_GATEWAY_COMM } from "../src/commands/openclaw.ts";
+import { envValue } from "../src/env_names.ts";
 
 /** Invented, like every other fixture value in this public repository. */
 const SUITE_URL = "https://suite.example.invalid";
@@ -364,7 +365,7 @@ function realStatusDeps(home: string): StatusDeps & { lines: string[] } {
 }
 
 test("the real-tmux status tests below are not silently skipped", () => {
-  expect(HAVE_TMUX || process.env.SUITE_CLI_ALLOW_NO_TMUX === "1").toBe(true);
+  expect(HAVE_TMUX || envValue(process.env, "CLI_ALLOW_NO_TMUX") === "1").toBe(true);
 });
 
 describe.if(HAVE_TMUX)("status of a stamped agent, against a real tmux", () => {

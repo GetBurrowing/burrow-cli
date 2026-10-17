@@ -20,12 +20,20 @@
  * URLs and an `sh -c` command line (see update.ts), and the narrow slug set
  * below has no character that means anything to either.
  */
+import { burrowName, envSource, suiteName } from "./env_names.ts";
 
 /** The GitHub org every repo lives under today. */
 export const DEFAULT_GITHUB_OWNER = "Startup-Suite";
 
-/** The environment variable that overrides it. */
-export const OWNER_ENV = "SUITE_GITHUB_OWNER";
+/**
+ * The legacy environment variable that overrides it, and the name this CLI
+ * still hands to its installer. Reads go through env_names.ts, which prefers
+ * {@link OWNER_ENV_BURROW} and falls back to this one.
+ */
+export const OWNER_ENV = suiteName("GITHUB_OWNER");
+
+/** The Burrow-generation name for the same override. Wins when both are set. */
+export const OWNER_ENV_BURROW = burrowName("GITHUB_OWNER");
 
 /**
  * GitHub's own owner rule: 1-39 characters, alphanumeric or hyphen, not
@@ -36,9 +44,13 @@ const OWNER_SLUG = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/;
 export type Env = Record<string, string | undefined>;
 
 export class InvalidGithubOwner extends Error {
-  constructor(readonly value: string) {
+  /** `variable` is the one that actually supplied the value, so the operator fixes the right one. */
+  constructor(
+    readonly value: string,
+    readonly variable: string = OWNER_ENV,
+  ) {
     super(
-      `${OWNER_ENV}=${JSON.stringify(value)} is not a GitHub owner name (1-39 letters, digits or hyphens, not starting with a hyphen). Refusing to build a URL from it.`,
+      `${variable}=${JSON.stringify(value)} is not a GitHub owner name (1-39 letters, digits or hyphens, not starting with a hyphen). Refusing to build a URL from it.`,
     );
     this.name = "InvalidGithubOwner";
   }
@@ -49,17 +61,18 @@ export function ownerIsValid(owner: string): boolean {
 }
 
 /**
- * The owner to use: `SUITE_GITHUB_OWNER` when set, else the default.
+ * The owner to use: `BURROW_GITHUB_OWNER`, else `SUITE_GITHUB_OWNER`, else
+ * the default (precedence lives in env_names.ts).
  *
  * Unset and empty both mean the default, the same rule install.sh applies
  * (`${SUITE_GITHUB_OWNER:-Startup-Suite}`) and the same one SUITE_CLI_REF
  * follows. Anything else must be a valid slug or this throws.
  */
 export function ownerFrom(env: Env = process.env): string {
-  const raw = env[OWNER_ENV];
-  if (raw === undefined || raw === "") return DEFAULT_GITHUB_OWNER;
-  if (!ownerIsValid(raw)) throw new InvalidGithubOwner(raw);
-  return raw;
+  const source = envSource(env, "GITHUB_OWNER");
+  if (source === null || source.value === "") return DEFAULT_GITHUB_OWNER;
+  if (!ownerIsValid(source.value)) throw new InvalidGithubOwner(source.value, source.name);
+  return source.value;
 }
 
 /** `<owner>/<repo>`. */

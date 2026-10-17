@@ -14,8 +14,17 @@
 import { createConnection, createServer, type Server, type Socket } from "node:net";
 import { chmodSync, mkdirSync, rmSync } from "node:fs";
 import { dirname } from "node:path";
+import { burrowName, envValue, suiteName } from "../env_names.ts";
 
-export const BRIDGE_SOCKET_ENV = "SUITE_CODEX_BRIDGE_SOCKET";
+/**
+ * The names the bridge writes into Codex's reply-MCP entry: BURROW_ first, and
+ * the SUITE_ name too, because the `suite` launcher Codex runs may be an older
+ * install that reads only the legacy name. Read back through env_names.ts.
+ */
+export const BRIDGE_SOCKET_ENVS = [burrowName("CODEX_BRIDGE_SOCKET"), suiteName("CODEX_BRIDGE_SOCKET")] as const;
+
+/** The name named in diagnostics. */
+export const BRIDGE_SOCKET_ENV = burrowName("CODEX_BRIDGE_SOCKET");
 
 export const TOOL_SPECS = [
   {
@@ -214,9 +223,9 @@ export function socketForwarder(path: string): (tool: string, args: Record<strin
 
 /** `suite codex --reply-mcp`: serve MCP on stdio until stdin closes. */
 export async function runReplyMcp(env: Record<string, string | undefined>, version: string): Promise<number> {
-  const path = env[BRIDGE_SOCKET_ENV];
+  const path = envValue(env, "CODEX_BRIDGE_SOCKET");
   if (path === undefined || path === "") {
-    process.stderr.write(`suite codex --reply-mcp: ${BRIDGE_SOCKET_ENV} is not set\n`);
+    process.stderr.write(`suite codex --reply-mcp: ${BRIDGE_SOCKET_ENVS.join(" or ")} is not set\n`);
     return 2;
   }
   const io: McpIo = { write: (l) => void process.stdout.write(`${l}\n`), forward: socketForwarder(path) };

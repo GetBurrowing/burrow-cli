@@ -41,6 +41,7 @@ import { CHANNEL_SERVER, TOOLS_SERVER } from "../src/commands/init.ts";
 import { emptyConfig, type SuiteConfig } from "../src/config.ts";
 import { killSessionArgv, liveTmuxDeps, newSessionArgv, sessionNameFor } from "../src/tmux.ts";
 import { cleanupCleanEnvs, createCleanEnv } from "./clean-env/fixture.ts";
+import { envValue } from "../src/env_names.ts";
 
 /**
  * EVERY VALUE HERE IS INVENTED. This repository is public, and a fixture is the
@@ -933,7 +934,7 @@ async function until<T>(fn: () => Promise<T>, ok: (v: T) => boolean, ms = 15_000
 }
 
 test("the real-tmux test below is not silently skipped", () => {
-  expect(HAVE_TMUX || process.env.SUITE_CLI_ALLOW_NO_TMUX === "1").toBe(true);
+  expect(HAVE_TMUX || envValue(process.env, "CLI_ALLOW_NO_TMUX") === "1").toBe(true);
 });
 
 describe.if(HAVE_TMUX)("against a real tmux", () => {

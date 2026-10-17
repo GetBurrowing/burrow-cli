@@ -84,6 +84,12 @@ describe("the ref reaches both halves", () => {
     expect(resolveRef({ SUITE_CLI_REF: "" })).toBe(DEFAULT_REF);
     expect(resolveRef({ SUITE_CLI_REF: "release/1.0" })).toBe("release/1.0");
   });
+
+  test("resolveRef: BURROW_CLI_REF is read first and wins; an empty one falls back", () => {
+    expect(resolveRef({ BURROW_CLI_REF: "next" })).toBe("next");
+    expect(resolveRef({ BURROW_CLI_REF: "next", SUITE_CLI_REF: "old" })).toBe("next");
+    expect(resolveRef({ BURROW_CLI_REF: "", SUITE_CLI_REF: "old" })).toBe("old");
+  });
 });
 
 describe("a ref that is not a ref is refused, not quoted-and-hoped", () => {

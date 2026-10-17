@@ -1,9 +1,12 @@
 import { describe, expect, test } from "bun:test";
-import { ForbiddenOverride, harnessChildEnv, spawnHarness } from "../src/harness_env.ts";
+import { ForbiddenOverride, harnessChildEnv, isSuiteSecretName, spawnHarness, STRIPPED_PREFIXES } from "../src/harness_env.ts";
 import { SecretInArgv } from "../src/secrets.ts";
 import { canary, scanEnv, scanText } from "./leak-scan.ts";
 
 const CANARY_NAMES = [
+  "BURROW_TOKEN",
+  "BURROW_RUNTIME_TOKEN",
+  "BURROW_URL",
   "SUITE_RUNTIME_TOKEN",
   "SUITE_URL",
   "HERMES_HOME",
@@ -66,6 +69,20 @@ describe("harnessChildEnv", () => {
     expect(() => harnessChildEnv({}, { SUITE_RUNTIME_TOKEN: "x" })).toThrow(ForbiddenOverride);
     expect(() => harnessChildEnv({}, { SUITE_MCP_KEY: "x" })).toThrow(ForbiddenOverride);
   });
+
+  test("nor a BURROW_* credential: the renamed prefix is refused the same way", () => {
+    expect(() => harnessChildEnv({}, { BURROW_TOKEN: "x" })).toThrow(ForbiddenOverride);
+    expect(() => harnessChildEnv({}, { BURROW_RUNTIME_TOKEN: "x" })).toThrow(ForbiddenOverride);
+    expect(() => harnessChildEnv({}, { BURROW_MCP_KEY: "x" })).toThrow(ForbiddenOverride);
+    expect(isSuiteSecretName("BURROW_TOKEN")).toBe(true);
+    expect(isSuiteSecretName("BURROW_URL")).toBe(false);
+  });
+
+  test("BURROW_ is a stripped prefix in its own right, not only absent from the allowlist", () => {
+    // The allowlist already excludes BURROW_*; this pins the second, stated
+    // layer so a later widening of the allowlist cannot reintroduce it.
+    expect([...STRIPPED_PREFIXES]).toEqual(["BURROW_", "SUITE_", "HERMES_", "OPENCLAW_"]);
+  });
 });
 
 describe("spawnHarness", () => {
@@ -77,6 +94,19 @@ describe("spawnHarness", () => {
     expect(scanText("child env", clean.stdout, value)).toEqual([]);
     expect(clean.stdout).toContain("TMUX_TMPDIR=/tmp/tmux-01a0d8f8");
 
+    const control = await spawnHarness(["env"], { env: harnessChildEnv(base, { HERMES_HOME: value }) });
+    expect(scanText("child env", control.stdout, value)).not.toEqual([]);
+  });
+
+  test("a real child spawned from a base carrying BURROW_TOKEN does not see it; the control does", async () => {
+    const value = canary("tok");
+    const base = { ...process.env, PATH: process.env.PATH ?? "/usr/bin:/bin", BURROW_TOKEN: value, BURROW_RUNTIME_TOKEN: value };
+    const clean = await spawnHarness(["env"], { env: harnessChildEnv(base) });
+    expect(clean.exitCode).toBe(0);
+    expect(clean.stdout).not.toContain("BURROW_");
+    expect(scanText("child env", clean.stdout, value)).toEqual([]);
+
+    // Positive control: the same scan does find the value when it is put there.
     const control = await spawnHarness(["env"], { env: harnessChildEnv(base, { HERMES_HOME: value }) });
     expect(scanText("child env", control.stdout, value)).not.toEqual([]);
   });

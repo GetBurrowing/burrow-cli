@@ -3,6 +3,7 @@ import { chmodSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { createStore } from "../src/secrets.ts";
+import { envValue } from "../src/env_names.ts";
 import {
   AGENT_NAME,
   TMUX_MISSING_WARNING,
@@ -413,7 +414,7 @@ afterAll(async () => {
  * a FAILURE here unless a reader deliberately opts out.
  */
 test("the real-tmux tests below are not silently skipped", () => {
-  expect(HAVE_TMUX || process.env.SUITE_CLI_ALLOW_NO_TMUX === "1").toBe(true);
+  expect(HAVE_TMUX || envValue(process.env, "CLI_ALLOW_NO_TMUX") === "1").toBe(true);
 });
 
 describe.if(HAVE_TMUX)("against a real tmux", () => {

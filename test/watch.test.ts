@@ -250,6 +250,7 @@ describe("self-installation", () => {
    */
   test("the daemon itself does not reinstall the daemon", () => {
     expect(shouldSelfInstall(on, { SUITE_WATCH_SUPERVISED: "1" })).toBe(false);
+    expect(shouldSelfInstall(on, { BURROW_WATCH_SUPERVISED: "1" })).toBe(false);
   });
 
   test("--once leaves scheduling to the operator's own timer", () => {

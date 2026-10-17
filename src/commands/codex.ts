@@ -49,7 +49,7 @@ import { VERSION } from "../version.ts";
 import { AppServerClient, processTransport } from "../codex/app_server.ts";
 import { CodexBridge, type ApprovalPolicy } from "../codex/bridge.ts";
 import { PhoenixChannel, socketUrl, type SocketLike } from "../codex/phoenix.ts";
-import { BRIDGE_SOCKET_ENV, listenBridgeSocket, runReplyMcp } from "../codex/reply_mcp.ts";
+import { BRIDGE_SOCKET_ENVS, listenBridgeSocket, runReplyMcp } from "../codex/reply_mcp.ts";
 import type { InitializeResponse, SandboxMode } from "../codex/protocol.ts";
 
 export const AGENT = "codex";
@@ -170,7 +170,7 @@ export function appServerArgv(input: {
     "-c",
     `${c}.args=[${[...cmdArgs, "codex", "--reply-mcp"].map(tomlString).join(",")}]`,
     "-c",
-    `${c}.env={${BRIDGE_SOCKET_ENV}=${tomlString(input.socketPath)}}`,
+    `${c}.env={${BRIDGE_SOCKET_ENVS.map((n) => `${n}=${tomlString(input.socketPath)}`).join(",")}}`,
     "-c",
     `${c}.default_tools_approval_mode="approve"`,
   ];

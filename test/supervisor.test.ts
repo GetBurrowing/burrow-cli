@@ -53,6 +53,16 @@ describe("units never carry credentials", () => {
     const unit = systemdUnit({ ...base, platform: "linux" });
     expect(unit).toContain("EnvironmentFile=-/home/q/.config/suite/watch.env");
     expect(unit).not.toContain("SUITE_TELEMETRY_AUTH=");
+    expect(unit).not.toContain("BURROW_TELEMETRY_AUTH=");
+  });
+
+  test("units mark the daemon under BOTH names, so old and new binaries see it", () => {
+    const unit = systemdUnit({ ...base, platform: "linux" });
+    expect(unit).toContain("Environment=BURROW_WATCH_SUPERVISED=1\n");
+    expect(unit).toContain("Environment=SUITE_WATCH_SUPERVISED=1\n");
+    const plist = launchdPlist({ ...base, platform: "darwin" });
+    expect(plist).toContain("<key>BURROW_WATCH_SUPERVISED</key><string>1</string>");
+    expect(plist).toContain("<key>SUITE_WATCH_SUPERVISED</key><string>1</string>");
   });
 
   test("launchd plist embeds no credential either", () => {
@@ -228,6 +238,15 @@ describe("telemetry credential", () => {
       return "# comment\nSUITE_TELEMETRY_AUTH=Basic zzz\n";
     });
     expect(auth).toBe("Basic zzz");
+  });
+
+  test("BURROW_TELEMETRY_AUTH is read first, in the environment and in the env file", () => {
+    expect(
+      readTelemetryAuth({ BURROW_TELEMETRY_AUTH: "Basic new", SUITE_TELEMETRY_AUTH: "Basic old", HOME: "/h" }, () => null),
+    ).toBe("Basic new");
+    expect(
+      readTelemetryAuth({ HOME: "/h" }, () => "SUITE_TELEMETRY_AUTH=Basic old\nBURROW_TELEMETRY_AUTH=Basic new\n"),
+    ).toBe("Basic new");
   });
 
   test("absent everywhere is null, not a throw — telemetry is optional", () => {

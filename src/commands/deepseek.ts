@@ -35,6 +35,7 @@ import { agentConfig, readAgentConnection, readAgentSecrets } from "../agent_con
 import { createStore, TOKEN_KEY, assertNoSecretsInArgv, ttyPrompter, type CredentialStore, type Prompter } from "../secrets.ts";
 import { ensureConnection, ensureToken, hasConnection } from "../connection.ts";
 import { dataDir } from "../paths.ts";
+import { envValue } from "../env_names.ts";
 import {
   attachArgv,
   composeNewSession,
@@ -178,7 +179,7 @@ export function runtimeWsUrl(suiteUrl: string): string {
 
 /** The MCP endpoint, which is a separate host in our deployment. */
 export function mcpUrl(config: SuiteConfig, env: NodeJS.ProcessEnv = process.env): string {
-  return env.SUITE_MCP_URL ?? `${config.suiteUrl.replace(/\/+$/, "")}/mcp`;
+  return envValue(env, "MCP_URL") ?? `${config.suiteUrl.replace(/\/+$/, "")}/mcp`;
 }
 
 /**
@@ -314,7 +315,7 @@ export async function installHarness(dir: string, deps: DeepseekDeps): Promise<n
  * needs.
  */
 export function selfArgv(env: NodeJS.ProcessEnv = process.env): string[] {
-  const lib = env.SUITE_LIB_DIR;
+  const lib = envValue(env, "LIB_DIR");
   if (lib !== undefined && lib !== "") return [process.execPath, join(lib, "src", "cli.ts")];
   return [process.execPath, join(import.meta.dir, "..", "cli.ts")];
 }
@@ -336,7 +337,7 @@ export function bunPath(deps: Pick<DeepseekDeps, "which">): string {
 /**
  * Candidate locations for this CLI's own files, in order.
  *
- * The shell wrapper exports `SUITE_LIB_DIR` at install time, so that wins. But
+ * The shell wrapper exports `SUITE_LIB_DIR` (or `BURROW_LIB_DIR`) at install time, so that wins. But
  * it is an environment variable, which means it can be stale or inherited from
  * a different install while the code actually running came from a checkout —
  * exactly what happens when a developer runs `bun src/cli.ts`. So the checkout
@@ -345,9 +346,8 @@ export function bunPath(deps: Pick<DeepseekDeps, "which">): string {
  */
 export function libDirCandidates(env: NodeJS.ProcessEnv = process.env): string[] {
   const checkout = join(import.meta.dir, "..", "..");
-  return env.SUITE_LIB_DIR === undefined || env.SUITE_LIB_DIR === checkout
-    ? [checkout]
-    : [env.SUITE_LIB_DIR, checkout];
+  const lib = envValue(env, "LIB_DIR");
+  return lib === undefined || lib === checkout ? [checkout] : [lib, checkout];
 }
 
 /**

@@ -21,7 +21,9 @@ import {
   agentNameFromRuntimeId,
   sessionNameForAgent,
   envNameForHeader,
+  libDirCandidates,
   mcpUrl,
+  selfArgv,
   parseDeepseekOptions,
   renderPatch,
   publicEnv,
@@ -223,5 +225,19 @@ describe("mcpUrl", () => {
   test("otherwise it is derived from the Suite URL", () => {
     const config = { ...emptyConfig(), suiteUrl: "https://suite.example.invalid/" };
     expect(mcpUrl(config, {} as NodeJS.ProcessEnv)).toBe("https://suite.example.invalid/mcp");
+  });
+
+  test("BURROW_MCP_URL is read first and wins over SUITE_MCP_URL", () => {
+    const config = { ...emptyConfig(), suiteUrl: "https://suite.example.invalid" };
+    const env = { BURROW_MCP_URL: "https://new.example.invalid/mcp", SUITE_MCP_URL: "https://old.example.invalid/mcp" };
+    expect(mcpUrl(config, env as NodeJS.ProcessEnv)).toBe("https://new.example.invalid/mcp");
+  });
+});
+
+describe("the lib dir", () => {
+  test("BURROW_LIB_DIR is read first, SUITE_LIB_DIR is the fallback", () => {
+    expect(libDirCandidates({ BURROW_LIB_DIR: "/opt/new", SUITE_LIB_DIR: "/opt/old" } as NodeJS.ProcessEnv)[0]).toBe("/opt/new");
+    expect(libDirCandidates({ SUITE_LIB_DIR: "/opt/old" } as NodeJS.ProcessEnv)[0]).toBe("/opt/old");
+    expect(selfArgv({ BURROW_LIB_DIR: "/opt/new" } as NodeJS.ProcessEnv)[1]).toBe("/opt/new/src/cli.ts");
   });
 });

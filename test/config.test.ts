@@ -65,17 +65,63 @@ describe("config paths", () => {
     expect(DEFAULT_SCOPE).toBe("user");
   });
 
+  // /home/nobody and /xdg do not exist: a cold host, which resolves to burrow.
   test("XDG_CONFIG_HOME wins, HOME/.config is the fallback", () => {
-    expect(configDir({ HOME: "/home/nobody", XDG_CONFIG_HOME: "/xdg" })).toBe("/xdg/suite");
-    expect(configDir({ HOME: "/home/nobody" })).toBe("/home/nobody/.config/suite");
-    expect(configPath({ HOME: "/home/nobody" })).toBe("/home/nobody/.config/suite/config.json");
+    expect(configDir({ HOME: "/home/nobody", XDG_CONFIG_HOME: "/xdg" })).toBe("/xdg/burrow");
+    expect(configDir({ HOME: "/home/nobody" })).toBe("/home/nobody/.config/burrow");
+    expect(configPath({ HOME: "/home/nobody" })).toBe("/home/nobody/.config/burrow/config.json");
+  });
+
+  test("the data dir does NOT move: lib and plugin paths under it are recorded elsewhere", () => {
     expect(dataDir({ HOME: "/home/nobody" })).toBe("/home/nobody/.local/share/suite");
   });
 
   test("a relative XDG_CONFIG_HOME is ignored rather than trusted", () => {
     expect(configDir({ HOME: "/home/nobody", XDG_CONFIG_HOME: "relative/path" })).toBe(
-      "/home/nobody/.config/suite",
+      "/home/nobody/.config/burrow",
     );
+  });
+});
+
+describe("configDir resolves burrow-first by existence, never by migrating", () => {
+  const homes: string[] = [];
+  afterEach(async () => {
+    for (const h of homes.splice(0)) await rm(h, { recursive: true, force: true });
+  });
+  async function home(...dirs: string[]): Promise<string> {
+    const h = await mkdtemp(join(tmpdir(), "suite-cfgdir-"));
+    homes.push(h);
+    for (const d of dirs) await mkdir(join(h, ".config", d), { recursive: true });
+    return h;
+  }
+
+  test("an empty HOME (cold host) resolves to burrow, and nothing is created", async () => {
+    const h = await home();
+    expect(configDir({ HOME: h })).toBe(join(h, ".config", "burrow"));
+    expect(await readdir(h)).toEqual([]);
+  });
+
+  test("an old host (only ~/.config/suite) keeps resolving to suite", async () => {
+    const h = await home("suite");
+    await writeFile(join(h, ".config", "suite", "config.json"), "{}\n");
+    expect(configDir({ HOME: h })).toBe(join(h, ".config", "suite"));
+    expect(configPath({ HOME: h })).toBe(join(h, ".config", "suite", "config.json"));
+    // Not moved, not copied: burrow was never created.
+    expect(await readdir(join(h, ".config"))).toEqual(["suite"]);
+  });
+
+  test("when both exist, burrow wins and the suite dir is left exactly as it was", async () => {
+    const h = await home("suite", "burrow");
+    await writeFile(join(h, ".config", "suite", "config.json"), "{}\n");
+    expect(configDir({ HOME: h })).toBe(join(h, ".config", "burrow"));
+    expect(await readdir(join(h, ".config", "suite"))).toEqual(["config.json"]);
+  });
+
+  test("the same rule applies under XDG_CONFIG_HOME", async () => {
+    const h = await home();
+    const xdg = join(h, "xdg");
+    await mkdir(join(xdg, "suite"), { recursive: true });
+    expect(configDir({ HOME: h, XDG_CONFIG_HOME: xdg })).toBe(join(xdg, "suite"));
   });
 });
 

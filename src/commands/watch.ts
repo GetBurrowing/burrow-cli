@@ -30,7 +30,7 @@ import {
   resolveTmux,
 } from "../halt.ts";
 import { SESSION_PREFIX, type TmuxDeps, detectState, liveTmuxDeps } from "../tmux.ts";
-import { RSS_CEILING_BYTES, SUPERVISED_ENV } from "../supervisor.ts";
+import { RSS_CEILING_BYTES, isSupervised } from "../supervisor.ts";
 import { answerOnce, liveDialogIo, type DialogIo } from "../claude_dialogs.ts";
 import { readAgentConnection } from "../agent_connections.ts";
 
@@ -648,7 +648,7 @@ export function shouldSelfInstall(
   env: Record<string, string | undefined>,
 ): boolean {
   if (!args.install) return false;
-  if (env[SUPERVISED_ENV] === "1") return false;
+  if (isSupervised(env)) return false;
   if (args.once) return false;
   if (!args.apply) return false;
   return true;

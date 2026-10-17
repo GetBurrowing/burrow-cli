@@ -25,14 +25,19 @@
  * come from two orgs. The resolved `owner/repo` is printed on every update.
  */
 import { VERSION } from "../version.ts";
-import { OWNER_ENV, apiCommitUrl, ownerFrom, rawUrl, repoSlug, type Env } from "../repo_source.ts";
+import { envValue } from "../env_names.ts";
+import { OWNER_ENV, OWNER_ENV_BURROW, apiCommitUrl, ownerFrom, rawUrl, repoSlug, type Env } from "../repo_source.ts";
 
 /** This CLI's repo name. Its owner comes from repo_source.ts. */
 export const REPO_NAME = "suite-cli";
 
-/** The env that pins a single, already-resolved owner. */
+/**
+ * The env that pins a single, already-resolved owner. Keyed by the BURROW name
+ * so re-reading it through env_names.ts is not mistaken for an operator still
+ * setting the legacy variable.
+ */
 function ownerEnv(owner: string): Env {
-  return { [OWNER_ENV]: owner };
+  return { [OWNER_ENV_BURROW]: owner };
 }
 
 /** What `install.sh` itself defaults to when SUITE_CLI_REF is unset. */
@@ -139,9 +144,9 @@ export function updateArgv(ref: string, fetcher: Fetcher = "curl", env: Env = pr
   return ["sh", "-c", download];
 }
 
-/** The ref to install: explicit override, else the published default. */
+/** The ref to install: explicit override (BURROW_CLI_REF, else SUITE_CLI_REF), else the published default. */
 export function resolveRef(env: Record<string, string | undefined>): string {
-  const ref = env.SUITE_CLI_REF;
+  const ref = envValue(env, "CLI_REF");
   return ref === undefined || ref === "" ? DEFAULT_REF : ref;
 }
 
