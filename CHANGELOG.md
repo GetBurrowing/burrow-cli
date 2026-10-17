@@ -10,6 +10,41 @@ that matters in the field: is this one newer than what I had?
 Minor for a new capability or a changed default; patch for a fix that changes no
 behaviour anyone was relying on.
 
+## 0.7.3
+
+- **The GitHub org is no longer hard-coded.** Every repo URL the CLI builds
+  (its installer and tarball in `install.sh` and `suite update`, the commits
+  API lookup, the Claude Code plugin clone, the OpenClaw and Hermes channel
+  clones, the SSH recovery hint, and the units' `Documentation=` lines) now
+  comes from one place, `src/repo_source.ts`, plus one default line in
+  `install.sh`. `SUITE_GITHUB_OWNER` overrides the org. It is read from the
+  process environment only, never from a config file, and must be a GitHub
+  owner name (1-39 letters, digits or hyphens, not starting with a hyphen).
+  Anything else is refused by name before a URL is built. Unset or empty means
+  the default.
+- **The default stays `Startup-Suite`.** URLs under it keep working after the
+  org rename through GitHub's redirects. Flipping the default is a one-line
+  change to `DEFAULT_GITHUB_OWNER` plus `install.sh`'s default, in a later
+  patch release at cutover, once the new org exists.
+- **`suite update` passes the owner, as it already passes the ref.** It exports
+  the same `SUITE_GITHUB_OWNER` it built the installer URL from into the
+  installer's environment, so the installer and the tarball cannot come from
+  two orgs, and it prints the resolved `owner/repo` on every update.
+- **Channel pins bumped.** `OPENCLAW_CHANNEL_REF` is now
+  `b220c8b1240dc337f48fe2f92967816f84344582` (openclaw-suite-channel v0.7.0,
+  PR #31: underscore tool names first, dotted fallback), and
+  `HERMES_CHANNEL_REF` is now `71041456d605e2d3341a214e5c09e924148f3558`
+  (hermes-suite-channel v0.2.0, PR #6: overridable install repo). Both are the
+  tip of their repo's main.
+- **The SSH recovery hint names the checkout's own repo.** Through 0.7.2 an
+  auth failure fetching the OpenClaw or Hermes channel checkout suggested
+  pointing it at the Claude Code plugin's remote.
+- **Rollback:** `SUITE_CLI_REF=0688c5d4b1748b90da208aaef7d99f6dfa3842ab suite update`
+  reinstalls 0.7.2. It does not touch credentials or connections. A tag is not
+  an install ref (`install.sh` reads every non-SHA ref as a branch), so the
+  release identity of 0.7.3 is its merge commit on main plus
+  `suite --version`.
+
 ## 0.7.2
 
 - **dsh `usage_event` names the task and stage it belongs to.** The

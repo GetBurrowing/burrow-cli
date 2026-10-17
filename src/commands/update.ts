@@ -16,10 +16,24 @@
  * tag: a wrong result that looks exactly like a right one. Both halves are set
  * from the same value here, deliberately, and {@link updateArgv} is exported so
  * that pairing can be asserted directly.
+ *
+ * THE OWNER IS PASSED, NOT ASSUMED, for the same reason. `install.sh` resolves
+ * the org it downloads the tarball from out of `SUITE_GITHUB_OWNER`, which
+ * defaults to the published org; it does not infer it from the installer URL.
+ * So the owner that builds the installer URL here is the SAME value exported
+ * into the installer's environment, and the installer and the tarball cannot
+ * come from two orgs. The resolved `owner/repo` is printed on every update.
  */
 import { VERSION } from "../version.ts";
+import { OWNER_ENV, apiCommitUrl, ownerFrom, rawUrl, repoSlug, type Env } from "../repo_source.ts";
 
-export const REPO = "Startup-Suite/suite-cli";
+/** This CLI's repo name. Its owner comes from repo_source.ts. */
+export const REPO_NAME = "suite-cli";
+
+/** The env that pins a single, already-resolved owner. */
+function ownerEnv(owner: string): Env {
+  return { [OWNER_ENV]: owner };
+}
 
 /** What `install.sh` itself defaults to when SUITE_CLI_REF is unset. */
 export const DEFAULT_REF = "main";
@@ -51,16 +65,16 @@ export function refIsSafe(ref: string): boolean {
   return ref.length > 0 && ref.length <= 200 && SAFE_REF.test(ref) && !ref.includes("..");
 }
 
-/** Where the installer for `ref` lives. */
-export function installerUrl(ref: string): string {
-  return `https://raw.githubusercontent.com/${REPO}/${ref}/install.sh`;
+/** Where the installer for `ref` lives, under the owner `env` names. */
+export function installerUrl(ref: string, env: Env = process.env): string {
+  return rawUrl(REPO_NAME, ref, "install.sh", env);
 }
 
 /**
  * Resolve a ref to a commit SHA, avoiding raw.githubusercontent.com's
  * branch-name cache. Returns the original ref if resolution fails.
  */
-export async function resolveRefToSha(ref: string): Promise<string> {
+export async function resolveRefToSha(ref: string, env: Env = process.env): Promise<string> {
   // Only resolve branch names; tags and SHAs are already immutable.
   if (/^[0-9a-f]{40}$/.test(ref)) return ref;
   try {
@@ -71,7 +85,7 @@ export async function resolveRefToSha(ref: string): Promise<string> {
     })());
     const headers: Record<string, string> = { Accept: "application/vnd.github.v3+json" };
     if (token) headers.Authorization = `token ${token}`;
-    const res = await fetch(`https://api.github.com/repos/${REPO}/commits/${ref}`, { headers });
+    const res = await fetch(apiCommitUrl(REPO_NAME, ref, env), { headers });
     if (!res.ok) return ref;
     // `res.json()` is `unknown` under this tsconfig, so the shape is narrowed
     // rather than asserted: a response without a string `sha` falls back to
@@ -91,13 +105,22 @@ export async function resolveRefToSha(ref: string): Promise<string> {
  * build its URL, from the same argument — see the module note. Pure and
  * exported so a test can pin both halves without running an install.
  *
+ * `SUITE_GITHUB_OWNER` is exported the same way: resolved ONCE from `env`,
+ * then used for the installer URL and handed to the installer, which builds
+ * its tarball URL from it. An invalid owner throws here, before any argv
+ * exists.
+ *
  * When the repo is private the raw URL 404s without auth, so we resolve a
  * GitHub token from `gh` and pass it as an Authorization header. The token
  * is resolved lazily at exec time, not baked into the argv, so no secret
  * appears in the printed command line.
  */
-export function updateArgv(ref: string, fetcher: Fetcher = "curl"): string[] {
-  const url = installerUrl(ref);
+export function updateArgv(ref: string, fetcher: Fetcher = "curl", env: Env = process.env): string[] {
+  // ownerFrom has validated this as a bare GitHub slug, so it is safe inside
+  // single quotes in the sh -c line below.
+  const owner = ownerFrom(env);
+  const url = installerUrl(ref, ownerEnv(owner));
+
   // GH_TOKEN is exported so install.sh can use it for its own tarball fetch.
   // The ${TOKEN:+...} expansion emits the header only when a token was
   // resolved, keeping the public-repo path identical to today.
@@ -108,10 +131,11 @@ export function updateArgv(ref: string, fetcher: Fetcher = "curl"): string[] {
   // ("Failure writing output to destination"), which -f promotes to a fatal
   // error even though the download itself succeeded.
   const tmp = '/tmp/suite-install.sh';
+  const installer = `${OWNER_ENV}='${owner}' SUITE_CLI_REF='${ref}' sh ${tmp}`;
   const download =
     fetcher === "curl"
-      ? `GH_TOKEN=$(gh auth token 2>/dev/null || true); export GH_TOKEN; curl -fsSL \${GH_TOKEN:+-H "Authorization: token $GH_TOKEN"} -o ${tmp} '${url}' && SUITE_CLI_REF='${ref}' sh ${tmp}`
-      : `GH_TOKEN=$(gh auth token 2>/dev/null || true); export GH_TOKEN; wget -q \${GH_TOKEN:+--header="Authorization: token $GH_TOKEN"} -O ${tmp} '${url}' && SUITE_CLI_REF='${ref}' sh ${tmp}`;
+      ? `GH_TOKEN=$(gh auth token 2>/dev/null || true); export GH_TOKEN; curl -fsSL \${GH_TOKEN:+-H "Authorization: token $GH_TOKEN"} -o ${tmp} '${url}' && ${installer}`
+      : `GH_TOKEN=$(gh auth token 2>/dev/null || true); export GH_TOKEN; wget -q \${GH_TOKEN:+--header="Authorization: token $GH_TOKEN"} -O ${tmp} '${url}' && ${installer}`;
   return ["sh", "-c", download];
 }
 
@@ -139,9 +163,13 @@ export interface UpdateDeps {
  * BEFORE it does it. A non-default ref is called out too — updating to a branch
  * and not being told is how you end up debugging the wrong build.
  */
-export function announceLines(ref: string): string[] {
+export function announceLines(ref: string, env: Env = process.env): string[] {
   const suffix = ref === DEFAULT_REF ? "" : ` (ref ${ref})`;
-  return [`updating suite ${VERSION}${suffix} — running the installer from ${installerUrl(ref)}`, ""];
+  return [
+    `updating suite ${VERSION}${suffix} — running the installer from ${installerUrl(ref, env)}`,
+    `repository ${repoSlug(REPO_NAME, env)}`,
+    "",
+  ];
 }
 
 export async function runUpdate(deps: UpdateDeps): Promise<number> {
@@ -151,6 +179,18 @@ export async function runUpdate(deps: UpdateDeps): Promise<number> {
     deps.err(`suite: refusing to update from SUITE_CLI_REF="${ref}" — not a plain branch, tag or commit.`);
     return UPDATE_REFUSED_EXIT;
   }
+
+  // The owner is resolved ONCE and every later step is handed that value, so
+  // the API lookup, the installer URL and the installer's own tarball fetch
+  // cannot disagree about which org they are talking to.
+  let owner: string;
+  try {
+    owner = ownerFrom(deps.env);
+  } catch (e) {
+    deps.err(`suite: refusing to update: ${(e as Error).message}`);
+    return UPDATE_REFUSED_EXIT;
+  }
+  const env = ownerEnv(owner);
 
   // Preconditions BEFORE the announcement: telling somebody what you are about
   // to do and then not doing it is worse than refusing up front.
@@ -167,18 +207,18 @@ export async function runUpdate(deps: UpdateDeps): Promise<number> {
 
   // Resolve branch names to commit SHAs to avoid raw.githubusercontent.com's
   // branch-name cache serving a stale install.sh.
-  const sha = await resolveRefToSha(ref);
+  const sha = await resolveRefToSha(ref, env);
   if (sha !== ref) {
     deps.out(`resolved ${ref} to ${sha.slice(0, 7)}`);
   }
 
-  for (const line of announceLines(ref)) deps.out(line);
+  for (const line of announceLines(ref, env)) deps.out(line);
 
   // The installer owns the outcome from here, including its own "replace
   // 0.1.0 with 0.2.0? [y/N]" prompt. It is NOT auto-answered: an update that
   // silently overwrites is the thing the prompt exists to prevent, and it
   // inherits the terminal, so the user answers it directly.
-  const code = await deps.exec(updateArgv(sha, fetcher));
+  const code = await deps.exec(updateArgv(sha, fetcher, env));
   if (code !== 0) for (const line of failureLines(code)) deps.err(line);
   return code;
 }

@@ -30,6 +30,7 @@ import {
   registerServers,
   userScopeChannelRuntime,
   userScopeLines,
+  pluginRepo,
 } from "../src/commands/init.ts";
 import { CLAUDE_MD } from "../src/claude_md.ts";
 import { ensureClaudeWiring, type WiringResult } from "../src/claude_wiring.ts";
@@ -561,7 +562,7 @@ describe("init on a machine where nothing is installed", () => {
 describe("a failed pull says what actually went wrong", () => {
   const AUTH = [
     "remote: Invalid username or token. Password authentication is not supported for Git operations.",
-    "fatal: Authentication failed for 'https://github.com/Startup-Suite/claude-code-suite-channel.git/'",
+    `fatal: Authentication failed for '${pluginRepo({})}/'`,
   ].join("\n");
 
   const DIVERGED =

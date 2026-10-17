@@ -235,6 +235,68 @@ describe("install.sh", () => {
     expect(existsSync(r.dest)).toBe(true);
   });
 
+  /*
+   * SUITE_GITHUB_OWNER, with SUITE_CLI_TARBALL_URL UNSET, so the installer
+   * builds its own codeload URL. A stub `curl` first on a gh-less PATH records
+   * the URL it was asked for and fails, so nothing reaches the network and
+   * the installer stops at the fetch, naming the URL.
+   */
+  function runWithOwner(owner: string | undefined, ref?: string) {
+    const home = makeHome();
+    const stubDir = join(home, "stub-bin");
+    mkdirSync(stubDir, { recursive: true });
+    const log = join(home, "curl.log");
+    writeFileSync(join(stubDir, "curl"), `#!/bin/sh\nfor a in "$@"; do printf '%s\\n' "$a"; done >>"${log}"\nexit 22\n`);
+    chmodSync(join(stubDir, "curl"), 0o755);
+    const env: Record<string, string> = {
+      PATH: `${stubDir}:${ghlessPath()}`,
+      HOME: home,
+      XDG_BIN_HOME: join(home, ".local", "bin"),
+      XDG_DATA_HOME: join(home, ".local", "share"),
+    };
+    if (owner !== undefined) env.SUITE_GITHUB_OWNER = owner;
+    if (ref !== undefined) env.SUITE_CLI_REF = ref;
+    const r = spawnSync("sh", [INSTALL_SH], { input: "", encoding: "utf8", env });
+    return {
+      status: r.status ?? -1,
+      stderr: r.stderr ?? "",
+      fetched: existsSync(log) ? readFileSync(log, "utf8") : null,
+      dest: join(home, ".local", "bin", "suite"),
+    };
+  }
+
+  test("SUITE_GITHUB_OWNER names the org in the tarball URL the installer fetches", () => {
+    const r = runWithOwner("GetBurrowing");
+    const url = "https://codeload.github.com/GetBurrowing/suite-cli/tar.gz/refs/heads/main";
+    expect(r.fetched).toContain(url);
+    expect(r.stderr).toContain(`could not download suite-cli from ${url}`);
+    expect(r.status).not.toBe(0);
+    expect(existsSync(r.dest)).toBe(false);
+  });
+
+  test("a SHA ref under the override uses codeload's SHA path", () => {
+    const sha = "0123456789abcdef0123456789abcdef01234567";
+    expect(runWithOwner("GetBurrowing", sha).fetched).toContain(
+      `https://codeload.github.com/GetBurrowing/suite-cli/tar.gz/${sha}`,
+    );
+  });
+
+  test("CONTROL: unset and empty both mean the default org", () => {
+    for (const owner of [undefined, ""]) {
+      expect(runWithOwner(owner).fetched).toContain("https://codeload.github.com/Startup-Suite/suite-cli/tar.gz/refs/heads/main");
+    }
+  });
+
+  for (const bad of ["../x", "a/b", "-x", "a".repeat(40), "a b", "x;id"]) {
+    test(`an invalid owner ${JSON.stringify(bad)} exits non-zero BEFORE any fetch`, () => {
+      const r = runWithOwner(bad);
+      expect(r.status).not.toBe(0);
+      expect(r.fetched).toBeNull();
+      expect(r.stderr).toContain("SUITE_GITHUB_OWNER");
+      expect(existsSync(r.dest)).toBe(false);
+    });
+  }
+
   test("refuses Windows by name", () => {
     // The refusal is driven through uname: a stub uname first on PATH reports
     // a Windows kernel, which is the only signal install.sh has.
