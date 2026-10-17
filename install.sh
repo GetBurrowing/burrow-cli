@@ -1,19 +1,37 @@
 #!/bin/sh
-# suite-cli installer. POSIX sh only: this runs via
+# suite-cli installer (the burrow CLI). POSIX sh only: this runs via
 #   curl -fsSL https://raw.githubusercontent.com/<owner>/suite-cli/main/install.sh | sh
-# where <owner> is the GitHub org (see SUITE_GITHUB_OWNER below; the README
+# where <owner> is the GitHub org (see BURROW_GITHUB_OWNER below; the README
 # has the current command).
 # before anything is installed on the machine, including bun. No bashisms,
 # no arrays, no [[ ]], and no sudo anywhere.
 set -eu
 
+# Every input is read under its BURROW_* name first, then its legacy SUITE_*
+# name, then the default: ${BURROW_X:-${SUITE_X:-default}}. So BURROW wins when
+# both are set, and an EMPTY BURROW_X falls back, the rule src/env_names.ts
+# applies in the CLI. SUITE_CLI_REF stays a supported input: core's agent-host
+# image build passes it.
+#
 # The GitHub org the tarball comes from. The ONE place this script names it;
 # src/repo_source.ts is the same rule for the CLI. Unset or empty means the
-# default. `suite update` exports the value it built the installer URL from,
-# so the installer and the tarball cannot come from two orgs. Validated below,
-# before anything is fetched.
-SUITE_GITHUB_OWNER="${SUITE_GITHUB_OWNER:-Startup-Suite}"
-REF="${SUITE_CLI_REF:-main}"
+# default. `burrow update` exports the value it built the installer URL from
+# (under both names), so the installer and the tarball cannot come from two
+# orgs. Validated below, before anything is fetched, and the error names the
+# variable that actually supplied the value.
+if [ -n "${BURROW_GITHUB_OWNER:-}" ]; then
+	OWNER_VAR="BURROW_GITHUB_OWNER"
+	OWNER="$BURROW_GITHUB_OWNER"
+elif [ -n "${SUITE_GITHUB_OWNER:-}" ]; then
+	OWNER_VAR="SUITE_GITHUB_OWNER"
+	OWNER="$SUITE_GITHUB_OWNER"
+else
+	OWNER_VAR="BURROW_GITHUB_OWNER"
+	OWNER="Startup-Suite"
+fi
+REF="${BURROW_CLI_REF:-${SUITE_CLI_REF:-main}}"
+# An explicit archive URL (tests, offline installs); empty means "build it".
+TARBALL_OVERRIDE="${BURROW_CLI_TARBALL_URL:-${SUITE_CLI_TARBALL_URL:-}}"
 
 TMPDIR_SUITE=""
 
@@ -50,24 +68,24 @@ trap cleanup EXIT INT HUP TERM
 # letters are spelled out rather than written as ranges or [:alnum:], both of
 # which can admit non-ASCII characters under some locales.
 _owner_chars='abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
-case "$SUITE_GITHUB_OWNER" in
+case "$OWNER" in
 -* | *[!"$_owner_chars"-]*)
-	die "SUITE_GITHUB_OWNER=\"$SUITE_GITHUB_OWNER\" is not a GitHub owner name (letters, digits and hyphens, not starting with a hyphen)"
+	die "$OWNER_VAR=\"$OWNER\" is not a GitHub owner name (letters, digits and hyphens, not starting with a hyphen)"
 	;;
 esac
-[ "${#SUITE_GITHUB_OWNER}" -le 39 ] ||
-	die "SUITE_GITHUB_OWNER=\"$SUITE_GITHUB_OWNER\" is longer than a GitHub owner name can be (39 characters)"
-REPO="${SUITE_GITHUB_OWNER}/suite-cli"
+[ "${#OWNER}" -le 39 ] ||
+	die "$OWNER_VAR=\"$OWNER\" is longer than a GitHub owner name can be (39 characters)"
+REPO="${OWNER}/suite-cli"
 
 # codeload.github.com serves tarballs by commit SHA at /tar.gz/<sha>, but
 # branch names need /tar.gz/refs/heads/<branch>. Detect SHAs (40 hex chars)
 # and use the appropriate path.
 case "$REF" in
 [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f])
-	TARBALL_URL="${SUITE_CLI_TARBALL_URL:-https://codeload.github.com/${REPO}/tar.gz/${REF}}"
+	TARBALL_URL="${TARBALL_OVERRIDE:-https://codeload.github.com/${REPO}/tar.gz/${REF}}"
 	;;
 *)
-	TARBALL_URL="${SUITE_CLI_TARBALL_URL:-https://codeload.github.com/${REPO}/tar.gz/refs/heads/${REF}}"
+	TARBALL_URL="${TARBALL_OVERRIDE:-https://codeload.github.com/${REPO}/tar.gz/refs/heads/${REF}}"
 	;;
 esac
 
@@ -191,7 +209,11 @@ ask() {
 platform="$(detect_platform)"
 bin_dir="$(resolve_bin_dir)"
 lib_dir="$(resolve_lib_dir)"
-dest="$bin_dir/suite"
+# Two launchers, both RENDERED from one template (never a symlink): `burrow`,
+# and `suite`, the old name kept as an alias. A `suite` left by an earlier
+# install is overwritten by the alias, never left behind as the old launcher.
+dest="$bin_dir/burrow"
+alias_dest="$bin_dir/suite"
 
 TMPDIR_SUITE="$(mktemp -d "${TMPDIR:-/tmp}/suite-install.XXXXXX")" ||
 	die "could not create a temporary directory"
@@ -215,8 +237,8 @@ for candidate in "$extract_dir"/*; do
 	fi
 done
 [ -n "$src_root" ] || die "the downloaded archive does not look like suite-cli"
-[ -f "$src_root/bin/suite.template" ] ||
-	die "the downloaded archive is missing bin/suite.template"
+[ -f "$src_root/bin/burrow.template" ] ||
+	die "the downloaded archive is missing bin/burrow.template"
 
 version="$(
 	sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
@@ -225,20 +247,32 @@ version="$(
 [ -n "$version" ] || die "could not read the version from the downloaded package.json"
 
 # --- an existing install is named and announced, never clobbered silently ---
+# `burrow` first, then `suite`: a host installed before the rename has only
+# `suite`, and is announced under that name. stderr is discarded because the
+# `suite` alias prints its notice there; stdout is the version alone.
+existing_name=""
+existing_path=""
 if [ -e "$dest" ]; then
-	existing="$("$dest" --version 2>/dev/null || echo "unknown version")"
+	existing_name="burrow"
+	existing_path="$dest"
+elif [ -e "$alias_dest" ]; then
+	existing_name="suite"
+	existing_path="$alias_dest"
+fi
+if [ -n "$existing_path" ]; then
+	existing="$("$existing_path" --version 2>/dev/null || echo "unknown version")"
 	if [ "$existing" = "$version" ]; then
-		note "suite $version is already installed at $(pretty_path "$dest")"
+		note "$existing_name $version is already installed at $(pretty_path "$existing_path")"
 		note "reinstalling the same version."
 	else
-		note "suite $existing is already installed at $(pretty_path "$dest")"
+		note "$existing_name $existing is already installed at $(pretty_path "$existing_path")"
 		note "replace it with $version? [y/N]"
 		reply="$(ask)"
 		case "$reply" in
 		y | Y | yes | YES | Yes) : ;;
 		*)
 			printf '\n'
-			note "keeping suite $existing. nothing changed."
+			note "keeping $existing_name $existing. nothing changed."
 			exit 0
 			;;
 		esac
@@ -277,11 +311,18 @@ fi
 cp -R "$src_root/assets" "$staged_lib/assets" ||
 	die "could not stage assets/ — suite deepseek needs the bundled plugin"
 
-staged_bin="$TMPDIR_SUITE/suite"
-sed -e "s|@SUITE_LIB_DIR@|$lib_dir|g" -e "s|@SUITE_VERSION@|$version|g" \
-	"$src_root/bin/suite.template" >"$staged_bin" ||
-	die "could not render the suite entrypoint"
-chmod 0755 "$staged_bin" || die "could not make the suite entrypoint executable"
+# render_launcher <name> <output>: one template, rendered per name.
+render_launcher() {
+	sed -e "s|@BURROW_LIB_DIR@|$lib_dir|g" -e "s|@BURROW_VERSION@|$version|g" \
+		-e "s|@BURROW_INVOKED_AS@|$1|g" \
+		"$src_root/bin/burrow.template" >"$2" ||
+		die "could not render the $1 entrypoint"
+	chmod 0755 "$2" || die "could not make the $1 entrypoint executable"
+}
+staged_bin="$TMPDIR_SUITE/burrow"
+staged_alias="$TMPDIR_SUITE/suite"
+render_launcher burrow "$staged_bin"
+render_launcher suite "$staged_alias"
 
 mkdir -p "$bin_dir" || die "could not create the install directory $bin_dir"
 [ -w "$bin_dir" ] || die "$bin_dir is not writable. suite-cli never uses sudo; set XDG_BIN_HOME to a directory you own."
@@ -296,11 +337,13 @@ fi
 mv "$lib_dir.incoming" "$lib_dir" || die "could not install the suite-cli library"
 rm -rf "$lib_dir.previous"
 
-mv "$staged_bin" "$dest" || die "could not install the suite entrypoint to $dest"
+mv "$staged_bin" "$dest" || die "could not install the burrow entrypoint to $dest"
+mv "$staged_alias" "$alias_dest" || die "could not install the suite alias to $alias_dest"
 
 # ---------------------------------------------------------------- report ----
 printf '\n'
-row "suite $version" "$(pretty_path "$dest")"
+row "burrow $version" "$(pretty_path "$dest")"
+row "suite (alias)" "$(pretty_path "$alias_dest")"
 row "platform" "$platform"
 if on_path "$bin_dir"; then
 	row "PATH" "$(pretty_path "$bin_dir") is already on PATH"
@@ -316,4 +359,4 @@ else
 fi
 # Last line: the next command, at zero indent, alone, so it can be
 # double-clicked and pasted without dragging leading whitespace.
-printf 'suite init\n'
+printf 'burrow init\n'

@@ -71,7 +71,7 @@ jobs:
       # install.sh is POSIX sh regardless of the CLI language, so it is linted
       # on every platform this job runs on.
       - name: shellcheck
-        run: shellcheck install.sh bin/suite.template
+        run: shellcheck install.sh bin/burrow.template
 
       - name: POSIX syntax check
         run: sh -n install.sh
@@ -131,7 +131,7 @@ jobs:
         run: brew install shellcheck
 
       - name: shellcheck
-        run: shellcheck install.sh bin/suite.template
+        run: shellcheck install.sh bin/burrow.template
 
       - name: POSIX syntax check
         run: sh -n install.sh

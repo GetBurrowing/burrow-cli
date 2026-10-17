@@ -6,11 +6,12 @@
   "type": "module",
   "private": true,
   "bin": {
+    "burrow": "./src/cli.ts",
     "suite": "./src/cli.ts"
   },
   "scripts": {
     "test": "bun test",
-    "lint": "shellcheck install.sh bin/suite.template",
+    "lint": "shellcheck install.sh bin/burrow.template",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

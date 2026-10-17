@@ -1,5 +1,5 @@
 /**
- * The cold-machine path through the rendered `bin/suite.template`.
+ * The cold-machine path through the rendered `bin/burrow.template`.
  *
  * `suite init` exists to set up a machine that has nothing on it, and
  * install.sh prints it as the next command. A launcher that refuses to run it
@@ -20,7 +20,7 @@ import { fileURLToPath } from "node:url";
 import { buildLeanBin, leanPath, LEAN_TOOLS, EXCLUDED_TOOLS, MissingHostToolError } from "./tool-free-path";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
-const TEMPLATE = join(REPO_ROOT, "bin", "suite.template");
+const TEMPLATE = join(REPO_ROOT, "bin", "burrow.template");
 
 /*
  * An INVENTED version, deliberately not the manifest's. These tests are about
@@ -42,7 +42,11 @@ afterAll(() => {
 
 interface Sandbox {
   home: string;
+  libDir: string;
+  /** The launcher rendered as `burrow`; most tests drive this one. */
   suite: string;
+  /** The same template rendered as `suite`, the alias. */
+  alias: string;
   bunInstall: string;
   stubBin: string;
   /** A curated dir of only the tools the launcher needs -- see tool-free-path.ts. */
@@ -61,15 +65,21 @@ function makeSandbox(): Sandbox {
   mkdirSync(stubBin, { recursive: true });
   const leanBin = buildLeanBin(join(home, "lean-bin"));
 
-  const rendered = readFileSync(TEMPLATE, "utf8")
-    .replaceAll("@SUITE_LIB_DIR@", libDir)
-    .replaceAll("@SUITE_VERSION@", FIXTURE_VERSION);
-  const suite = join(binDir, "suite");
-  writeFileSync(suite, rendered);
-  chmodSync(suite, 0o755);
+  const render = (name: string): string => {
+    const rendered = readFileSync(TEMPLATE, "utf8")
+      .replaceAll("@BURROW_LIB_DIR@", libDir)
+      .replaceAll("@BURROW_VERSION@", FIXTURE_VERSION)
+      .replaceAll("@BURROW_INVOKED_AS@", name);
+    const path = join(binDir, name);
+    writeFileSync(path, rendered);
+    chmodSync(path, 0o755);
+    return path;
+  };
+  const suite = render("burrow");
+  const alias = render("suite");
 
   const bunInstall = join(home, "bun-home");
-  return { home, suite, bunInstall, stubBin, leanBin, installedBun: join(bunInstall, "bin", "bun") };
+  return { home, libDir, suite, alias, bunInstall, stubBin, leanBin, installedBun: join(bunInstall, "bin", "bun") };
 }
 
 /**
@@ -127,9 +137,9 @@ function runSuite(
   sandbox: Sandbox,
   args: string[],
   stdin = "",
-  { lean = false } = {},
+  { lean = false, launcher, env = {} }: { lean?: boolean; launcher?: string; env?: Record<string, string> } = {},
 ): { status: number; stdout: string; stderr: string } {
-  const result = spawnSync(sandbox.suite, args, {
+  const result = spawnSync(launcher ?? sandbox.suite, args, {
     input: stdin,
     encoding: "utf8",
     env: {
@@ -138,6 +148,7 @@ function runSuite(
       PATH: lean ? leanPath(sandbox) : `${sandbox.stubBin}:/usr/bin:/bin`,
       HOME: sandbox.home,
       BUN_INSTALL: sandbox.bunInstall,
+      ...env,
     },
   });
   return {
@@ -266,6 +277,57 @@ describe("suite launcher with bun absent", () => {
     expect(r.status).toBe(0);
     expect(r.stdout.trim()).toBe(FIXTURE_VERSION);
     expect(r.stderr).toBe("");
+  });
+
+  test("--version: `suite` and `burrow` print byte-identical stdout; only `suite` adds the notice, on stderr", () => {
+    const sandbox = makeSandbox();
+    const burrow = runSuite(sandbox, ["--version"]);
+    const suite = runSuite(sandbox, ["--version"], "", { launcher: sandbox.alias });
+    expect(burrow.status).toBe(0);
+    expect(suite.status).toBe(0);
+    expect(suite.stdout).toBe(burrow.stdout);
+    expect(burrow.stdout).toBe(`${FIXTURE_VERSION}\n`);
+    expect(burrow.stderr).toBe("");
+    expect(suite.stderr).toBe("suite: this command is now burrow; suite keeps working as an alias\n");
+    // -V is the same path.
+    expect(runSuite(sandbox, ["-V"], "", { launcher: sandbox.alias }).stdout).toBe(burrow.stdout);
+  });
+
+  test("BURROW_NO_DEPRECATION=1 silences the alias notice; any other value does not", () => {
+    const sandbox = makeSandbox();
+    const quiet = runSuite(sandbox, ["--version"], "", { launcher: sandbox.alias, env: { BURROW_NO_DEPRECATION: "1" } });
+    expect(quiet.stderr).toBe("");
+    expect(quiet.stdout).toBe(`${FIXTURE_VERSION}\n`);
+    const loud = runSuite(sandbox, ["--version"], "", { launcher: sandbox.alias, env: { BURROW_NO_DEPRECATION: "0" } });
+    expect(loud.stderr).toContain("now burrow");
+  });
+
+  test("each launcher hands the CLI its own name and BOTH generations of lib dir and version", () => {
+    // An older library reached through a pinned-ref update reads only
+    // SUITE_LIB_DIR / SUITE_VERSION, so the launcher keeps exporting them.
+    const sandbox = makeSandbox();
+    mkdirSync(join(sandbox.bunInstall, "bin"), { recursive: true });
+    writeFileSync(
+      sandbox.installedBun,
+      '#!/bin/sh\nprintf "as=%s blib=%s slib=%s bver=%s sver=%s argv=%s\\n" ' +
+        '"$BURROW_INVOKED_AS" "$BURROW_LIB_DIR" "$SUITE_LIB_DIR" "$BURROW_VERSION" "$SUITE_VERSION" "$*"\n',
+    );
+    chmodSync(sandbox.installedBun, 0o755);
+    const lib = sandbox.libDir;
+    const cli = join(lib, "src", "cli.ts");
+    for (const [launcher, name] of [
+      [sandbox.suite, "burrow"],
+      [sandbox.alias, "suite"],
+    ] as const) {
+      const r = runSuite(sandbox, ["status", "--json"], "", { launcher });
+      expect(r.status).toBe(0);
+      expect(r.stdout).toBe(
+        `as=${name} blib=${lib} slib=${lib} bver=${FIXTURE_VERSION} sver=${FIXTURE_VERSION} argv=${cli} status --json\n`,
+      );
+      // On a dispatch path the launcher says nothing itself: src/cli.ts owns
+      // the notice there, so it is printed once, not twice.
+      expect(r.stderr).toBe("");
+    }
   });
 
   test("the launcher is ASCII only and never invokes sudo", () => {

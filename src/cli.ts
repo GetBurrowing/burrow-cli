@@ -184,7 +184,31 @@ export function usage(): string {
   ].join("\n");
 }
 
-export async function run(argv: string[]): Promise<number> {
+/** The one line `suite` (the alias launcher) prints, on stderr, before dispatch. */
+export const ALIAS_NOTICE = "suite: this command is now burrow; suite keeps working as an alias";
+
+/**
+ * The alias notice for this invocation, or null.
+ *
+ * The launcher install.sh renders as `suite` exports BURROW_INVOKED_AS=suite;
+ * the `burrow` one exports `burrow`. STDERR ONLY, and unconditional (a log
+ * should show it too): `suite --version`, `suite status --json`,
+ * `suite pane-status` and `--stamp-only` JSON are read by machines (install.sh,
+ * core's agent-host), so stdout is byte-identical whichever name ran.
+ * BURROW_NO_DEPRECATION=1 silences it.
+ *
+ * Read directly rather than through env_names.ts: neither name has a SUITE_*
+ * generation, so there is no fallback to resolve.
+ */
+export function aliasNotice(env: Record<string, string | undefined>): string | null {
+  if (env.BURROW_INVOKED_AS !== "suite") return null;
+  if (env.BURROW_NO_DEPRECATION === "1") return null;
+  return ALIAS_NOTICE;
+}
+
+export async function run(argv: string[], env: Record<string, string | undefined> = process.env): Promise<number> {
+  const notice = aliasNotice(env);
+  if (notice !== null) process.stderr.write(`${notice}\n`);
   if (argv[0] === "--version" || argv[0] === "-V") {
     console.log(VERSION);
     return 0;

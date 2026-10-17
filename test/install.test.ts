@@ -11,7 +11,7 @@
  */
 import { describe, expect, test, beforeAll, afterAll } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, rmSync, existsSync, writeFileSync, chmodSync, readFileSync, symlinkSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, existsSync, writeFileSync, chmodSync, readFileSync, symlinkSync, lstatSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -63,8 +63,14 @@ interface RunResult {
   stdout: string;
   stderr: string;
   home: string;
+  /** `~/.local/bin/burrow`, the launcher. */
   dest: string;
+  /** `~/.local/bin/suite`, the alias rendered from the same template. */
+  alias: string;
 }
+
+/** The one stderr line the `suite` alias prints. */
+const ALIAS_NOTICE = "suite: this command is now burrow; suite keeps working as an alias\n";
 
 function makeHome(): string {
   const home = mkdtempSync(join(workRoot, "home."));
@@ -99,7 +105,7 @@ function ghlessPath(): string {
 
 function runInstaller(
   home: string,
-  opts: { url?: string; stdin?: string; path?: string } = {},
+  opts: { url?: string; stdin?: string; path?: string; urlVar?: string; env?: Record<string, string> } = {},
 ): RunResult {
   const url = opts.url ?? `file://${tarball}`;
   const result = spawnSync("sh", [INSTALL_SH], {
@@ -112,7 +118,10 @@ function runInstaller(
       HOME: home,
       XDG_BIN_HOME: join(home, ".local", "bin"),
       XDG_DATA_HOME: join(home, ".local", "share"),
-      SUITE_CLI_TARBALL_URL: url,
+      // The legacy name by default: it is what core's agent-host and every
+      // pre-rename `suite update` hand the installer. BURROW_ is covered below.
+      [opts.urlVar ?? "SUITE_CLI_TARBALL_URL"]: url,
+      ...opts.env,
     },
   });
   return {
@@ -120,7 +129,8 @@ function runInstaller(
     stdout: result.stdout ?? "",
     stderr: result.stderr ?? "",
     home,
-    dest: join(home, ".local", "bin", "suite"),
+    dest: join(home, ".local", "bin", "burrow"),
+    alias: join(home, ".local", "bin", "suite"),
   };
 }
 
@@ -129,7 +139,7 @@ describe("install.sh", () => {
     const r = runInstaller(makeHome());
     expect(r.status).toBe(0);
     expect(existsSync(r.dest)).toBe(true);
-    expect(r.stdout).toContain(`suite ${VERSION}`);
+    expect(r.stdout).toContain(`burrow ${VERSION}`);
     // The library was staged too, not just the launcher.
     expect(existsSync(join(r.home, ".local", "share", "suite", "cli", "src", "cli.ts"))).toBe(true);
     // The installed entrypoint answers --version without needing bun.
@@ -172,6 +182,7 @@ describe("install.sh", () => {
 
   test("names the existing version and prompts before replacing a different suite", () => {
     const home = makeHome();
+    // The pre-rename shape: only `suite` exists, so it is what gets announced.
     const dest = join(home, ".local", "bin", "suite");
     // A pre-existing, different `suite` on the destination.
     writeFileSync(dest, '#!/bin/sh\nprintf "0.0.9\\n"\n');
@@ -188,6 +199,7 @@ describe("install.sh", () => {
     expect(accepted.status).toBe(0);
     expect(accepted.stdout).toContain("suite 0.0.9 is already installed");
     expect(spawnSync(dest, ["--version"], { encoding: "utf8" }).stdout.trim()).toBe(VERSION);
+    expect(spawnSync(accepted.dest, ["--version"], { encoding: "utf8" }).stdout.trim()).toBe(VERSION);
   });
 
   test("a failed fetch leaves NO file at the destination and exits non-zero", () => {
@@ -199,6 +211,7 @@ describe("install.sh", () => {
     // The assertion that matters: absence, not merely a non-zero exit. A
     // partial file must never reach the destination.
     expect(existsSync(r.dest)).toBe(false);
+    expect(existsSync(r.alias)).toBe(false);
     expect(existsSync(join(home, ".local", "share", "suite", "cli"))).toBe(false);
     expect(r.stderr).toContain("install failed");
   });
@@ -217,7 +230,7 @@ describe("install.sh", () => {
     expect(r.status).toBe(0);
     const lines = r.stdout.split("\n").filter((l) => l.trim() !== "");
     const last = lines[lines.length - 1] ?? "";
-    expect(last).toBe("suite init");
+    expect(last).toBe("burrow init");
     expect(last).toBe(last.trimStart());
   });
 
@@ -242,6 +255,14 @@ describe("install.sh", () => {
    * the installer stops at the fetch, naming the URL.
    */
   function runWithOwner(owner: string | undefined, ref?: string) {
+    const env: Record<string, string> = {};
+    if (owner !== undefined) env.SUITE_GITHUB_OWNER = owner;
+    if (ref !== undefined) env.SUITE_CLI_REF = ref;
+    return runWithEnv(env);
+  }
+
+  /** The same stubbed-curl run, with exactly the BURROW_/SUITE_ inputs given. */
+  function runWithEnv(extra: Record<string, string>) {
     const home = makeHome();
     const stubDir = join(home, "stub-bin");
     mkdirSync(stubDir, { recursive: true });
@@ -253,15 +274,15 @@ describe("install.sh", () => {
       HOME: home,
       XDG_BIN_HOME: join(home, ".local", "bin"),
       XDG_DATA_HOME: join(home, ".local", "share"),
+      ...extra,
     };
-    if (owner !== undefined) env.SUITE_GITHUB_OWNER = owner;
-    if (ref !== undefined) env.SUITE_CLI_REF = ref;
     const r = spawnSync("sh", [INSTALL_SH], { input: "", encoding: "utf8", env });
     return {
       status: r.status ?? -1,
       stderr: r.stderr ?? "",
       fetched: existsSync(log) ? readFileSync(log, "utf8") : null,
-      dest: join(home, ".local", "bin", "suite"),
+      dest: join(home, ".local", "bin", "burrow"),
+      alias: join(home, ".local", "bin", "suite"),
     };
   }
 
@@ -294,6 +315,7 @@ describe("install.sh", () => {
       expect(r.fetched).toBeNull();
       expect(r.stderr).toContain("SUITE_GITHUB_OWNER");
       expect(existsSync(r.dest)).toBe(false);
+      expect(existsSync(r.alias)).toBe(false);
     });
   }
 
@@ -319,6 +341,7 @@ describe("install.sh", () => {
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain("Windows is not supported");
     expect(existsSync(join(home, ".local", "bin", "suite"))).toBe(false);
+    expect(existsSync(join(home, ".local", "bin", "burrow"))).toBe(false);
   });
 
   test("never invokes sudo", async () => {
@@ -334,6 +357,174 @@ describe("install.sh", () => {
     expect(r.stdout).toContain(`export PATH="${join(r.home, ".local", "bin")}:$PATH"`);
     // Even in the warning path, the next command is still the last line.
     const lines = r.stdout.split("\n").filter((l) => l.trim() !== "");
-    expect(lines[lines.length - 1]).toBe("suite init");
+    expect(lines[lines.length - 1]).toBe("burrow init");
+  });
+  /* ------------------------------------------------------------------ */
+  /* Two rendered launchers: `burrow`, and `suite` kept as an alias      */
+  /* ------------------------------------------------------------------ */
+
+  test("a cold install renders BOTH launchers as regular executable files, never a symlink", () => {
+    const r = runInstaller(makeHome());
+    expect(r.status).toBe(0);
+    for (const path of [r.dest, r.alias]) {
+      expect(lstatSync(path).isSymbolicLink()).toBe(false);
+      expect(lstatSync(path).isFile()).toBe(true);
+      expect(statSync(path).mode & 0o111).toBe(0o111);
+    }
+    // Each one knows its own name; that is what a symlink could not carry.
+    expect(readFileSync(r.dest, "utf8")).toContain('BURROW_INVOKED_AS="burrow"');
+    expect(readFileSync(r.alias, "utf8")).toContain('BURROW_INVOKED_AS="suite"');
+    // No placeholder survived rendering in either.
+    for (const path of [r.dest, r.alias]) expect(readFileSync(path, "utf8")).not.toMatch(/@BURROW_[A-Z_]+@/);
+  });
+
+  test("`suite --version` stdout is byte-identical to `burrow --version`; the alias adds one stderr line", () => {
+    // Machine-read: install.sh's own existing-install check and core's
+    // agent-host (`/usr/local/bin/suite --version`) parse this stdout.
+    const r = runInstaller(makeHome());
+    expect(r.status).toBe(0);
+    const burrow = spawnSync(r.dest, ["--version"], { encoding: "utf8", env: { PATH: "/usr/bin:/bin" } });
+    const suite = spawnSync(r.alias, ["--version"], { encoding: "utf8", env: { PATH: "/usr/bin:/bin" } });
+    expect(burrow.status).toBe(0);
+    expect(suite.status).toBe(0);
+    expect(Buffer.from(suite.stdout).equals(Buffer.from(burrow.stdout))).toBe(true);
+    expect(burrow.stdout).toBe(`${VERSION}\n`);
+    expect(burrow.stderr).toBe("");
+    expect(suite.stderr).toBe(ALIAS_NOTICE);
+  });
+
+  test("both launchers point at the SAME, unmoved lib dir <data>/suite/cli", () => {
+    const r = runInstaller(makeHome());
+    const lib = join(r.home, ".local", "share", "suite", "cli");
+    expect(readFileSync(r.dest, "utf8")).toContain(`BURROW_LIB_DIR="${lib}"`);
+    expect(readFileSync(r.alias, "utf8")).toContain(`BURROW_LIB_DIR="${lib}"`);
+    expect(existsSync(join(lib, "src", "cli.ts"))).toBe(true);
+    expect(existsSync(join(r.home, ".local", "share", "burrow"))).toBe(false);
+  });
+
+  test("a reinstall over itself is announced under `burrow`", () => {
+    const home = makeHome();
+    expect(runInstaller(home).status).toBe(0);
+    const second = runInstaller(home);
+    expect(second.status).toBe(0);
+    expect(second.stdout).toContain(`burrow ${VERSION} is already installed`);
+  });
+
+  /*
+   * The version a pre-rename host reports. 0.7.3 is the last `suite`-only
+   * release; while this branch's manifest is still 0.7.3 (the bump to 0.8.0 is
+   * a later stage), an equal version would take the reinstall path instead of
+   * the replace prompt under test, so the fixture steps back one patch then.
+   */
+  const OLD_VERSION = VERSION === "0.7.3" ? "0.7.2" : "0.7.3";
+
+  test("an old 0.7.3-style host (only ~/.local/bin/suite, lib at ~/.local/share/suite/cli) upgrades in place", () => {
+    const home = makeHome();
+    const lib = join(home, ".local", "share", "suite", "cli");
+    mkdirSync(join(lib, "src"), { recursive: true });
+    writeFileSync(join(lib, "package.json"), `{"name":"suite-cli","version":"${OLD_VERSION}"}\n`);
+    writeFileSync(join(lib, "src", "cli.ts"), "// the 0.7.3 library\n");
+    const old = join(home, ".local", "bin", "suite");
+    // The shape of a rendered 0.7.3 launcher: SUITE_* names, --version in sh.
+    writeFileSync(
+      old,
+      `#!/bin/sh\nSUITE_LIB_DIR="${lib}"\nSUITE_VERSION="${OLD_VERSION}"\nexport SUITE_LIB_DIR SUITE_VERSION\n` +
+        'case "${1:-}" in --version | -V) printf \'%s\\n\' "$SUITE_VERSION"; exit 0 ;; esac\n' +
+        'exec bun "$SUITE_LIB_DIR/src/cli.ts" "$@"\n',
+    );
+    chmodSync(old, 0o755);
+    const burrowPath = join(home, ".local", "bin", "burrow");
+    expect(existsSync(burrowPath)).toBe(false);
+
+    const r = runInstaller(home, { stdin: "y\n" });
+    expect(r.status).toBe(0);
+    // Announced by the name and version actually installed, and still asked.
+    expect(r.stdout).toContain(`suite ${OLD_VERSION} is already installed`);
+    expect(r.stdout).toContain(`replace it with ${VERSION}? [y/N]`);
+    // Both files now exist; the old launcher was overwritten by the alias.
+    expect(existsSync(r.dest)).toBe(true);
+    expect(existsSync(r.alias)).toBe(true);
+    expect(readFileSync(r.alias, "utf8")).not.toContain(`SUITE_VERSION="${OLD_VERSION}"`);
+    expect(spawnSync(r.alias, ["--version"], { encoding: "utf8" }).stdout).toBe(`${VERSION}\n`);
+    expect(spawnSync(r.dest, ["--version"], { encoding: "utf8" }).stdout).toBe(`${VERSION}\n`);
+    // Same lib dir path, now holding the new library.
+    expect(readFileSync(join(lib, "src", "cli.ts"), "utf8")).not.toContain("the 0.7.3 library");
+    expect(readFileSync(r.dest, "utf8")).toContain(`BURROW_LIB_DIR="${lib}"`);
+    expect(existsSync(join(home, ".local", "share", "burrow"))).toBe(false);
+  });
+
+  test("declining on an old host leaves the old `suite` alone and creates no `burrow`", () => {
+    const home = makeHome();
+    const old = join(home, ".local", "bin", "suite");
+    writeFileSync(old, `#!/bin/sh\nprintf "${OLD_VERSION}\\n"\n`);
+    chmodSync(old, 0o755);
+    const r = runInstaller(home, { stdin: "n\n" });
+    expect(r.status).toBe(0);
+    expect(r.stdout).toContain(`keeping suite ${OLD_VERSION}`);
+    expect(existsSync(r.dest)).toBe(false);
+    expect(spawnSync(old, ["--version"], { encoding: "utf8" }).stdout).toBe(`${OLD_VERSION}\n`);
+  });
+
+  /* BURROW_* first, SUITE_* fallback, BURROW wins -------------------------- */
+
+  const SHA_A = "0123456789abcdef0123456789abcdef01234567";
+  const codeload = (owner: string, ref: string) =>
+    `https://codeload.github.com/${owner}/suite-cli/tar.gz/${/^[0-9a-f]{40}$/.test(ref) ? ref : `refs/heads/${ref}`}`;
+
+  test("ref: SUITE_CLI_REF alone is honoured (core's agent-host passes it)", () => {
+    expect(runWithEnv({ SUITE_CLI_REF: SHA_A }).fetched).toContain(codeload("Startup-Suite", SHA_A));
+  });
+
+  test("ref: BURROW_CLI_REF alone is honoured", () => {
+    expect(runWithEnv({ BURROW_CLI_REF: "next" }).fetched).toContain(codeload("Startup-Suite", "next"));
+  });
+
+  test("ref: both set, BURROW_CLI_REF wins and the SUITE value is never fetched", () => {
+    const fetched = runWithEnv({ BURROW_CLI_REF: "main", SUITE_CLI_REF: SHA_A }).fetched ?? "";
+    expect(fetched).toContain(codeload("Startup-Suite", "main"));
+    expect(fetched).not.toContain(SHA_A);
+  });
+
+  test("ref: an empty BURROW_CLI_REF falls back to SUITE_CLI_REF", () => {
+    expect(runWithEnv({ BURROW_CLI_REF: "", SUITE_CLI_REF: SHA_A }).fetched).toContain(codeload("Startup-Suite", SHA_A));
+  });
+
+  test("owner: SUITE_GITHUB_OWNER alone is honoured", () => {
+    expect(runWithEnv({ SUITE_GITHUB_OWNER: "OldOrg" }).fetched).toContain(codeload("OldOrg", "main"));
+  });
+
+  test("owner: BURROW_GITHUB_OWNER alone is honoured", () => {
+    expect(runWithEnv({ BURROW_GITHUB_OWNER: "NewOrg" }).fetched).toContain(codeload("NewOrg", "main"));
+  });
+
+  test("owner: both set, BURROW_GITHUB_OWNER wins", () => {
+    const fetched = runWithEnv({ BURROW_GITHUB_OWNER: "NewOrg", SUITE_GITHUB_OWNER: "OldOrg" }).fetched ?? "";
+    expect(fetched).toContain(codeload("NewOrg", "main"));
+    expect(fetched).not.toContain("OldOrg");
+  });
+
+  test("owner: an invalid BURROW_GITHUB_OWNER is refused BY THAT NAME, never replaced by a valid SUITE one", () => {
+    const r = runWithEnv({ BURROW_GITHUB_OWNER: "bad/owner", SUITE_GITHUB_OWNER: "Startup-Suite" });
+    expect(r.status).not.toBe(0);
+    expect(r.fetched).toBeNull();
+    expect(r.stderr).toContain('BURROW_GITHUB_OWNER="bad/owner"');
+    expect(r.stderr).not.toContain("SUITE_GITHUB_OWNER");
+  });
+
+  test("tarball URL: BURROW_CLI_TARBALL_URL alone installs", () => {
+    const r = runInstaller(makeHome(), { urlVar: "BURROW_CLI_TARBALL_URL" });
+    expect(r.status).toBe(0);
+    expect(existsSync(r.dest)).toBe(true);
+  });
+
+  test("tarball URL: both set, BURROW_CLI_TARBALL_URL wins", () => {
+    // The SUITE value names a file that does not exist: if it were used, the
+    // install would fail at the fetch.
+    const r = runInstaller(makeHome(), {
+      urlVar: "BURROW_CLI_TARBALL_URL",
+      env: { SUITE_CLI_TARBALL_URL: `file://${join(workRoot, "not-this-one.tar.gz")}` },
+    });
+    expect(r.status).toBe(0);
+    expect(existsSync(r.alias)).toBe(true);
   });
 });

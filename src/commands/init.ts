@@ -292,7 +292,7 @@ export const BUN_SH_MANAGER = "bun.sh";
 /**
  * What `curl -fsSL https://bun.sh/install | bash` needs before it can work: it
  * fetches with curl, runs under bash, and unpacks a ZIP release with unzip.
- * The launcher (`bin/suite.template`) checks the same three; this is the same
+ * The launcher (`bin/burrow.template`) checks the same three; this is the same
  * precondition on the other entrypoint, because which one a user reaches
  * should not decide whether they get a clear refusal or a broken half-install.
  */

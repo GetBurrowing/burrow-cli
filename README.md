@@ -1136,7 +1136,7 @@ shell.
 ```sh
 bun install
 bun test          # bun:test
-bun run lint      # shellcheck install.sh bin/suite.template
+bun run lint      # shellcheck install.sh bin/burrow.template
 bun run typecheck # tsc --noEmit
 ```
 

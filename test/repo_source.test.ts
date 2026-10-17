@@ -123,7 +123,7 @@ describe("URL helpers", () => {
 const ROOT = resolve(import.meta.dir, "..");
 const LITERAL = "Startup-Suite";
 /** The one line in install.sh allowed to name the org: its default. */
-const INSTALL_DEFAULT_LINE = 'SUITE_GITHUB_OWNER="${SUITE_GITHUB_OWNER:-Startup-Suite}"';
+const INSTALL_DEFAULT_LINE = 'OWNER="Startup-Suite"';
 
 function walk(dir: string): string[] {
   return readdirSync(dir).flatMap((name) => {
