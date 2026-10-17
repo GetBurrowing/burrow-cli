@@ -203,7 +203,7 @@ export interface UpdateDeps {
 export function announceLines(ref: string, env: Env = process.env): string[] {
   const suffix = ref === DEFAULT_REF ? "" : ` (ref ${ref})`;
   return [
-    `updating burrow ${VERSION}${suffix} — running the installer from ${installerUrl(ref, env)}`,
+    `updating ${CLI_NAME} ${VERSION}${suffix} — running the installer from ${installerUrl(ref, env)}`,
     `repository ${repoSlug(REPO_NAME, env)}`,
     "",
   ];
@@ -214,7 +214,7 @@ export async function runUpdate(deps: UpdateDeps): Promise<number> {
   const ref = refSource.value;
 
   if (!refIsSafe(ref)) {
-    deps.err(`burrow: refusing to update from ${refSource.name ?? "BURROW_CLI_REF"}="${ref}" — not a plain branch, tag or commit.`);
+    deps.err(`${CLI_NAME}: refusing to update from ${refSource.name ?? "BURROW_CLI_REF"}="${ref}" — not a plain branch, tag or commit.`);
     return UPDATE_REFUSED_EXIT;
   }
 
@@ -225,7 +225,7 @@ export async function runUpdate(deps: UpdateDeps): Promise<number> {
   try {
     owner = ownerFrom(deps.env);
   } catch (e) {
-    deps.err(`burrow: refusing to update: ${(e as Error).message}`);
+    deps.err(`${CLI_NAME}: refusing to update: ${(e as Error).message}`);
     return UPDATE_REFUSED_EXIT;
   }
   const env = ownerEnv(owner);
@@ -234,12 +234,12 @@ export async function runUpdate(deps: UpdateDeps): Promise<number> {
   // to do and then not doing it is worse than refusing up front.
   const fetcher = FETCHERS.find((tool) => deps.which(tool) !== null);
   if (fetcher === undefined) {
-    deps.err(`burrow: update needs ${FETCHERS.join(" or ")} to download the installer, and neither is on PATH.`);
+    deps.err(`${CLI_NAME}: update needs ${FETCHERS.join(" or ")} to download the installer, and neither is on PATH.`);
     return UPDATE_REFUSED_EXIT;
   }
   const missing = REQUIRED_TOOLS.filter((tool) => deps.which(tool) === null);
   if (missing.length > 0) {
-    deps.err(`burrow: update needs ${missing.join(" and ")}, not on PATH.`);
+    deps.err(`${CLI_NAME}: update needs ${missing.join(" and ")}, not on PATH.`);
     return UPDATE_REFUSED_EXIT;
   }
 
