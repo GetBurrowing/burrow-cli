@@ -91,6 +91,7 @@ import {
   type TokenRef,
 } from "../token_ref.ts";
 import type { TmuxDeps } from "../tmux.ts";
+import { httpsCloneUrl } from "../repo_source.ts";
 import { classifyPullFailure, noGitPrompt, pullRemedyLines } from "./init.ts";
 import { loadRoster, recordLaunch, liveRestoreDeps, type RestoreDeps } from "./restore.ts";
 import {
@@ -112,13 +113,19 @@ type Env = Record<string, string | undefined>;
 /**
  * DEPLOYER: BUMP THIS BEFORE suite-cli MERGES.
  *
- * This is the SQUASH sha on Startup-Suite/openclaw-suite-channel main of PR
- * #29 (the stage-2 token-ref resolver, task 01a0d8f8), bumped at deploy from
- * the pre-merge branch tip b84cb6d9. Pin a commit on main, never a branch
- * tip: a squash merge deletes the branch and the tip would dangle.
+ * This is the SQUASH sha on openclaw-suite-channel main of PR #31, v0.7.0
+ * (underscore tool names first with a dotted fallback, task 01a14a7d-58f6;
+ * Burrow migration). It replaced f6d8a726 (PR #29, the token-ref resolver).
+ * Pin a commit on main, never a branch tip: a squash merge deletes the branch
+ * and the tip would dangle.
  */
-export const OPENCLAW_CHANNEL_REF = "f6d8a726fe8b2dff6c18476330f07b9c1f5cd302";
-export const OPENCLAW_CHANNEL_REPO = "https://github.com/Startup-Suite/openclaw-suite-channel.git";
+export const OPENCLAW_CHANNEL_REF = "b220c8b1240dc337f48fe2f92967816f84344582";
+/** The channel repo's name. Its owner comes from repo_source.ts (SUITE_GITHUB_OWNER). */
+export const OPENCLAW_CHANNEL_REPO_NAME = "openclaw-suite-channel";
+
+export function openclawChannelRepo(env: Env = process.env): string {
+  return httpsCloneUrl(OPENCLAW_CHANNEL_REPO_NAME, env);
+}
 
 /**
  * The OpenClaw release this writer's commands and output shapes were read
@@ -788,7 +795,7 @@ export function openclawWriter(ctx: { opts: OpenclawOptions | null }, deps: Open
     return ctx.opts;
   };
   const channelRef = deps.channelRef ?? OPENCLAW_CHANNEL_REF;
-  const channelRepo = deps.channelRepo ?? OPENCLAW_CHANNEL_REPO;
+  const channelRepo = deps.channelRepo ?? openclawChannelRepo(deps.env);
   const checkout = (): string => channelCheckoutDir(deps.env);
   const portInUse = deps.portInUse ?? probePortInUse;
   const fail = (code: string, message: string): StampFailure => new StampFailure(EXIT_FAILED, code, redact(message, state.secrets));
@@ -867,7 +874,7 @@ export function openclawWriter(ctx: { opts: OpenclawOptions | null }, deps: Open
         const detail = f.stderr || f.stdout;
         throw fail(
           "plugin_fetch_failed",
-          [`the plugin checkout at ${dir} could not fetch ${channelRef}:`, detail.trim(), ...pullRemedyLines(classifyPullFailure(detail), dir)].join("\n"),
+          [`the plugin checkout at ${dir} could not fetch ${channelRef}:`, detail.trim(), ...pullRemedyLines(classifyPullFailure(detail), dir, OPENCLAW_CHANNEL_REPO_NAME, deps.env)].join("\n"),
         );
       }
     }

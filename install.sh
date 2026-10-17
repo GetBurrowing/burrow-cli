@@ -1,23 +1,19 @@
 #!/bin/sh
 # suite-cli installer. POSIX sh only: this runs via
-#   curl -fsSL https://raw.githubusercontent.com/Startup-Suite/suite-cli/main/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/<owner>/suite-cli/main/install.sh | sh
+# where <owner> is the GitHub org (see SUITE_GITHUB_OWNER below; the README
+# has the current command).
 # before anything is installed on the machine, including bun. No bashisms,
 # no arrays, no [[ ]], and no sudo anywhere.
 set -eu
 
-REPO="Startup-Suite/suite-cli"
+# The GitHub org the tarball comes from. The ONE place this script names it;
+# src/repo_source.ts is the same rule for the CLI. Unset or empty means the
+# default. `suite update` exports the value it built the installer URL from,
+# so the installer and the tarball cannot come from two orgs. Validated below,
+# before anything is fetched.
+SUITE_GITHUB_OWNER="${SUITE_GITHUB_OWNER:-Startup-Suite}"
 REF="${SUITE_CLI_REF:-main}"
-# codeload.github.com serves tarballs by commit SHA at /tar.gz/<sha>, but
-# branch names need /tar.gz/refs/heads/<branch>. Detect SHAs (40 hex chars)
-# and use the appropriate path.
-case "$REF" in
-	[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f])
-		TARBALL_URL="${SUITE_CLI_TARBALL_URL:-https://codeload.github.com/${REPO}/tar.gz/${REF}}"
-		;;
-	*)
-		TARBALL_URL="${SUITE_CLI_TARBALL_URL:-https://codeload.github.com/${REPO}/tar.gz/refs/heads/${REF}}"
-		;;
-esac
 
 TMPDIR_SUITE=""
 
@@ -47,6 +43,33 @@ cleanup() {
 	fi
 }
 trap cleanup EXIT INT HUP TERM
+
+# ------------------------------------------------------------------ source ----
+# A GitHub owner is 1-39 letters, digits or hyphens, not starting with a
+# hyphen. Anything else is refused by name before it reaches a URL. The
+# letters are spelled out rather than written as ranges or [:alnum:], both of
+# which can admit non-ASCII characters under some locales.
+_owner_chars='abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
+case "$SUITE_GITHUB_OWNER" in
+-* | *[!"$_owner_chars"-]*)
+	die "SUITE_GITHUB_OWNER=\"$SUITE_GITHUB_OWNER\" is not a GitHub owner name (letters, digits and hyphens, not starting with a hyphen)"
+	;;
+esac
+[ "${#SUITE_GITHUB_OWNER}" -le 39 ] ||
+	die "SUITE_GITHUB_OWNER=\"$SUITE_GITHUB_OWNER\" is longer than a GitHub owner name can be (39 characters)"
+REPO="${SUITE_GITHUB_OWNER}/suite-cli"
+
+# codeload.github.com serves tarballs by commit SHA at /tar.gz/<sha>, but
+# branch names need /tar.gz/refs/heads/<branch>. Detect SHAs (40 hex chars)
+# and use the appropriate path.
+case "$REF" in
+[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f])
+	TARBALL_URL="${SUITE_CLI_TARBALL_URL:-https://codeload.github.com/${REPO}/tar.gz/${REF}}"
+	;;
+*)
+	TARBALL_URL="${SUITE_CLI_TARBALL_URL:-https://codeload.github.com/${REPO}/tar.gz/refs/heads/${REF}}"
+	;;
+esac
 
 # -------------------------------------------------------------- platform ----
 detect_platform() {

@@ -8,7 +8,7 @@
 
 # suite-cli
 
-`suite` connects a machine to a [Startup Suite](https://github.com/Startup-Suite)
+`suite` connects a machine to a Startup Suite
 install, sets up whichever agent harness you run there (Claude Code, DeepSeek,
 Hermes, OpenClaw), and keeps agents alive when the terminal that started them
 goes away.
@@ -93,6 +93,18 @@ The installer never uses `sudo`. It installs to `$XDG_BIN_HOME`, or
 `~/.local/bin` when that is unset, tells you if that directory is not on your
 `PATH`, and prints the exact `export PATH=` line to add. If a `suite` is
 already installed it names the version it would replace and asks first.
+
+The command above names the GitHub org the CLI is published under today. URLs
+under the old org keep working through GitHub's rename redirects after an org
+rename. To install from, or `suite update` against, another org explicitly, set
+`SUITE_GITHUB_OWNER` in the environment (process env only; no config file sets
+it). It changes the org of every repo the CLI fetches or clones: its own
+installer and tarball, the Claude Code plugin, and the OpenClaw and Hermes
+channels. `suite update` prints the `owner/repo` it resolved.
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/<owner>/suite-cli/main/install.sh | SUITE_GITHUB_OWNER=<owner> sh
+```
 
 ## Connect an agent folder
 

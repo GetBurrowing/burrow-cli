@@ -44,6 +44,7 @@ import { dataDir } from "../paths.ts";
 import { promptConnection } from "../connection.ts";
 import { canonicalDir, writeAgentConnection } from "../agent_connections.ts";
 import { nextCommand, row } from "../ui.ts";
+import { httpsCloneUrl, sshCloneUrl, type Env } from "../repo_source.ts";
 import {
   type SupervisorIo,
   type SupervisorResult,
@@ -151,7 +152,13 @@ export interface InitOptions {
   fromMcpJson?: boolean;
 }
 
-export const PLUGIN_REPO = "https://github.com/Startup-Suite/claude-code-suite-channel.git";
+/** The Claude Code channel plugin's repo name. Its owner comes from repo_source.ts. */
+export const PLUGIN_REPO_NAME = "claude-code-suite-channel";
+
+/** The plugin's clone URL under the owner `env` names (SUITE_GITHUB_OWNER). */
+export function pluginRepo(env: Env = process.env): string {
+  return httpsCloneUrl(PLUGIN_REPO_NAME, env);
+}
 export const PLUGIN_DIRNAME = "claude-code-suite-channel";
 export const CHANNEL_SERVER = "suite-channel";
 export const TOOLS_SERVER = "startup-suite";
@@ -372,14 +379,25 @@ export function classifyPullFailure(detail: string): PullFailureKind {
   return "unknown";
 }
 
-/** What to tell the operator to do, given what actually went wrong. */
-export function pullRemedyLines(kind: PullFailureKind, dir: string): string[] {
+/**
+ * What to tell the operator to do, given what actually went wrong.
+ *
+ * `repoName` is the repo the checkout at `dir` is a clone of. It defaults to
+ * this plugin; the openclaw and hermes verbs pass their own channel repo, so
+ * the SSH hint never points a checkout at somebody else's remote.
+ */
+export function pullRemedyLines(
+  kind: PullFailureKind,
+  dir: string,
+  repoName: string = PLUGIN_REPO_NAME,
+  env: Env = process.env,
+): string[] {
   switch (kind) {
     case "auth":
       return [
         `  git could not authenticate to the remote. The checkout itself is probably fine.`,
         `  Either give git a credential — \`gh auth setup-git\` — or point it at SSH:`,
-        `    git -C ${dir} remote set-url origin git@github.com:Startup-Suite/claude-code-suite-channel.git`,
+        `    git -C ${dir} remote set-url origin ${sshCloneUrl(repoName, env)}`,
       ];
     case "diverged":
       return [
@@ -447,7 +465,7 @@ export async function cloneOrUpdate(dir: string, deps: Pick<InitDeps, "run" | "e
     return "updated";
   }
   await mkdir(resolve(dir, ".."), { recursive: true });
-  const r = await deps.run(["git", "clone", PLUGIN_REPO, dir], { env: noGitPrompt(deps.env) });
+  const r = await deps.run(["git", "clone", pluginRepo(deps.env), dir], { env: noGitPrompt(deps.env) });
   if (r.exitCode !== 0) {
     throw new Error(`git clone failed: ${(r.stderr || r.stdout).trim()}`);
   }
@@ -1094,6 +1112,7 @@ export async function runInit(deps: InitDeps, options: InitOptions = {}): Promis
       inheritedPath: deps.env.PATH,
       inheritedLocale: deps.env.LANG ?? deps.env.LC_ALL,
       intervalSeconds: 60,
+      env: deps.env,
     });
     supervisor = await installSupervisor(deps.supervisorIo, plan);
     say(
@@ -1111,6 +1130,7 @@ export async function runInit(deps: InitDeps, options: InitOptions = {}): Promis
       binary: `${home}/.local/bin/suite`,
       inheritedPath: deps.env.PATH,
       intervalSeconds: 60,
+      env: deps.env,
     });
     if (restore) {
       writeRestoreUnit(deps.supervisorIo, restore);

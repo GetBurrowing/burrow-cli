@@ -1,4 +1,5 @@
 import { mkdirSync, writeFileSync } from "node:fs";
+import { webUrl, type Env } from "./repo_source.ts";
 
 /**
  * Keeping `suite watch` running without anyone remembering to start it.
@@ -45,6 +46,11 @@ export interface SupervisorInput {
   binary: string;
   /** Seconds between sweeps. */
   intervalSeconds: number;
+  /**
+   * The environment whose SUITE_GITHUB_OWNER names the repo in the unit's
+   * `Documentation=` line. Defaults to the process environment.
+   */
+  env?: Env;
 }
 
 export interface SupervisorPlan {
@@ -174,7 +180,7 @@ export function envFilePath(home: string): string {
 export function systemdUnit(input: SupervisorInput): string {
   return `[Unit]
 Description=Suite agent session watchdog
-Documentation=https://github.com/Startup-Suite/suite-cli
+Documentation=${webUrl("suite-cli", input.env)}
 After=default.target
 
 [Service]
@@ -433,7 +439,7 @@ export const RESTORE_LAUNCHD_LABEL = "technology.milvenan.suite-agents";
 export function restoreUnit(input: SupervisorInput): string {
   return `[Unit]
 Description=Restore Suite agent sessions after boot
-Documentation=https://github.com/Startup-Suite/suite-cli
+Documentation=${webUrl("suite-cli", input.env)}
 After=default.target
 
 [Service]

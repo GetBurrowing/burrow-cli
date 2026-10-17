@@ -104,6 +104,7 @@ import {
   type TokenRef,
 } from "../token_ref.ts";
 import type { TmuxDeps } from "../tmux.ts";
+import { httpsCloneUrl } from "../repo_source.ts";
 import { classifyPullFailure, noGitPrompt, pullRemedyLines } from "./init.ts";
 import { loadRoster, recordLaunch, liveRestoreDeps, type RestoreDeps } from "./restore.ts";
 import {
@@ -124,15 +125,20 @@ type Env = Record<string, string | undefined>;
 /**
  * DEPLOYER: BUMP THIS BEFORE suite-cli MERGES.
  *
- * This is the SQUASH sha on Startup-Suite/hermes-suite-channel main of PR #3
- * (the stage-6 #!/bin/sh launcher fix and `--python`, task 01a0d8f8), bumped
- * at deploy from the pre-merge branch tip 61e8b603. This verb always passes
- * `--python`, which installers before this commit refuse, so the pin cannot
- * move to an older commit. Pin a commit on main, never a branch tip: a squash
+ * This is the SQUASH sha on hermes-suite-channel main of PR #6, v0.2.0
+ * (overridable install repo, no hard-coded org in hints, task 01a14a7d-58f6;
+ * Burrow migration). It replaced d9918533 (PR #3, the #!/bin/sh launcher fix
+ * and `--python`). This verb always passes `--python`, which installers before
+ * d9918533 refuse, so the pin cannot move to an older commit than that. Pin a commit on main, never a branch tip: a squash
  * merge deletes the branch and the tip would dangle.
  */
-export const HERMES_CHANNEL_REF = "d9918533f0b4c5f2035ed98803fd7906030bd1bf";
-export const HERMES_CHANNEL_REPO = "https://github.com/Startup-Suite/hermes-suite-channel.git";
+export const HERMES_CHANNEL_REF = "71041456d605e2d3341a214e5c09e924148f3558";
+/** The channel repo's name. Its owner comes from repo_source.ts (SUITE_GITHUB_OWNER). */
+export const HERMES_CHANNEL_REPO_NAME = "hermes-suite-channel";
+
+export function hermesChannelRepo(env: Env = process.env): string {
+  return httpsCloneUrl(HERMES_CHANNEL_REPO_NAME, env);
+}
 
 /** The hermes-agent commit the config shape below was measured against. */
 export const HERMES_AGENT_REF = "fdec926ef54391edcf6caad5f7f6761fdcccdaa2";
@@ -818,7 +824,7 @@ export function hermesWriter(ctx: { opts: HermesOptions | null }, deps: HermesDe
     return ctx.opts;
   };
   const channelRef = deps.channelRef ?? HERMES_CHANNEL_REF;
-  const channelRepo = deps.channelRepo ?? HERMES_CHANNEL_REPO;
+  const channelRepo = deps.channelRepo ?? hermesChannelRepo(deps.env);
   const checkout = (): string => channelCheckoutDir(deps.env);
   const fail = (code: string, message: string): StampFailure =>
     new StampFailure(EXIT_FAILED, code, redact(message, state.secrets));
@@ -886,7 +892,7 @@ export function hermesWriter(ctx: { opts: HermesOptions | null }, deps: HermesDe
         const detail = f.stderr || f.stdout;
         throw fail(
           "plugin_fetch_failed",
-          [`the plugin checkout at ${dir} could not fetch ${channelRef}:`, detail.trim(), ...pullRemedyLines(classifyPullFailure(detail), dir)].join("\n"),
+          [`the plugin checkout at ${dir} could not fetch ${channelRef}:`, detail.trim(), ...pullRemedyLines(classifyPullFailure(detail), dir, HERMES_CHANNEL_REPO_NAME, deps.env)].join("\n"),
         );
       }
     }
