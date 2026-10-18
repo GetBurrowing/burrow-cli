@@ -43,6 +43,7 @@ import {
   claudeJsonPath,
   cloneOrUpdate,
   connectionReport,
+  ConvergenceFailed,
   defaultCheckout,
   envReference,
   packageCount,
@@ -229,13 +230,34 @@ export function needsRegistration(plan: McpPlan): boolean {
 /* ------------------------------------------------------------------------- */
 
 export interface WiringResult {
-  checkout: CheckoutOutcome | "present";
+  /** "failed": the clone or `bun install` failed; the launch went on (see {@link launchWarning}). */
+  checkout: CheckoutOutcome | "present" | "failed";
   claudeMd: "write" | "skip";
   conventions: ConventionsPlan["claudeMd"];
   /** Entries written by this call, by name. Empty when both were current. */
   registered: string[];
-  /** False only when entries were written and then did not verify. */
+  /** False when entries were written and then did not verify, or did not converge. */
   connected: boolean;
+  /** Convergence steps that failed and were warned about instead of stopping the launch. */
+  warnings: string[];
+}
+
+/**
+ * A CONVERGENCE STEP THAT FAILS MUST NOT STOP THE LAUNCH (Dalton, 2026-10-17).
+ * The plugin checkout (clone, `bun install`) and the alias convergence after
+ * registration are both repairs: when one fails, the agent is started anyway
+ * on the entries it has, and the failure is printed loudly, once, naming the
+ * folder and what to run. A missing token or a refused `claude mcp add` still
+ * stops the launch: those leave no entry to launch on. (`burrow init` does no
+ * wiring, so it is not affected either way.)
+ */
+export function launchWarning(cwd: string, step: string, error: unknown): string[] {
+  const detail = error instanceof Error ? error.message : String(error);
+  return [
+    `${CLI_NAME}: WARNING: ${step} failed for ${cwd}; launching anyway.`,
+    ...detail.split("\n").map((l) => `${CLI_NAME}:   ${l}`),
+    `${CLI_NAME}: run \`${CLI_NAME} doctor\` in ${cwd} to see what is left to fix.`,
+  ];
 }
 
 /**
@@ -311,7 +333,19 @@ export async function ensureClaudeWiring(
   options: WiringOptions = {},
 ): Promise<WiringResult> {
   const checkoutDir = options.checkout ?? defaultCheckout(deps.env);
-  const checkout = await ensureCheckout(deps, checkoutDir);
+  const warnings: string[] = [];
+  const warn = (step: string, error: unknown): void => {
+    const lines = launchWarning(deps.cwd, step, error);
+    warnings.push(...lines);
+    for (const line of lines) deps.out(line);
+  };
+  let checkout: WiringResult["checkout"];
+  try {
+    checkout = await ensureCheckout(deps, checkoutDir);
+  } catch (error) {
+    warn("the channel plugin install", error);
+    checkout = "failed";
+  }
   const md = ensureClaudeMd(deps);
 
   const plan = planMcp(deps, config, checkoutDir);
@@ -336,7 +370,15 @@ export async function ensureClaudeWiring(
       invocations.push(toolsAddArgs(config.suiteUrl, tokenLiteral, headers));
       registered.push(TOOLS_SERVER);
     }
-    for (const line of await registerServers(deps, invocations, config.runtimeId, config.suiteUrl)) deps.out(line);
+    let converged = true;
+    try {
+      for (const line of await registerServers(deps, invocations, config.runtimeId, config.suiteUrl)) deps.out(line);
+    } catch (error) {
+      if (!(error instanceof ConvergenceFailed)) throw error;
+      for (const line of error.lines) deps.out(line);
+      warn("MCP convergence", error);
+      converged = false;
+    }
     if (writes && config.tokenEnv !== undefined) {
       deps.out(row("", "", `token read from ${config.tokenEnv} at launch; export it or the channel will not authenticate`));
     }
@@ -345,7 +387,7 @@ export async function ensureClaudeWiring(
     // for it. A failure here is reported, not fatal: the agent still starts.
     const report = connectionReport(await verifyConnections(deps));
     for (const line of report.lines) deps.out(line);
-    connected = report.ok;
+    connected = report.ok && converged;
   }
-  return { checkout, ...md, registered, connected };
+  return { checkout, ...md, registered, connected, warnings };
 }

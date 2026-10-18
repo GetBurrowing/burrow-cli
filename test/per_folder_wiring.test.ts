@@ -8,7 +8,7 @@
  * where and in which encoding, never the value.
  */
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import {
   agentConfigFor,
@@ -19,7 +19,7 @@ import {
   readAgentSecrets,
   writeAgentConnection,
 } from "../src/agent_connections.ts";
-import { restoreWirer, runClaude, type ClaudeDeps } from "../src/commands/claude.ts";
+import { restoreWirer, runClaude, WIRING_FAILED_EXIT, type ClaudeDeps } from "../src/commands/claude.ts";
 import {
   CHANNEL_SERVER,
   MCP_JSON,
@@ -458,10 +458,15 @@ function rosterFor(bx: Box, dirs: string[]): RosterEntry[] {
   });
 }
 
-async function restoreOnce(bx: Box, roster: RosterEntry[], order: string[]): Promise<{ failed: string[] }> {
+async function restoreOnce(
+  bx: Box,
+  roster: RosterEntry[],
+  order: string[],
+  run?: Parameters<typeof restoreWirer>[2],
+): Promise<{ failed: string[] }> {
   const ft = fakeTmux();
   const log: string[] = [];
-  const wire = restoreWirer(bx.fx.env, (l) => void log.push(l));
+  const wire = restoreWirer(bx.fx.env, (l) => void log.push(l), run);
   const deps: RestoreDeps = {
     tmux: {
       ...ft.tmux,
@@ -841,6 +846,109 @@ describe("registration converges on one startup-suite and one suite-channel (01a
     await restoreOnce(bx, rosterFor(bx, [bx.a]), []);
     expect(adds(bx).length).toBe(before);
     expect(readFileSync(claudeJson(bx)).equals(bytes)).toBe(true);
+  });
+});
+
+describe("a failed convergence step warns and launches; it never stops the agent (B release fix)", () => {
+  type Run = NonNullable<Parameters<typeof restoreWirer>[2]>;
+
+  /** The real stub claude, except the calls `refuse` matches exit 1 with `why`. */
+  function failing(bx: Box, store: ReturnType<typeof createStore>, refuse: (argv: string[]) => boolean, why: string): Run {
+    return async (argv, opts) =>
+      refuse(argv) ? { exitCode: 1, stdout: "", stderr: why } : spawnWithSecrets(argv, store, { ...opts, env: bx.fx.env });
+  }
+  const userAliasRemove = (argv: string[]): boolean => argv[1] === "mcp" && argv[2] === "remove" && argv[3] === "suite" && argv.includes("user");
+
+  /** A wired a/ that ALSO sees a user-scope `suite` alias (Kelly's shape). */
+  async function wiredWithAlias(): Promise<{ bx: Box; A: Agent }> {
+    const { A } = agents();
+    const bx = box();
+    await initIn(bx, bx.a, A);
+    await restoreOnce(bx, rosterFor(bx, [bx.a]), []);
+    expectNames(bx, bx.a, A);
+    const raw = JSON.parse(readFileSync(claudeJson(bx), "utf8")) as { mcpServers?: Record<string, unknown> };
+    raw.mcpServers = { suite: { type: "http", url: "https://old.example.invalid/mcp", headers: { Authorization: `Bearer ${canary("old")}` } } };
+    writeFileSync(claudeJson(bx), JSON.stringify(raw), { mode: 0o600 });
+    bx.output.length = 0;
+    return { bx, A };
+  }
+
+  async function claudeP(bx: Box, run: Run, store: ReturnType<typeof createStore>): Promise<{ code: number; execs: string[][] }> {
+    const execs: string[][] = [];
+    const deps: ClaudeDeps = {
+      tmux: fakeTmux().tmux,
+      env: bx.fx.env,
+      cwd: bx.a,
+      store,
+      config: emptyConfig(),
+      statePath: resolve(bx.fx.root, "state.json"),
+      color: false,
+      platform: "linux",
+      prompter: mute(),
+      sleep: async () => {},
+      out: (l) => void bx.output.push(l),
+      err: (l) => void bx.output.push(l),
+      exec: async (argv) => (execs.push(argv), 0),
+      wiring: { run, isTTY: false, canPrompt: false },
+    };
+    const code = await runClaude(deps, { userArgs: ["-p", "hi"], force: false });
+    return { code, execs };
+  }
+
+  test("burrow claude: a user-scope alias removal that fails prints the warning and Claude Code is still launched", async () => {
+    const { bx, A } = await wiredWithAlias();
+    const store = createStore();
+    const { code, execs } = await claudeP(bx, failing(bx, store, userAliasRemove, "EACCES"), store);
+    expect(code).toBe(0);
+    expect(execs).toHaveLength(1);
+    const said = bx.output.join("\n");
+    expect(said).toContain("burrow: WARNING: MCP convergence failed");
+    expect(said).toContain("launching anyway");
+    expect(said).toContain("suite: user scope, old.example.invalid");
+    expect(said).not.toContain("could not set up Claude Code");
+    // The alias is still there (the removal really failed) and a/'s own entries are untouched.
+    const after = JSON.parse(readFileSync(claudeJson(bx), "utf8")) as { mcpServers?: Record<string, unknown> };
+    expect(Object.keys(after.mcpServers ?? {})).toEqual(["suite"]);
+    expectNames(bx, bx.a, A);
+    expectNoLeaks(bx, [A.token]);
+  });
+
+  test("burrow restore: the same failure warns in the restore log and the session is still started", async () => {
+    const { bx, A } = await wiredWithAlias();
+    const order: string[] = [];
+    const r = await restoreOnce(bx, rosterFor(bx, [bx.a]), order, failing(bx, createStore(), userAliasRemove, "EACCES"));
+    expect(r.failed).toEqual([]);
+    expect(order).toEqual([`wire ${bx.a}`, `start ${bx.a}`]);
+    expect(bx.output.some((l) => l.includes("WARNING: MCP convergence failed") && l.includes("launching anyway"))).toBe(true);
+    expect(bx.output.some((l) => l.includes("not started"))).toBe(false);
+    expectNoLeaks(bx, [A.token]);
+  });
+
+  test("burrow claude: a plugin install (`bun install`) that fails prints the warning and Claude Code is still launched", async () => {
+    const { A } = agents();
+    const bx = box();
+    await initIn(bx, bx.a, A);
+    rmSync(resolve(defaultCheckout(bx.fx.env), "node_modules"), { recursive: true, force: true });
+    const store = createStore();
+    const bunInstall = (argv: string[]): boolean => argv[0] === "bun" && argv[1] === "install";
+    const { code, execs } = await claudeP(bx, failing(bx, store, bunInstall, "network down"), store);
+    expect(code).toBe(0);
+    expect(execs).toHaveLength(1);
+    expect(bx.output.join("\n")).toContain("burrow: WARNING: the channel plugin install failed");
+    // Registration still happened from the record.
+    expectNames(bx, bx.a, A);
+    expectNoLeaks(bx, [A.token]);
+  });
+
+  test("BOUNDARY: a refused `claude mcp add` is not a convergence step; it still stops the launch", async () => {
+    const { A } = agents();
+    const bx = box();
+    await initIn(bx, bx.a, A);
+    const store = createStore();
+    const add = (argv: string[]): boolean => argv[0] === "claude" && argv[1] === "mcp" && argv[2] === "add";
+    const { code, execs } = await claudeP(bx, failing(bx, store, add, "refused"), store);
+    expect(code).toBe(WIRING_FAILED_EXIT);
+    expect(execs).toHaveLength(0);
   });
 });
 

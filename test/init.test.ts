@@ -651,13 +651,22 @@ describe("an existing checkout", () => {
     expect(invocation(fx, ["git", "clone"])).toBeNull();
   });
 
-  test("an incomplete checkout is fast-forwarded; a failed fast-forward stops and is never forced", async () => {
+  // Before the 0.8.0 release fix a failed fast-forward threw out of the wiring
+  // and stopped the launch. A plugin checkout is a convergence step: it now
+  // warns loudly and the launch goes on (claude_wiring.ts launchWarning). The
+  // no-force promise is unchanged.
+  test("an incomplete checkout is fast-forwarded; a failed fast-forward is warned about, the launch goes on, and it is never forced", async () => {
     const fx = makeFixture({ pullFails: true });
     // .git but no src/index.ts: not usable, so the wiring tries to update it.
     mkdirSync(resolve(fx.checkout, ".git"), { recursive: true });
     const deps = makeDeps(fx, scriptedPrompter(credentialAnswers()));
 
-    await expect(initThenWire(deps)).rejects.toThrow(PullFailed);
+    const { wiring } = await initThenWire(deps);
+    expect(wiring.checkout).toBe("failed");
+    const said = deps.lines.join("\n");
+    expect(said).toContain("WARNING: the channel plugin install failed");
+    expect(said).toContain("could not be fast-forwarded");
+    expect(wiring.warnings.length).toBeGreaterThan(0);
 
     expect(invocation(fx, ["git", "pull", "--ff-only"])).not.toBeNull();
     for (const line of fx.log()) {
@@ -665,7 +674,6 @@ describe("an existing checkout", () => {
       expect(line).not.toMatch(/--force|-f\b/);
       expect(line).not.toMatch(/\tclean\b/);
     }
-    expect(invocation(fx, ["claude", "mcp", "add", CHANNEL_SERVER])).toBeNull();
   });
 });
 

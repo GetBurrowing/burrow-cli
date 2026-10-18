@@ -45,6 +45,17 @@ and why.
   imports it. A folder with neither conventions file gets
   `BURROW_CONVENTIONS.md`; an existing `SUITE_CONVENTIONS.md` keeps its name and
   is still the one refreshed.
+- **A failed convergence step no longer stops a launch.** When the channel
+  plugin checkout (clone, fast-forward, `bun install`) or the MCP alias
+  convergence fails, `burrow claude` and `burrow restore` print a
+  `burrow: WARNING: ... failed for <folder>; launching anyway.` block and start
+  the agent. A missing token or a refused `claude mcp add` still stops it.
+- **Channel pins** move to the tagged Burrow plugin releases:
+  `OPENCLAW_CHANNEL_REF` is `ad307416839aaf266ce6fd941dbcc25446e0445c`
+  (burrow-channel-openclaw v0.8.0) and `HERMES_CHANNEL_REF` is
+  `f1399d77eba86f898d0d32de8c8baa0a783a72ec` (burrow-channel-hermes v0.3.0).
+  The Claude Code plugin is not pinned; a fresh checkout clones its main
+  (burrow-channel-claude-code 0.4.0, a5a981bc, at release time).
 - **Unchanged on purpose:** the lib and data dirs (`~/.local/share/suite/`),
   the watchdog and restore unit names and launchd labels, the binary path the
   units run, the tmux session prefix `suite-`, and the repo names.

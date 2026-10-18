@@ -887,6 +887,24 @@ export function convergenceProblems(view: ScopeView, host: string | null): strin
   return problems;
 }
 
+/**
+ * The folder's MCP entries did not converge after registration. Carries the
+ * report lines produced before the check (removal rows, replace rows), so a
+ * caller that goes on regardless can still print them.
+ *
+ * A LAUNCH (`burrow claude`, `burrow restore`) catches this and starts the
+ * agent with a warning: an agent that runs with one stale alias beside its
+ * entries is better than an agent that does not run (Dalton, 2026-10-17).
+ */
+export class ConvergenceFailed extends Error {
+  readonly lines: string[];
+  constructor(message: string, lines: string[]) {
+    super(message);
+    this.name = "ConvergenceFailed";
+    this.lines = lines;
+  }
+}
+
 /** `~/.claude.json`, or null when it does not exist or cannot be read. */
 function readClaudeJson(env: Record<string, string | undefined>): string | null {
   try {
@@ -901,8 +919,8 @@ function readClaudeJson(env: Record<string, string | undefined>): string | null 
  * CONVERGE: remove every {@link LEGACY_ALIASES} entry this folder sees, and
  * check what is left.
  *
- * Returns the report lines; THROWS when the folder did not converge, listing
- * the entries. Canonical user-scope entries are never touched: a clash is
+ * Returns the report lines; THROWS {@link ConvergenceFailed} when the folder
+ * did not converge, listing the entries. Canonical user-scope entries are never touched: a clash is
  * resolved by removing THIS directory's local entry and re-adding. The only
  * user-scope call this makes is the removal of an alias, printed as it is done.
  *
@@ -988,7 +1006,10 @@ export async function registerServers(
   const host = suiteUrl === undefined ? null : hostOf(suiteUrl);
   const problems = afterView === null ? [`${claudeJsonPath(deps.env)} cannot be read back`] : convergenceProblems(afterView, host);
   if (problems.length > 0) {
-    throw new Error([`this folder's MCP entries did not converge (${deps.cwd}):`, ...problems.map((p) => `  ${p}`)].join("\n"));
+    throw new ConvergenceFailed(
+      [`this folder's MCP entries did not converge (${deps.cwd}):`, ...problems.map((p) => `  ${p}`)].join("\n"),
+      lines,
+    );
   }
   return lines;
 }
