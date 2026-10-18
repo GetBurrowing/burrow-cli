@@ -10,6 +10,56 @@ that matters in the field: is this one newer than what I had?
 Minor for a new capability or a changed default; patch for a fix that changes no
 behaviour anyone was relying on.
 
+## 0.8.1
+
+Ported from the 2026-09-08 dsh working tree (most of which already landed
+separately); this is the part that did not.
+
+- **dsh agents can post into a Suite space: the federation plugin registers a
+  `suite_reply` tool.** The hosted Suite MCP surface has no tool that posts a
+  message into a space — only reads, plus `dm_create`, which is humans-only —
+  and Claude-side agents get their `suite_reply` from a separate local MCP
+  bridge (a 2026-08-31 product decision keeps the dsh send path named
+  `suite_reply`). This closes the gap over the websocket the plugin already
+  holds. The contract is honest about what the channel can answer: core never
+  replies to a `reply` push (`handle_in` returns `{:noreply, socket}` on both
+  branches), so the tool sends, listens ~1.5s for a separate `error` event,
+  and resolves ok only if none arrives — a refusal check, not a delivery
+  receipt. When `space_send_message` lands on the hosted surface this should
+  be deleted in favour of it.
+- **Registration of the tool is non-fatal, and `tools` is an optional nested
+  inject.** The plugin ships in every `burrow deepseek` install, and dsh builds
+  without a mounted tools service must lose the send path, not the agent.
+  Cordis holds a plugin INACTIVE until every entry in its top-level `inject`
+  mounts, so `tools` is never listed there: it is resolved by a nested
+  `ctx.inject(['tools'], ...)` inside apply. A build without the service keeps
+  that nested fiber inactive and the plugin alive; a build with it registers
+  the tool (`TOOL-REGISTERED` on stderr), and a throwing `register` is logged
+  loudly (`TOOL-REGISTER-FAILED`) and never rethrown — federation carries on
+  either way. The tool itself arrives through `@deepseek-ai/dsh-tools`
+  (`defineTool`).
+- **The `session/event` live tool trace.** `tool/call` lines with truncated
+  arguments and `tool/result` lines carrying only byte sizes are written to
+  stderr as they are recorded, so a `burrow deepseek` pane shows what the
+  agent is doing between ATTENTION and REPLY instead of a burst of history
+  afterwards. Registered on `ctx` so it needs no per-session re-attach; the
+  whole trace body is wrapped so it can never disturb the turn it describes.
+- **Queued dispatches show typing.** A message queued behind a running turn
+  in the same space pushes a `typing` indicator, so an agent that is visibly
+  working is distinguishable from one that dropped the message.
+- **`burrow deepseek` records its launches for restore-on-boot.** The verb
+  now carries `restore` deps exactly as `burrow claude` does: a successful
+  tmux session create records the session with kind `deepseek` and the full
+  tmux argv, so `suite restore` can relaunch dsh agents alongside recorded
+  claude ones. Injected, so tests record nothing.
+- **Tests:** suite_reply resolves ok when no error event arrives within the
+  grace window and `ok:false` with the error detail when one does; non-fatal
+  registration when the tools service is missing or `register` throws; the
+  queued `typing` push; the trace's truncation, byte counting and
+  crash-proofing; deepseek launch recording (created yes, attach no).
+- **Rollback:** `SUITE_CLI_REF=<merge-commit-of-0.8.0> suite update`
+  reinstalls 0.8.0. It does not touch credentials or connections.
+
 ## 0.8.0
 
 The command is now `burrow`. Everything that worked under `suite` still works;

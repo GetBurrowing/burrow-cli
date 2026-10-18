@@ -2,5 +2,8 @@
   "name": "suite-federation",
   "version": "0.1.0",
   "type": "module",
-  "main": "index.js"
+  "main": "index.js",
+  "dependencies": {
+    "@deepseek-ai/dsh-tools": "0.1.1-rc.2"
+  }
 }
