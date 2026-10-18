@@ -86,7 +86,7 @@ offer says so before you answer it.
 ## Install
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/Startup-Suite/suite-cli/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/Startup-Suite/burrow-cli/main/install.sh | sh
 ```
 
 The installer never uses `sudo`. It installs to `$XDG_BIN_HOME`, or
@@ -106,7 +106,7 @@ installer and tarball, the Claude Code plugin, and the OpenClaw and Hermes
 channels. `burrow update` prints the `owner/repo` it resolved.
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/<owner>/suite-cli/main/install.sh | BURROW_GITHUB_OWNER=<owner> sh
+curl -fsSL https://raw.githubusercontent.com/<owner>/burrow-cli/main/install.sh | BURROW_GITHUB_OWNER=<owner> sh
 ```
 
 ## Connect an agent folder
@@ -375,15 +375,15 @@ none works unchanged.
 ## `burrow hermes`
 
 Stamps a [Hermes Agent](https://github.com/NousResearch/hermes-agent) root
-Suite-ready, then runs its gateway (`hermes gateway run`) in the tmux session
-`suite-<root dir name>`. Hermes state lives under the root
+Burrow-ready, then runs its gateway (`hermes gateway run`) in the tmux session
+`burrow-<root dir name>`. Hermes state lives under the root
 (`HERMES_HOME=<root>/.hermes` unless `--hermes-home` says otherwise), never in
 `~/.hermes`.
 
 ```
 burrow hermes --root ~/agents/scribe \
   --suite-url https://suite.example.invalid --runtime-id <id> \
-  --token-ref file:/home/me/.config/suite/tokens/scribe \
+  --token-ref file:/home/me/.config/burrow/tokens/scribe \
   --model-base-url http://127.0.0.1:8080/v1 --model some-model
 ```
 
@@ -414,10 +414,10 @@ What it writes, and with what mode:
 | `$HERMES_HOME/.env` | the channel installer; this CLI adds `CUSTOM_MODEL_API_KEY` | `0600` for this CLI's write | Channel keys; the model key when `--model-api-key-ref` is given |
 | `$HERMES_HOME/config.yaml` | `hermes config set` (model keys, headless policy, the toolset key); the channel installer (`mcp_servers.startup-suite`) | Hermes's own | Model routing; `approvals.mode: off` and `hooks_auto_accept: true` when absent; `platform_toolsets.startup_suite` unless `--full-toolset` |
 | `$HERMES_HOME/plugins/startup-suite-platform` | the channel installer | the installer's | The channel plugin |
-| `~/.local/share/suite/hermes-suite-channel` | this CLI (`git`) | git's | The channel checkout, pinned to one commit |
-| `~/.local/state/suite/agents.json` | this CLI | default | The roster entry, on session creation |
+| `~/.local/share/burrow/burrow-channel-hermes` | this CLI (`git`) | git's | The channel checkout, pinned to one commit |
+| `~/.local/state/burrow/agents.json` | this CLI | default | The roster entry, on session creation |
 
-With `--install-hermes` it also writes `~/.local/share/suite/hermes-agent/`
+With `--install-hermes` it also writes `~/.local/share/burrow/hermes-agent/`
 (`0700`, holding the pinned upstream installer, `0700`) and `$HERMES_HOME`
 (`0700`). **The upstream installer writes outside `HERMES_HOME`**: shell rc PATH
 lines and `~/.local/bin/{hermes,hermes-agent,hermes-acp}`. The stamp reports
@@ -458,7 +458,7 @@ is preserved and reported in the stamp warnings.
 
 - **Migration.** A repeat stamp recognizes the former managed value
   `[hermes-webhook]` and upgrades it to the bounded headless set.
-- **The opt-out.** `--full-toolset` removes either Suite-managed list and leaves
+- **The opt-out.** `--full-toolset` removes either Burrow-managed list and leaves
   the key to Hermes's own platform default. It does not write a second "full"
   list.
 - **An operator's value wins.** Any other `platform_toolsets.startup_suite`
@@ -469,9 +469,9 @@ is preserved and reported in the stamp warnings.
 
 ## `burrow openclaw`
 
-Stamps an [OpenClaw](https://www.npmjs.com/package/openclaw) root Suite-ready
+Stamps an [OpenClaw](https://www.npmjs.com/package/openclaw) root Burrow-ready
 through OpenClaw's own non-interactive path, then runs `openclaw gateway run` in
-the tmux session `suite-<root dir name>`. State lives under the root
+the tmux session `burrow-<root dir name>`. State lives under the root
 (`OPENCLAW_STATE_DIR=<root>/.openclaw`, `OPENCLAW_CONFIG_PATH=<root>/.openclaw/openclaw.json`,
 `OPENCLAW_HOME=<root>`), never in `~/.openclaw`. The config is written by
 upstream: `openclaw onboard --non-interactive --accept-risk` for the base, then
@@ -513,10 +513,10 @@ What it writes, and with what mode:
 | `<root>/.suite-stamp.json` | this CLI | default | Stamp record, as for Hermes. No secret |
 | `<root>/.openclaw/` | this CLI | `0700` | OpenClaw's state directory |
 | `<root>/.openclaw/openclaw.json` | `openclaw onboard` / `openclaw config set` | OpenClaw's own | `gateway.port`, `plugins.load.paths`, `plugins.allow`, the plugin and channel entries, the account (its `token` is the **ref string**), one route binding |
-| `~/.local/share/suite/openclaw-suite-channel` | this CLI (`git`, `npm ci`) | git's / npm's | The channel checkout pinned to one commit, and its dependencies |
-| `~/.local/state/suite/agents.json` | this CLI | default | The roster entry, on session creation |
+| `~/.local/share/burrow/burrow-channel-openclaw` | this CLI (`git`, `npm ci`) | git's / npm's | The channel checkout pinned to one commit, and its dependencies |
+| `~/.local/state/burrow/agents.json` | this CLI | default | The roster entry, on session creation |
 
-With `--install-openclaw` it also writes `~/.local/share/suite/openclaw/`
+With `--install-openclaw` it also writes `~/.local/share/burrow/openclaw/`
 (`0700`), an npm prefix holding the pinned package; nothing global.
 
 **The model key is not stored.** openclaw.json holds an env ref to
@@ -534,7 +534,7 @@ burrow codex --root ~/agents/oddjob --approvals decline --sandbox workspace-writ
 ```
 
 ```
-burrow codex                    connection, Codex login, then tmux session suite-<agent>
+burrow codex                    connection, Codex login, then tmux session burrow-<agent>
   └ burrow codex --no-session   the bridge: Burrow runtime socket ⇄ app-server
       └ codex app-server       Burrow MCP servers passed as -c overrides
           └ burrow codex --reply-mcp   the suite-channel MCP server (suite_reply …)
@@ -574,7 +574,7 @@ burrow codex                    connection, Codex login, then tmux session suite
   or permission request is refused. Forms meant for a human (MCP elicitations,
   requests for user input) are declined under both settings. Every decision is
   logged in the pane.
-- **Supervision.** The same as `burrow claude`: tmux session `suite-<agent>`,
+- **Supervision.** The same as `burrow claude`: tmux session `burrow-<agent>`,
   recorded for `burrow restore`, and the watchdog ensured on create.
   `--no-session` runs the bridge in the foreground for a service manager. If
   the app-server exits, the bridge exits non-zero rather than idling.
@@ -593,7 +593,7 @@ inside tmux.
 **Per-root isolation.** Each agent's harness state lives under its root, and
 every harness child runs with an allowlisted environment: it inherits no
 `BURROW_*`, `SUITE_*`, `HERMES_*` or `OPENCLAW_*` from the operator's shell. What two
-agents on one machine do share lives under `~/.local/share/suite/`: the pinned
+agents on one machine do share lives under `~/.local/share/burrow/`: the pinned
 plugin checkouts and any managed harness install. Those are programs, not agent
 state.
 
@@ -805,14 +805,42 @@ written under **both** names. The pinned channel plugins and an older CLI
 reached by a pinned `burrow update` read only `SUITE_*`. A harness child never
 receives either prefix.
 
-**Config dir: chosen once, by what exists.** `<config>` is `$XDG_CONFIG_HOME` or
-`~/.config`. If `<config>/burrow` exists it is used. Otherwise, if
-`<config>/suite` exists, that is used, for reads and writes, so an upgraded host
-keeps writing where its records already are. A host with neither gets
-`<config>/burrow`. When both exist, an agent record missing from `burrow` is
-also looked up in `<config>/suite/agents/`, read-only. Nothing is copied, moved
-or deleted. Core's agent-host writes `~/.config/suite/agents/`, so a container
-it set up keeps resolving to `suite`.
+**State moves once, on the first 0.9 run.** Before 0.9.0 the CLI kept its
+library and plugin checkouts in `<data>/suite`, its roster and session logs in
+`<state>/suite`, and its config in `<config>/suite` (`<data>`, `<state>` and
+`<config>` are the XDG bases: `~/.local/share`, `~/.local/state`, `~/.config`).
+From 0.9.0 every path is under `burrow`, unconditionally. The first 0.9 run of
+a verb people type (not `--version`, `--help`, `update`, `pane-status` or any
+`--stamp-only`) moves what is there, writing only to stderr, and then never
+scans the old directories again:
+
+* An entry no live process uses is renamed into place; across filesystems it
+  is copied to `<target>.incoming`, renamed, and only then removed. An entry a
+  live process uses is copied and the original is left as it was, so no
+  running agent loses its files. From `<config>/suite` only what this CLI wrote
+  moves (`config.json`, `state.json`, `watch.env`, `agents`,
+  `credentials.json`); anything else stays where it is.
+* The record is `<state>/burrow/migration.json`. Once it says the migration
+  completed with nothing refused, a run reads that file and nothing else, so a
+  second run is a no-op. `migration.lock` beside it serialises two first runs.
+* Each old directory gets a `MOVED-TO-BURROW.txt` breadcrumb saying what moved
+  where, or `<old>.burrow-migration.txt` beside it when it cannot be written
+  into. An entry that could not move (no permission, no space) is named there
+  and in `migration.json`, keeps resolving to its old path, and is retried on
+  the next run.
+* Recorded paths follow: `~/.claude.json` channel entries, `openclaw.json`
+  plugin paths, `.dsh` patch files and Hermes `config.yaml`, each with a
+  `.bak-burrow-<ts>` backup. The watchdog and restore units become
+  `burrow-watch` and `burrow-agents`; the old unit file is kept as
+  `*.retired-by-burrow-<ts>`, and a unit whose cgroup holds a tmux server or
+  pane is never stopped.
+* Nothing is deleted. The old library `<data>/suite/cli` is left in place,
+  because a running 0.8 watchdog executes from it; the installer writes
+  `<data>/burrow/cli`. `burrow doctor` lists every old directory still present
+  and what still uses it.
+
+New tmux sessions are `burrow-*`. A live `suite-*` session is still found,
+attached and restored, and a stale one comes back as `burrow-*`.
 
 **MCP server names are unchanged: `startup-suite` and `suite-channel`.** Every
 agent's permission allowlists, skills and `CLAUDE.md` name the
@@ -820,19 +848,19 @@ agent's permission allowlists, skills and `CLAUDE.md` name the
 `server:suite-channel`. `burrow init` registers exactly those two names and
 removes leftover `suite` or `burrow` alias entries, printing each removal.
 
-**The lib and data dirs are unchanged: `~/.local/share/suite/`.** Core's
-agent-host imports `/usr/local/share/suite/cli/src/claude_md.ts` and reads its
-`SUITE_CONVENTIONS` export (now an alias of `BURROW_CONVENTIONS`, the same
-string), and installed MCP entries and supervisor units record absolute paths
-under the data dir.
+**Still named `suite`, on purpose:** the `--suite-url` flag (`--burrow-url`
+is accepted too, and wins), the `SUITE_CONVENTIONS.md` file in folders that
+already have it, and the `SUITE_CONVENTIONS` export of `src/claude_md.ts`
+(an alias of `BURROW_CONVENTIONS`, the same string), which core's agent-host
+imports from the installed library.
 
-**Also still named `suite`, for the same reason (renaming would create a second
-copy beside the live one):** the watchdog and restore units (`suite-watch`,
-`suite-agents`, and their launchd labels), the binary path those units run
-(`~/.local/bin/suite`), tmux session names (`suite-<agent>`), the
-`--suite-url` flag (`--burrow-url` is accepted too, and wins), the
-`SUITE_CONVENTIONS.md` file in folders that have it, and the GitHub repo
-`Startup-Suite/suite-cli` and the channel plugin repo names.
+**The repo is `burrow-cli`; it was `suite-cli` before 0.9.0.** GitHub
+redirects the old name after a repo rename, but nothing here relies on that:
+the installer, the tarball download and `burrow update` ask `burrow-cli` first
+and `suite-cli` only when that answers 404, so the same code works before the
+rename and after it. `BURROW_CLI_REPO` names one repo, with no fallback. The
+GitHub org is still `Startup-Suite` until it is renamed; `BURROW_GITHUB_OWNER`
+overrides it.
 
 ## Versioning
 
@@ -862,9 +890,8 @@ partial echo, and a count already answers the only question you have.
 
 Each agent folder's connection is a file pair under the user config dir,
 **outside the agent folder**. That dir is `~/.config/burrow` (or
-`$XDG_CONFIG_HOME/burrow`), except on a host that already has `~/.config/suite`
-and no `~/.config/burrow`, which keeps using `~/.config/suite` (see
-[Compatibility](#compatibility)):
+`$XDG_CONFIG_HOME/burrow`); a host set up before 0.9.0 has its old
+`~/.config/suite` records moved there once (see [Compatibility](#compatibility)):
 
 * `agents/<key>.json` holds the folder, the Burrow URL, the runtime id and the
   **names** of any extra headers. **It never holds a secret value** — a test
@@ -897,8 +924,8 @@ interface, and one implementation behind one is just indirection.
 
 ### Session naming — per working directory
 
-The session name is `suite-<directory name>-<8 hex of sha256 of the absolute
-path>`, e.g. `suite-ledger-3f2a91c0`. Two requirements decide this:
+The session name is `burrow-<directory name>-<8 hex of sha256 of the absolute
+path>`, e.g. `burrow-ledger-3f2a91c0`. Two requirements decide this:
 
 * **`burrow claude` twice from the same place must find the same session.** The
   name is a pure function of the resolved absolute path, so nothing has to be
@@ -906,6 +933,18 @@ path>`, e.g. `suite-ledger-3f2a91c0`. Two requirements decide this:
 * **Two projects must not collide.** The digest is of the absolute path, so
   `~/a/ledger` and `~/b/ledger` share the readable half and differ in the half
   that identifies them.
+
+**A session started before 0.9 keeps its `suite-` name until it next
+restarts.** Every launch verb looks for that `suite-` twin when no `burrow-`
+session exists and attaches to it rather than starting a second agent beside
+it, and `burrow status`, `burrow watch` and `burrow restore` list both
+prefixes. Renaming a live session would break every outside reference to it
+(keepalive scripts, a hand-written watchdog, `tmux attach -t`), so 0.9 never
+does. When a recorded `suite-` agent is dead, `burrow restore` relaunches it as
+`burrow-` and rewrites its roster entry in the same write. The one exception is
+an entry that runs a dev checkout's `cli.ts`, which keeps its recorded name.
+The watcher's own fallback session (`burrow-watch`, or `suite-watch` on a host
+not yet swapped) is never treated as an agent.
 
 The two alternatives were rejected on that second requirement.
 **Per runtime id** gives one box one session, so the second project silently
@@ -1074,6 +1113,12 @@ the ref installs `main` and prints a perfectly successful-looking install of the
 wrong thing. A ref containing anything other than letters, digits, `.`, `_`,
 `-`, `/` is refused by name rather than quoted and hoped for.
 
+A tag works as a ref from 0.9.0, bare (`v0.9.0`) or full (`refs/tags/v0.9.0`).
+A bare name is tried as a branch first and as a tag on a 404, so a branch still
+wins over a tag of the same name; a SHA or a full `refs/...` ref is fetched as
+given. The repo is `burrow-cli`; its pre-0.9.0 name is tried only when
+`burrow-cli` answers 404 (see [Compatibility](#compatibility)).
+
 Update needs `curl` or `wget`, plus `tar` and `sh`. A missing one is named up
 front, before the announcement, rather than surfacing as broken-pipe noise three
 commands later.
@@ -1163,7 +1208,7 @@ that reads as a permanent banner, and this is something that happened once, not
 something that lives there. It is deliberate rather than noise — **a wrapper
 that silently hides a flag containing the word "dangerously" trains you not to
 look at the next one.** The seen-flag is stored in
-`~/.config/suite/state.json`, never in a repository.
+`~/.config/burrow/state.json`, never in a repository.
 
 ## MCP registration
 

@@ -387,7 +387,7 @@ describe("stamping from nothing (file: ref)", () => {
 
     const o = outcomes(result);
     expect(o[`sanctioned_token_file ${tokenFilePath(hermesHome)}`]).toBe("written");
-    expect(o[`plugin_checkout ${join(home, ".local", "share", "suite", "hermes-suite-channel")}@${channelRef}`]).toBe("written");
+    expect(o[`plugin_checkout ${join(home, ".local", "share", "burrow", "burrow-channel-hermes")}@${channelRef}`]).toBe("written");
     expect(o["config_set model.context_length"]).toBe("written");
     expect(statSync(tokenFilePath(hermesHome)).mode & 0o777).toBe(0o600);
 
@@ -921,7 +921,7 @@ describe("the gateway session", () => {
     expect(classify(panes, dead, "suite-hermes-01a0d8f8", HERMES_AGENT_COMM)).toBe("stale");
   });
 
-  test("a fresh run creates suite-<name> running the --gateway-only relaunch, with no token anywhere, and records it", async () => {
+  test("a fresh run creates burrow-<name> running the --gateway-only relaunch, with no token anywhere, and records it", async () => {
     makeManagedPython();
     const tmux = fakeTmux();
     const written: Record<string, string> = {};
@@ -938,7 +938,7 @@ describe("the gateway session", () => {
     const created = tmux.ran.filter((a) => a[1] === "new-session");
     expect(created).toHaveLength(1);
     const create = created[0] ?? [];
-    expect(create.slice(0, 5)).toEqual(["tmux", "new-session", "-d", "-s", `suite-${agentNameForRoot(root)}`]);
+    expect(create.slice(0, 5)).toEqual(["tmux", "new-session", "-d", "-s", `burrow-${agentNameForRoot(root)}`]);
     expect(create).toContain("--gateway-only");
     expect(create).toContain("--no-session");
     expect(create.join(" ").includes(token)).toBe(false);
@@ -946,7 +946,7 @@ describe("the gateway session", () => {
 
     const roster = parseRoster(Object.values(written)[0] ?? "");
     expect(roster).toHaveLength(1);
-    expect(roster[0]).toMatchObject({ kind: "hermes", session: `suite-${agentNameForRoot(root)}`, cwd: root });
+    expect(roster[0]).toMatchObject({ kind: "hermes", session: `burrow-${agentNameForRoot(root)}`, cwd: root });
   });
 
   test("a live session is attached to (or left running), never duplicated", async () => {
@@ -983,7 +983,7 @@ describe("the gateway session", () => {
       now: () => new Date("2026-09-25T00:00:00Z"),
       log: () => {},
     };
-    const session = `suite-${agentNameForRoot(root)}`;
+    const session = `burrow-${agentNameForRoot(root)}`;
     // First launch: nothing recorded yet, so no stale line.
     await runHermes(stampArgs(), makeDeps({ tmux: tmux.deps, restore }));
     expect(stderr.join("")).not.toContain("was stale");
@@ -1073,13 +1073,13 @@ describe("--stamp-only as a subprocess: the machine contract", () => {
 });
 
 describe("pins", () => {
-  test("the channel is pinned to the commit tagged v0.3.0 on burrow-channel-hermes main (PR #7)", () => {
-    expect(HERMES_CHANNEL_REF).toBe("f1399d77eba86f898d0d32de8c8baa0a783a72ec");
+  test("the channel is pinned to the commit tagged v0.3.1 on burrow-channel-hermes main (PR #8)", () => {
+    expect(HERMES_CHANNEL_REF).toBe("36e3d5398d724be0fe55232a7df536454ca189c9");
   });
 
   test("the pin's DEPLOYER comment is present, so the bump is not forgotten at merge", () => {
     const src = readFileSync(resolve(import.meta.dir, "..", "src", "commands", "hermes.ts"), "utf8");
     const at = src.indexOf("export const HERMES_CHANNEL_REF");
-    expect(src.slice(Math.max(0, at - 1200), at)).toContain("DEPLOYER: BUMP THIS BEFORE suite-cli MERGES.");
+    expect(src.slice(Math.max(0, at - 1200), at)).toContain("DEPLOYER: BUMP THIS BEFORE burrow-cli MERGES.");
   });
 });

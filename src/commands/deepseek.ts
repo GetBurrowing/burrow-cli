@@ -1,5 +1,5 @@
 /**
- * `suite deepseek` — run a DeepSeek Harness agent federated into Startup Suite.
+ * `suite deepseek` — run a DeepSeek Harness agent federated into Burrow.
  *
  * Sibling to `suite claude`, and deliberately a different SHAPE. `suite claude`
  * wraps a binary the user already installed and passes everything through.
@@ -34,13 +34,14 @@ import type { SuiteConfig } from "../config.ts";
 import { agentConfig, readAgentConnection, readAgentSecrets } from "../agent_connections.ts";
 import { createStore, TOKEN_KEY, assertNoSecretsInArgv, ttyPrompter, type CredentialStore, type Prompter } from "../secrets.ts";
 import { ensureConnection, ensureToken, hasConnection } from "../connection.ts";
-import { dataDir } from "../paths.ts";
+import { dataEntry } from "../paths.ts";
 import { bothNames, envValue } from "../env_names.ts";
 import {
   attachArgv,
   composeNewSession,
-  detectState,
+  derivedCandidates,
   liveTmuxDeps,
+  resolveLaunchSession,
   nestingPlan,
   SESSION_PREFIX,
   TMUX,
@@ -80,7 +81,7 @@ export const DSH_PACKAGES = ["@deepseek-ai/dsh@0.1.1-rc.2", "phoenix@^1.8.13", "
  * a program, not state. Agent state lives under the agent root instead.
  */
 export function harnessDir(env: NodeJS.ProcessEnv = process.env): string {
-  return join(dataDir(env), "deepseek");
+  return dataEntry("deepseek", env);
 }
 
 /**
@@ -166,7 +167,7 @@ export function parseDeepseekOptions(args: string[]): DeepseekOptions {
 }
 
 /**
- * The websocket URL for a Suite base URL.
+ * The websocket URL for a Burrow base URL.
  *
  * `/runtime/ws` is the endpoint `PlatformWeb.RuntimeChannel` serves; `/socket`
  * is the LiveView endpoint and answers a redirect, which surfaces as an opaque
@@ -289,7 +290,7 @@ export interface DeepseekDeps {
   /** Injected in tests; defaults to the live tmux. */
   tmux?: TmuxDeps;
   /**
-   * Asks for the Suite connection when this machine has none saved — the same
+   * Asks for the Burrow connection when this machine has none saved — the same
    * prompts `suite init` asks — instead of refusing with "run suite init
    * first". Only used from a terminal; absent, the verb refuses as before.
    */
@@ -615,8 +616,8 @@ export interface AgentEnv {
  * The `env` block of an agent root's .suite-state.json.
  *
  * This is where a root declares its MODEL credential, which is a different
- * thing from its Suite one: the runtime token authenticates the agent to
- * Suite; OPENROUTER_API_KEY authenticates it to whoever serves the model.
+ * thing from its Burrow one: the runtime token authenticates the agent to
+ * Burrow; OPENROUTER_API_KEY authenticates it to whoever serves the model.
  * Reading only `token` and `headers` produced an agent that connected,
  * joined, took a dispatch and failed every turn with MISSING_CREDENTIAL.
  *
@@ -669,7 +670,7 @@ export interface SessionOptions {
 }
 
 export async function runInSession(
-  session: string,
+  requested: string,
   argv: string[],
   cwd: string,
   env: Record<string, string>,
@@ -689,7 +690,15 @@ export async function runInSession(
     return await deps.exec(argv, { cwd, env });
   }
 
-  const state = await detectState(session, tmux, options.agentName ?? "dsh");
+  // NEVER ORPHAN A RUNNING AGENT: a live 0.8 `suite-` twin of a derived
+  // `burrow-` name is attached to, never duplicated (resolveLaunchSession).
+  const found = await resolveLaunchSession(derivedCandidates(requested), tmux, options.agentName ?? "dsh");
+  const session = found.session;
+  const state = found.state;
+  if (found.recycle !== undefined) {
+    deps.stderr.write(`${CLI_NAME}: recycling stale session ${found.recycle}; starting ${session}\n`);
+    await tmux.run([TMUX, "kill-session", "-t", found.recycle]);
+  }
 
   if (state === "stale") {
     deps.stderr.write(`${CLI_NAME}: recycling stale session ${session}\n`);

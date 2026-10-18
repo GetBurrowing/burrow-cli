@@ -2,7 +2,7 @@
  * ONE CONNECTION PER AGENT FOLDER.
  *
  * A machine hosts more than one agent, and each agent folder is federated as
- * its own runtime — often on different Suite installs. Through 0.7.0 the CLI
+ * its own runtime — often on different Burrow installs. Through 0.7.0 the CLI
  * kept ONE connection per machine (`config.json` + `credentials.json`), so
  * `suite init` in a second folder silently re-pointed the first: the next
  * `suite claude` there saw its own MCP entries as "stale" against the machine
@@ -36,7 +36,8 @@ import { createHash, randomBytes } from "node:crypto";
 import { basename, dirname, resolve } from "node:path";
 import { projectKeys } from "./claude_wiring.ts";
 import { DEFAULT_SESSION_NAMING, emptyConfig, parseConfig, type SuiteConfig } from "./config.ts";
-import { assertWritable, configDir, configPath, gitProbe, legacyConfigDir, type GitProbe } from "./paths.ts";
+import { assertWritable, configEntry, configPath, gitProbe, type GitProbe } from "./paths.ts";
+import { legacyFallbackDir } from "./migrate.ts";
 import { sanitizeSessionName } from "./tmux.ts";
 
 type Env = Record<string, string | undefined>;
@@ -73,7 +74,7 @@ export interface AgentLookup {
 }
 
 export function agentsDir(env: Env = process.env): string {
-  return resolve(configDir(env), AGENTS_DIRNAME);
+  return configEntry(AGENTS_DIRNAME, env);
 }
 
 /** The folder as the store keys it: symlinks resolved when it exists, else just absolute. */
@@ -100,20 +101,19 @@ export function agentCredentialsPath(env: Env, dir: string): string {
 }
 
 /**
- * The legacy `<config>/suite/agents` directory, but ONLY when it is a second,
- * distinct directory — i.e. configDir resolved to burrow while a suite one is
- * also on disk. Null otherwise (one dir in play: nothing to fall back to).
+ * A second agents directory to read single records from, or null. Only ever
+ * the pre-0.9.0 one, and only while the migration says it can still hold a
+ * record 0.9 must read: a record it refused to move, or, before the migration
+ * has run at all, any record (see migrate.ts legacyFallbackDir).
  */
 function legacyAgentsDir(env: Env): string | null {
-  const legacy = legacyConfigDir(env);
-  if (resolve(configDir(env)) === legacy) return null;
-  return existsSync(legacy) ? resolve(legacy, AGENTS_DIRNAME) : null;
+  return legacyFallbackDir("config", AGENTS_DIRNAME, env);
 }
 
 /**
  * The directory that holds `dir`'s record for READING: the resolved agents dir
- * when the record is there, else the legacy suite one when only it has the key.
- * READ-ONLY: a legacy record is never copied, moved or rewritten from here. The
+ * when the record is there, else the pre-0.9.0 one when only it has the key.
+ * READ-ONLY: a legacy record is never copied, moved or rewritten from here; migrate.ts moves it. The
  * record and its credentials are read from the same directory, so a key's pair
  * is never split across the two.
  */

@@ -19,8 +19,12 @@ import {
   REQUIRED_TOOLS,
   UPDATE_REFUSED_EXIT,
   announceLines,
+  LEGACY_REPO_NAME,
+  REPO_NAME,
   installerUrl,
+  installerUrls,
   refIsSafe,
+  resolveRefToSha,
   resolveRef,
   SIGPIPE_EXIT,
   runUpdate,
@@ -308,5 +312,147 @@ describe("the installer gets BURROW_* AND SUITE_* names, one value per pair", ()
 
   test("the announcement says burrow", () => {
     expect(announceLines(DEFAULT_REF)[0]).toStartWith(`updating burrow ${VERSION}`);
+  });
+});
+
+/*
+ * TAGS AND THE REPO NAME (0.9.0). burrow-cli first, suite-cli on a 404 only:
+ * measured 2026-10-18, raw.githubusercontent serves the installer at both
+ * `v0.8.0` and `refs/tags/v0.8.0` on suite-cli (200) and burrow-cli 404s until
+ * the rename.
+ */
+describe("tags and the repo name", () => {
+  const raw = (repo: string, ref: string) => `https://raw.githubusercontent.com/Startup-Suite/${repo}/${ref}/install.sh`;
+
+  test("the repo is burrow-cli, and suite-cli is its legacy name", () => {
+    expect(REPO_NAME).toBe("burrow-cli");
+    expect(LEGACY_REPO_NAME).toBe("suite-cli");
+    expect(installerUrls("main", {})).toEqual([raw("burrow-cli", "main"), raw("suite-cli", "main")]);
+  });
+
+  test("a tag ref, bare or full, is accepted", () => {
+    for (const ref of ["v0.8.0", "refs/tags/v0.8.0", "refs/heads/main", "0.4.1"]) expect(refIsSafe(ref)).toBe(true);
+  });
+
+  for (const ref of ["refs/tags/v0.8.0", "v0.8.0"]) {
+    test(`argv for ${ref}: both installer URLs, burrow-cli first, and the SAME ref exported`, () => {
+      const script = updateArgv(ref, "curl", {})[2] ?? "";
+      const first = script.indexOf(raw("burrow-cli", ref));
+      const second = script.indexOf(raw("suite-cli", ref));
+      expect(first).toBeGreaterThan(-1);
+      expect(second).toBeGreaterThan(first);
+      expect(script).toContain(`BURROW_CLI_REF='${ref}'`);
+      expect(script).toContain(`SUITE_CLI_REF='${ref}'`);
+      // suite-cli is fetched only after a 404 from burrow-cli.
+      expect(script).toContain(`if [ $rc -ne 0 ] && [ "$code" = 404 ]; then code=$(curl`);
+    });
+  }
+
+  test("BURROW_CLI_REPO names one installer URL and is handed to the installer", () => {
+    const script = updateArgv("main", "curl", { BURROW_CLI_REPO: "my-fork" })[2] ?? "";
+    expect(script).toContain(raw("my-fork", "main"));
+    expect(script).not.toContain("/burrow-cli/");
+    expect(script).not.toContain("/suite-cli/");
+    expect(script).toContain("BURROW_CLI_REPO='my-fork' ");
+  });
+
+  test("an invalid BURROW_CLI_REPO refuses the update and runs nothing", async () => {
+    const d = deps({ env: { BURROW_CLI_REF: "0123456789abcdef0123456789abcdef01234567", BURROW_CLI_REPO: "../x" } });
+    expect(await runUpdate(d)).toBe(UPDATE_REFUSED_EXIT);
+    expect(d.ran).toEqual([]);
+    expect(d.stderr.join("\n")).toContain("BURROW_CLI_REPO=");
+  });
+
+  /**
+   * The argv run for real against a fake fetcher that logs each URL and
+   * answers 200 (serving an installer that prints its ref and exits 0) for
+   * URLs in SERVE, else 404, or `fail` for a non-HTTP failure.
+   */
+  function runFor(fetcher: "curl" | "wget", serve: string[], fail?: { exit: number }) {
+    const dir = mkdtempSync(join(tmpdir(), "burrow-update-repo."));
+    try {
+      const log = join(dir, "urls.log");
+      const body = join(dir, "installer.sh");
+      writeFileSync(body, '#!/bin/sh\nprintf "ran %s\\n" "$BURROW_CLI_REF"\nexit 0\n');
+      const miss =
+        fail !== undefined
+          ? `exit ${fail.exit}`
+          : fetcher === "curl"
+            ? "printf 404; exit 22"
+            : "exit 8";
+      writeFileSync(
+        join(dir, fetcher),
+        [
+          "#!/bin/sh",
+          'out=""; url=""',
+          'while [ $# -gt 0 ]; do case "$1" in -o|-O) out="$2"; shift ;; https://*) url="$1" ;; esac; shift; done',
+          `printf '%s\\n' "$url" >>${JSON.stringify(log)}`,
+          `case " ${serve.join(" ")} " in *" $url "*) cat ${JSON.stringify(body)} >"$out"; ${fetcher === "curl" ? "printf 200; " : ""}exit 0 ;; esac`,
+          miss,
+          "",
+        ].join("\n"),
+      );
+      chmodSync(join(dir, fetcher), 0o755);
+      writeFileSync(join(dir, "gh"), "#!/bin/sh\nexit 1\n");
+      chmodSync(join(dir, "gh"), 0o755);
+      const argv = updateArgv("v0.8.0", fetcher, {});
+      const r = spawnSync(argv[0] ?? "sh", argv.slice(1), { encoding: "utf8", env: { PATH: `${dir}:/usr/bin:/bin`, HOME: dir } });
+      const urls = existsSync(log) ? (spawnSync("cat", [log], { encoding: "utf8" }).stdout ?? "").split("\n").filter((l) => l !== "") : [];
+      return { status: r.status ?? -1, stdout: r.stdout ?? "", urls };
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  for (const fetcher of ["curl", "wget"] as const) {
+    test(`${fetcher}: burrow-cli 404 falls back to suite-cli, in that order, and the installer runs`, () => {
+      const r = runFor(fetcher, [raw("suite-cli", "v0.8.0")]);
+      expect(r.urls).toEqual([raw("burrow-cli", "v0.8.0"), raw("suite-cli", "v0.8.0")]);
+      expect(r.status).toBe(0);
+      expect(r.stdout).toContain("ran v0.8.0");
+    });
+
+    test(`${fetcher}: burrow-cli 200 means suite-cli is never fetched`, () => {
+      const r = runFor(fetcher, [raw("burrow-cli", "v0.8.0"), raw("suite-cli", "v0.8.0")]);
+      expect(r.urls).toEqual([raw("burrow-cli", "v0.8.0")]);
+      expect(r.stdout).toContain("ran v0.8.0");
+    });
+  }
+
+  test("a failure that is not a 404 does NOT fall back: it stops with the fetcher's code", () => {
+    // curl exit 6: could not resolve host; no status was printed.
+    const r = runFor("curl", [raw("suite-cli", "v0.8.0")], { exit: 6 });
+    expect(r.urls).toEqual([raw("burrow-cli", "v0.8.0")]);
+    expect(r.status).toBe(6);
+    expect(r.stdout).not.toContain("ran ");
+  });
+
+  test("resolveRefToSha asks burrow-cli first and suite-cli only on its 404", async () => {
+    const asked: string[] = [];
+    const fake = async (url: string): Promise<Response> => {
+      asked.push(url);
+      return url.includes("/burrow-cli/")
+        ? new Response("{}", { status: 404 })
+        : new Response(JSON.stringify({ sha: "0123456789abcdef0123456789abcdef01234567" }), { status: 200 });
+    };
+    const prev = process.env.GH_TOKEN;
+    process.env.GH_TOKEN = "fixture-not-a-token";
+    try {
+      expect(await resolveRefToSha("v0.8.0", {}, fake)).toBe("0123456789abcdef0123456789abcdef01234567");
+      expect(asked).toEqual([
+        "https://api.github.com/repos/Startup-Suite/burrow-cli/commits/v0.8.0",
+        "https://api.github.com/repos/Startup-Suite/suite-cli/commits/v0.8.0",
+      ]);
+      asked.length = 0;
+      const found = async (url: string): Promise<Response> => {
+        asked.push(url);
+        return new Response(JSON.stringify({ sha: "fedcba9876543210fedcba9876543210fedcba98" }), { status: 200 });
+      };
+      expect(await resolveRefToSha("v0.8.0", {}, found)).toBe("fedcba9876543210fedcba9876543210fedcba98");
+      expect(asked).toEqual(["https://api.github.com/repos/Startup-Suite/burrow-cli/commits/v0.8.0"]);
+    } finally {
+      if (prev === undefined) delete process.env.GH_TOKEN;
+      else process.env.GH_TOKEN = prev;
+    }
   });
 });

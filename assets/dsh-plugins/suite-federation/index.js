@@ -1,7 +1,7 @@
 /**
- * Suite federation for dsh.
+ * Burrow federation for dsh.
  *
- * Joins Startup Suite as a runtime over the Phoenix socket, turns each
+ * Joins Burrow as a runtime over the Phoenix socket, turns each
  * `attention` dispatch into an agent turn, and pushes the reply back.
  *
  * Tools are NOT bridged here — they arrive through the MCP surface
@@ -9,7 +9,7 @@
  * and the one whose bundles get adjusted. This plugin owns presence and
  * message flow only.
  *
- * One session per Suite space, held for the process lifetime, so a channel
+ * One session per Burrow space, held for the process lifetime, so a channel
  * conversation keeps its history the way a human participant would expect.
  *
  * THE ONE TOOL REGISTERED HERE IS `suite_reply` — the send path. Everything
@@ -105,8 +105,8 @@ function renderPrompt(payload) {
   const msg = payload.message ?? {}
   const space = payload.context?.space
   const lines = []
-  if (space?.name) lines.push(`Suite space: ${space.name} (${sig.space_id})`)
-  else if (sig.space_id) lines.push(`Suite space: ${sig.space_id}`)
+  if (space?.name) lines.push(`Burrow space: ${space.name} (${sig.space_id})`)
+  else if (sig.space_id) lines.push(`Burrow space: ${sig.space_id}`)
   if (msg.author) lines.push(`From: ${msg.author}`)
   if (sig.reason) lines.push(`Reason: ${sig.reason}`)
   lines.push('')
@@ -160,7 +160,7 @@ export function apply(ctx, config) {
   let attempts = 0
   let reconnectTimer = null
 
-  /** Get or create the long-lived agent for one Suite space. */
+  /** Get or create the long-lived agent for one Burrow space. */
   async function agentForSpace(spaceId) {
     const existing = sessionsBySpace.get(spaceId)
     if (existing) return existing
@@ -210,7 +210,7 @@ export function apply(ctx, config) {
     const spaceId = payload.signal?.space_id
     if (!spaceId) return
 
-    // One turn at a time per space: Suite can dispatch again while we think,
+    // One turn at a time per space: Burrow can dispatch again while we think,
     // and two concurrent turns on one session interleave into nonsense.
     if (inflight.has(spaceId)) {
       const queue = pending.get(spaceId) ?? []
@@ -222,7 +222,7 @@ export function apply(ctx, config) {
       }
       pending.set(spaceId, queue)
       // Tell the space it is queued rather than ignored. `typing` is the one
-      // liveness signal Suite already renders, and a queued message with no
+      // liveness signal Burrow already renders, and a queued message with no
       // indicator is indistinguishable from a dropped one. The turn itself
       // pushes typing at its start and clears it on failure, so a drain keeps
       // the indicator honest without extra bookkeeping here.
@@ -378,7 +378,7 @@ export function apply(ctx, config) {
 
   // THE SEND PATH.
   //
-  // The hosted Suite MCP surface has 100 tools and none of them post a
+  // The hosted Burrow MCP surface has 100 tools and none of them post a
   // message to a space — only reads (`space_get_messages`,
   // `space_search_messages`) and `dm_create`, which is humans-only. Claude-side
   // agents get `suite_reply` from a SEPARATE local MCP server (the
@@ -424,9 +424,9 @@ export function apply(ctx, config) {
         defineTool({
           name: 'suite_reply',
           description:
-            'Post a message into a Startup Suite space. Use the space_id from the ' +
+            'Post a message into a Burrow space. Use the space_id from the ' +
             'dispatch you are answering, or one from space_list. You must already ' +
-            'be a participant of that space — Suite refuses a post to a space you ' +
+            'be a participant of that space — Burrow refuses a post to a space you ' +
             'have not joined.',
           parameters: {
             space_id: { type: 'string', required: true, description: 'Target space UUID.' },
@@ -458,7 +458,7 @@ export function apply(ctx, config) {
             const content = String(args?.content ?? '')
             if (spaceId === '') return { ok: false, error: 'space_id is required' }
             if (content.trim() === '') return { ok: false, error: 'content is empty' }
-            if (channel === null) return { ok: false, error: 'not connected to Suite' }
+            if (channel === null) return { ok: false, error: 'not connected to Burrow' }
 
             // THE SERVER NEVER REPLIES TO A `reply` PUSH.
             //
@@ -471,7 +471,7 @@ export function apply(ctx, config) {
             // A refusal arrives instead as a separate `error` EVENT, pushed
             // immediately. So: send, watch briefly for that event, and report
             // success only if none arrives. Not a delivery receipt — the honest
-            // reading is "Suite raised no objection", and the grace window is the
+            // reading is "Burrow raised no objection", and the grace window is the
             // whole strength of the claim.
             const GRACE_MS = 1500
             return await new Promise((resolve) => {

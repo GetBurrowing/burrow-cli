@@ -117,7 +117,7 @@ export function createCleanEnv(options: CleanEnvOptions = {}): CleanEnv {
     bin,
     home,
     env,
-    checkout: resolve(home, ".local/share/suite/claude-code-suite-channel"),
+    checkout: resolve(home, ".local/share/burrow/burrow-channel-claude-code"),
     stub: (name, body) => writeStub(bin, name, body),
     log: () =>
       readFileSync(logFile, "utf8")
@@ -143,11 +143,22 @@ export function cleanupCleanEnvs(): void {
  * prints the line a real install would have printed. Neither touches a network.
  */
 export const DEFAULT_STUBS: Record<string, string> = {
+  // `git -C <dir> ...`: `checkout --detach <sha>` writes the sha into
+  // <dir>/.git/HEAD, as a real detach does; STUB_GIT_DIRTY makes `status`
+  // report a change; STUB_GIT_DIVERGED makes `merge-base --is-ancestor` say no.
   git:
     `if [ "$1" = "clone" ]; then mkdir -p "$3/.git" "$3/src"; : > "$3/src/index.ts"; exit 0; fi\n` +
     `if [ "$1" = "pull" ]; then\n` +
     `  if [ -n "$STUB_PULL_FAILS" ]; then echo "fatal: Not possible to fast-forward, aborting." >&2; exit 128; fi\n` +
-    `  exit 0\nfi\nexit 0`,
+    `  exit 0\nfi\n` +
+    `if [ "$1" = "-C" ]; then\n` +
+    `  d="$2"; shift 2\n` +
+    `  case "$1" in\n` +
+    `  status) [ -n "$STUB_GIT_DIRTY" ] && echo " M src/index.ts"; exit 0 ;;\n` +
+    `  merge-base) [ -n "$STUB_GIT_DIVERGED" ] && exit 1; exit 0 ;;\n` +
+    `  checkout) for a in "$@"; do last="$a"; done; printf '%s\\n' "$last" > "$d/.git/HEAD"; exit 0 ;;\n` +
+    `  esac\n` +
+    `fi\nexit 0`,
   bun:
     `if [ "$1" = "--version" ]; then echo "1.2.4"; exit 0; fi\n` +
     `if [ "$1" = "install" ]; then echo "4 packages installed [12.00ms]"; exit 0; fi\nexit 0`,

@@ -62,7 +62,8 @@ describe("the roster survives being wrong", () => {
   });
 
   test("the path is under state, not config — it is derived, not authored", () => {
-    expect(rosterPath("/home/q")).toBe("/home/q/.local/state/suite/agents.json");
+    expect(rosterPath("/home/q", {})).toBe("/home/q/.local/state/burrow/agents.json");
+    expect(rosterPath("/home/q", { XDG_STATE_HOME: "/xs" })).toBe("/xs/burrow/agents.json");
   });
 });
 
@@ -129,20 +130,20 @@ function deps(roster: string | null, live: string, codes: number[] = []): {
 }
 
 describe("running a restore", () => {
-  const roster = serializeRoster([entry("suite-a"), entry("suite-b")]);
+  const roster = serializeRoster([entry("burrow-a"), entry("burrow-b")]);
 
   test("starts only the missing session, replaying its argv verbatim", async () => {
-    const { d, calls } = deps(roster, "suite-a\t100\tclaude\n");
+    const { d, calls } = deps(roster, "burrow-a\t100\tclaude\n");
     const res = await runRestore(d, "/home/q");
-    expect(res.started).toEqual(["suite-b"]);
-    expect(res.skipped).toEqual(["suite-a"]);
+    expect(res.started).toEqual(["burrow-b"]);
+    expect(res.skipped).toEqual(["burrow-a"]);
     const create = calls.find((c) => c.includes("new-session"));
-    expect(create?.slice(1)).toEqual(entry("suite-b").command.slice(1));
+    expect(create?.slice(1)).toEqual(entry("burrow-b").command.slice(1));
   });
 
   /** Only the binary is re-resolved: its path can differ from record time. */
   test("re-resolves the tmux binary rather than trusting the stored path", async () => {
-    const { d, calls } = deps(serializeRoster([entry("suite-b")]), "");
+    const { d, calls } = deps(serializeRoster([entry("burrow-b")]), "");
     await runRestore(d, "/home/q");
     expect(calls.find((c) => c.includes("new-session"))?.[0]).toBe("/usr/bin/tmux");
   });
@@ -154,9 +155,9 @@ describe("running a restore", () => {
   });
 
   test("a failed start is reported, not swallowed", async () => {
-    const { d } = deps(serializeRoster([entry("suite-b")]), "", [1]);
+    const { d } = deps(serializeRoster([entry("burrow-b")]), "", [1]);
     const res = await runRestore(d, "/home/q");
-    expect(res.failed).toEqual(["suite-b"]);
+    expect(res.failed).toEqual(["burrow-b"]);
     expect(res.started).toEqual([]);
   });
 
@@ -167,9 +168,9 @@ describe("running a restore", () => {
 
   test("--forget rewrites the roster and starts nothing", async () => {
     const { d, calls, written } = deps(roster, "");
-    await runRestore(d, "/home/q", { apply: true, forget: "suite-a" });
+    await runRestore(d, "/home/q", { apply: true, forget: "burrow-a" });
     expect(calls.filter((c) => c.includes("new-session"))).toHaveLength(0);
-    expect(parseRoster(written[0] ?? "").map((e) => e.session)).toEqual(["suite-b"]);
+    expect(parseRoster(written[0] ?? "").map((e) => e.session)).toEqual(["burrow-b"]);
   });
 });
 
@@ -482,5 +483,147 @@ describe("adopting a gateway session", () => {
     expect(e?.kind).toBe("hermes");
     expect(e?.command.slice(0, 7)).toEqual(["tmux", "new-session", "-d", "-s", "suite-scribe", "-c", "/srv/agents/scribe"]);
     expect(e?.command[7]).toBe(BUN);
+  });
+});
+
+/* ------------------------------------------------------------------------- */
+/* 0.8 suite- sessions: found, never orphaned, never duplicated               */
+/* ------------------------------------------------------------------------- */
+
+describe("restore across the suite- to burrow- prefix change", () => {
+  const HOME = "/home/q";
+  const devCommand = [
+    "tmux", "new-session", "-d", "-s", "suite-oddjob", "-c", `${HOME}/oddjob`,
+    "/usr/bin/bun", `${HOME}/sources/suite-cli/src/cli.ts`, "deepseek", "--root", `${HOME}/oddjob`, "--no-session",
+  ];
+  const devEntry: RosterEntry = { session: "suite-oddjob", command: devCommand, cwd: `${HOME}/oddjob`, kind: "deepseek", recordedAt: "r" };
+
+  /** A host whose roster and tmux server both change as restore acts on them. */
+  function host(initial: RosterEntry[], liveNow: string[]) {
+    let text = serializeRoster(initial);
+    const live = new Set(liveNow);
+    const calls: string[][] = [];
+    const writes: string[] = [];
+    const logs: string[] = [];
+    const d: RestoreDeps = {
+      tmux: {
+        env: {},
+        which: () => "/usr/bin/tmux",
+        async run(argv) {
+          calls.push(argv);
+          if (argv.includes("list-panes")) return { exitCode: 0, stdout: [...live].map((s) => `${s}\t100\tclaude`).join("\n"), stderr: "" };
+          if (argv.includes("new-session")) live.add(argv[argv.indexOf("-s") + 1] ?? "");
+          return { exitCode: 0, stdout: "", stderr: "" };
+        },
+      },
+      readRoster: () => text,
+      writeRoster: (_p, c) => {
+        text = c;
+        writes.push(c);
+      },
+      now: () => new Date("2026-10-18T00:00:00.000Z"),
+      log: (l) => logs.push(l),
+    };
+    return { d, calls, writes, logs, text: () => text, live };
+  }
+  const creates = (calls: string[][]) => calls.filter((c) => c.includes("new-session"));
+
+  test("restore --dry-run skips a live suite-X: already running", async () => {
+    const h = host([entry("suite-dalton-67ad924d")], ["suite-dalton-67ad924d"]);
+    const r = await runRestore(h.d, HOME, { apply: false });
+    expect(r.skipped).toEqual(["suite-dalton-67ad924d"]);
+    expect(r.started).toEqual([]);
+    expect(h.logs).toEqual(["suite-dalton-67ad924d: skipped — already running"]);
+    expect(h.writes).toEqual([]);
+  });
+
+  test("a live suite-X is skipped when applying, too: nothing is created, nothing is written", async () => {
+    const h = host([entry("suite-dalton-67ad924d")], ["suite-dalton-67ad924d"]);
+    const r = await runRestore(h.d, HOME);
+    expect(r.skipped).toEqual(["suite-dalton-67ad924d"]);
+    expect(creates(h.calls)).toEqual([]);
+    expect(h.writes).toEqual([]);
+  });
+
+  test("a dead suite-X is relaunched as burrow-X, the roster rewritten once; a second restore is a no-op", async () => {
+    const h = host([entry("suite-a"), entry("burrow-b")], ["burrow-b"]);
+    const first = await runRestore(h.d, HOME);
+    expect(first.started).toEqual(["burrow-a"]);
+    expect(creates(h.calls)).toEqual([["/usr/bin/tmux", "new-session", "-d", "-s", "burrow-a", "-c", "/w", "claude"]]);
+    expect(h.writes).toHaveLength(1);
+    const after = parseRoster(h.text());
+    expect(after.map((e) => e.session)).toEqual(["burrow-a", "burrow-b"]);
+    expect(after[0]?.command).toEqual(["tmux", "new-session", "-d", "-s", "burrow-a", "-c", "/w", "claude"]);
+    // Everything but the name is the recorded entry.
+    expect({ ...after[0], session: "", command: [] }).toEqual({ ...entry("suite-a"), session: "", command: [] });
+
+    const calls = h.calls.length;
+    const second = await runRestore(h.d, HOME);
+    expect(second.started).toEqual([]);
+    expect(second.skipped).toEqual(["burrow-a", "burrow-b"]);
+    expect(creates(h.calls.slice(calls))).toEqual([]);
+    expect(h.writes).toHaveLength(1);
+  });
+
+  test("--dry-run says the dead suite-X would start as burrow-X and writes nothing", async () => {
+    const h = host([entry("suite-a")], []);
+    const r = await runRestore(h.d, HOME, { apply: false });
+    expect(r.started).toEqual(["burrow-a"]);
+    expect(h.logs).toEqual(["suite-a: would start as burrow-a (not running)"]);
+    expect(h.writes).toEqual([]);
+    expect(creates(h.calls)).toEqual([]);
+  });
+
+  test("the dev-checkout entry keeps suite-oddjob byte-identical, and is relaunched under it", async () => {
+    const h = host([devEntry], []);
+    const before = h.text();
+    const r = await runRestore(h.d, HOME);
+    expect(r.started).toEqual(["suite-oddjob"]);
+    expect(creates(h.calls)[0]?.slice(1)).toEqual(devCommand.slice(1));
+    expect(h.writes).toEqual([]);
+    expect(h.text()).toBe(before);
+  });
+
+  test("positive control: the same entry running the MANAGED cli.ts is renamed to burrow-oddjob", async () => {
+    const managed = devCommand.map((a) => (a.endsWith("/sources/suite-cli/src/cli.ts") ? `${HOME}/.local/share/burrow/cli/src/cli.ts` : a));
+    const h = host([{ ...devEntry, command: managed }], []);
+    const r = await runRestore(h.d, HOME);
+    expect(r.started).toEqual(["burrow-oddjob"]);
+    expect(parseRoster(h.text())[0]?.session).toBe("burrow-oddjob");
+  });
+
+  test("a suite-X entry whose agent already runs as burrow-X is skipped, not started beside it", async () => {
+    const h = host([entry("suite-a")], ["burrow-a"]);
+    const r = await runRestore(h.d, HOME);
+    expect(r.skipped).toEqual(["suite-a"]);
+    expect(creates(h.calls)).toEqual([]);
+    expect(h.logs).toEqual(["suite-a: skipped — already running as burrow-a"]);
+  });
+
+  test("a dead suite-X whose burrow-X has its own entry is superseded: dropped, and the agent starts once", async () => {
+    const h = host([entry("suite-a"), entry("burrow-a")], []);
+    const r = await runRestore(h.d, HOME);
+    expect(creates(h.calls)).toHaveLength(1);
+    expect(r.started).toEqual(["burrow-a"]);
+    expect(parseRoster(h.text()).map((e) => e.session)).toEqual(["burrow-a"]);
+  });
+
+  test("restorePlan: an entry is skipped when its prefix twin is live", () => {
+    expect(restorePlan([entry("burrow-a")], ["suite-a"]).map((d) => [d.action, d.reason])).toEqual([["skip", "already running as suite-a"]]);
+    expect(restorePlan([entry("burrow-a")], ["suite-b"]).map((d) => d.action)).toEqual(["start"]);
+  });
+});
+
+describe("adoption accepts both prefixes and never the watcher", () => {
+  const now = "2026-10-18T00:00:00.000Z";
+  test("burrow- and suite- sessions are adopted; burrow-watch and suite-watch are not", () => {
+    const running = [
+      { session: "burrow-a-11111111", cwd: "/w", argv: ["claude"] },
+      { session: "suite-b-22222222", cwd: "/w", argv: ["claude"] },
+      { session: "burrow-watch", cwd: "/w", argv: ["claude"] },
+      { session: "suite-watch", cwd: "/w", argv: ["claude"] },
+      { session: "my-own-work", cwd: "/w", argv: ["claude"] },
+    ];
+    expect(adoptEntries(running, [], now).map((e) => e.session)).toEqual(["burrow-a-11111111", "suite-b-22222222"]);
   });
 });

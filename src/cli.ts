@@ -60,6 +60,9 @@ import { liveOpenclawDeps, runOpenclaw } from "./commands/openclaw.ts";
 import { liveUpdateDeps, runUpdate } from "./commands/update.ts";
 import { liveCodexDeps, runCodex } from "./commands/codex.ts";
 import { ttyPrompter } from "./secrets.ts";
+import { liveMigrateDeps, migrateLegacyState, type MigrateDeps } from "./migrate.ts";
+import { wantsStampOnly as hermesStampOnly } from "./commands/hermes.ts";
+import { wantsStampOnly as openclawStampOnly } from "./commands/openclaw.ts";
 
 export type Verb =
   | "init"
@@ -208,9 +211,37 @@ export function aliasNotice(env: Record<string, string | undefined>): string | n
   return ALIAS_NOTICE;
 }
 
-export async function run(argv: string[], env: Record<string, string | undefined> = process.env): Promise<number> {
+/**
+ * Whether this invocation runs the one-shot state migration (migrate.ts).
+ *
+ * NOT for the invocations a machine reads: `--version` and `--help` (install.sh
+ * reads the version), `update` (it replaces the library mid-run), the
+ * `pane-status` name core's agent-host calls, and every `--stamp-only` (one
+ * JSON document, read by agent-host). Those keep stdout byte-identical to 0.8
+ * and touch nothing on disk; before the migration has run they resolve the old
+ * paths (migrate.ts entryPath). An unknown verb only prints an error.
+ */
+export function shouldMigrate(argv: string[]): boolean {
+  const head = argv[0];
+  if (head === undefined) return false;
+  if (head === "--version" || head === "-V" || head === "--help" || head === "-h") return false;
+  if (head === "update" || head === "pane-status") return false;
+  const { verb, args } = parse(argv);
+  if (verb === null) return false;
+  if (verb === "hermes" && hermesStampOnly(args)) return false;
+  if (verb === "openclaw" && openclawStampOnly(args)) return false;
+  return true;
+}
+
+export async function run(
+  argv: string[],
+  env: Record<string, string | undefined> = process.env,
+  migrateDeps: () => MigrateDeps = () => liveMigrateDeps(env),
+): Promise<number> {
   const notice = aliasNotice(env);
   if (notice !== null) process.stderr.write(`${notice}\n`);
+  // Before dispatch, so every verb below reads burrow paths. stderr only.
+  if (shouldMigrate(argv)) migrateLegacyState(migrateDeps());
   if (argv[0] === "--version" || argv[0] === "-V") {
     console.log(VERSION);
     return 0;

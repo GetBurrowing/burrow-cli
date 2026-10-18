@@ -83,7 +83,7 @@ describe("sessionNameForAgent", () => {
     // Unlike `suite claude`, which keys on cwd. A dsh agent is one identity
     // owning one root — two shells asking for `oddjob` must reach the SAME
     // session, and a cwd-derived name would silently give them two.
-    expect(sessionNameForAgent("oddjob")).toBe("suite-oddjob");
+    expect(sessionNameForAgent("oddjob")).toBe("burrow-oddjob");
   });
 
   test("is stable regardless of where it is invoked from", () => {
@@ -91,8 +91,8 @@ describe("sessionNameForAgent", () => {
   });
 
   test("sanitises anything tmux would choke on", () => {
-    expect(sessionNameForAgent("Odd Job.v2")).toBe("suite-odd-job-v2");
-    expect(sessionNameForAgent("--weird--")).toBe("suite-weird");
+    expect(sessionNameForAgent("Odd Job.v2")).toBe("burrow-odd-job-v2");
+    expect(sessionNameForAgent("--weird--")).toBe("burrow-weird");
   });
 
   test("two different agents never collide", () => {
@@ -274,7 +274,7 @@ describe("mcpUrl", () => {
     );
   });
 
-  test("otherwise it is derived from the Suite URL", () => {
+  test("otherwise it is derived from the Burrow URL", () => {
     const config = { ...emptyConfig(), suiteUrl: "https://suite.example.invalid/" };
     expect(mcpUrl(config, {} as NodeJS.ProcessEnv)).toBe("https://suite.example.invalid/mcp");
   });

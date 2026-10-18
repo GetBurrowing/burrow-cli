@@ -1,16 +1,16 @@
 /**
- * `suite hermes` — stamp a Hermes Agent root Suite-ready, then run its gateway
+ * `suite hermes` — stamp a Hermes Agent root Burrow-ready, then run its gateway
  * in a persistent tmux session.
  *
  * A sibling of `suite deepseek` in shape: an agent owns a ROOT, the harness
  * state lives under it (`HERMES_HOME` defaults to `<root>/.hermes`, NEVER
- * `~/.hermes`), and the long-lived process runs in tmux `suite-<name>` through
+ * `~/.hermes`), and the long-lived process runs in tmux `burrow-<name>` through
  * a `--no-session` relaunch of this CLI.
  *
  * `--stamp-only` is the stage-1 machine contract (src/stamp_result.ts): one
  * JSON document on stdout, exit 0/1/2/3, and no session started.
  *
- * WHAT THIS VERB OWNS, AND WHAT IT DOES NOT. The Startup Suite channel for
+ * WHAT THIS VERB OWNS, AND WHAT IT DOES NOT. The Burrow channel for
  * Hermes is installed by THAT plugin's own `install.sh`, pinned at
  * {@link HERMES_CHANNEL_REF}. The installer owns the 0600 token file, the
  * `.env` keys, the plugin install/enable and the stdio `mcp_servers` bridge;
@@ -69,7 +69,7 @@ function parseYaml(text: string): unknown {
   return parse(text);
 }
 import { harnessChildEnv, spawnHarness } from "../harness_env.ts";
-import { dataDir } from "../paths.ts";
+import { dataEntry } from "../paths.ts";
 import { assertNoSecretsInArgv, createStore } from "../secrets.ts";
 import {
   canonicalJson,
@@ -124,20 +124,21 @@ type Env = Record<string, string | undefined>;
 /* ------------------------------------------------------------------------- */
 
 /**
- * DEPLOYER: BUMP THIS BEFORE suite-cli MERGES.
+ * DEPLOYER: BUMP THIS BEFORE burrow-cli MERGES.
  *
- * This is the commit tagged v0.3.0 on burrow-channel-hermes main (PR #7,
- * BURROW_* names with SUITE_* fallback, task 01a14b9f-b62c; Burrow rename C).
- * The repo was renamed from hermes-suite-channel, whose URL redirects. It
- * replaced 71041456 (v0.2.0, PR #6), which replaced d9918533 (PR #3, the
+ * This is the commit tagged v0.3.1 on burrow-channel-hermes main (PR #8,
+ * product-name copy to Burrow, Burrow rename F). It replaced f1399d77 (v0.3.0,
+ * PR #7, BURROW_* names with SUITE_* fallback, Burrow rename C). The installer's
+ * result line and PLATFORM_NAME are unchanged between the two (read at both).
+ * f1399d77 replaced 71041456 (v0.2.0, PR #6), which replaced d9918533 (PR #3, the
  * #!/bin/sh launcher fix and `--python`). This verb always passes `--python`, which installers before
  * d9918533 refuse, so the pin cannot move to an older commit than that. Pin a commit on main, never a branch tip: a squash
  * merge deletes the branch and the tip would dangle.
  */
-export const HERMES_CHANNEL_REF = "f1399d77eba86f898d0d32de8c8baa0a783a72ec";
+export const HERMES_CHANNEL_REF = "36e3d5398d724be0fe55232a7df536454ca189c9";
 /** The channel repo's name. Its owner comes from repo_source.ts (SUITE_GITHUB_OWNER). */
-// Not renamed to burrow in 0.8.0: the channel repo rename is task C's; the old name redirects on GitHub.
-export const HERMES_CHANNEL_REPO_NAME = "hermes-suite-channel";
+// The repo's own name since Burrow rename C. Its old name, hermes-suite-channel, redirects; nothing relies on that.
+export const HERMES_CHANNEL_REPO_NAME = "burrow-channel-hermes";
 
 export function hermesChannelRepo(env: Env = process.env): string {
   return httpsCloneUrl(HERMES_CHANNEL_REPO_NAME, env);
@@ -182,7 +183,7 @@ export const HERMES_AGENT_COMM = "hermes";
 export const MODEL_KEY_ENV = "CUSTOM_MODEL_API_KEY";
 
 /**
- * The Suite channel platform's toolset key. `startup_suite` is the platform
+ * The Burrow channel platform's toolset key. `startup_suite` is the platform
  * name hermes-suite-channel registers (`PLATFORM_NAME`, adapter.py:74 at
  * {@link HERMES_CHANNEL_REF}); the gateway reads `platform_toolsets.<name>`
  * per turn (`_get_platform_tools`, hermes_cli/tools_config.py at fdec926e).
@@ -394,7 +395,7 @@ export function agentNameForRoot(root: string): string {
 
 /** Where the channel plugin checkout lives. Shared across agents: it is a program. */
 export function channelCheckoutDir(env: Env): string {
-  return join(dataDir(env), "hermes-suite-channel");
+  return dataEntry("burrow-channel-hermes", env);
 }
 
 export function tokenFilePath(hermesHome: string): string {
@@ -847,7 +848,7 @@ export function hermesWriter(ctx: { opts: HermesOptions | null }, deps: HermesDe
   async function installHermes(): Promise<void> {
     const home = opts().hermesHome;
     const source = deps.hermesInstaller ?? HERMES_INSTALLER_URL;
-    const dir = join(dataDir(deps.env), "hermes-agent");
+    const dir = dataEntry("hermes-agent", deps.env);
     const script = join(dir, `install-${HERMES_AGENT_REF.slice(0, 12)}.sh`);
     mkdirSync(dir, { recursive: true, mode: 0o700 });
     if (!existsSync(script)) {
@@ -1318,7 +1319,7 @@ export function relaunchArgv(self: string[], opts: HermesOptions, bin: string): 
   ];
 }
 
-/** The gateway's environment: the allowlist plus HERMES_HOME. No Suite credential, by construction. */
+/** The gateway's environment: the allowlist plus HERMES_HOME. No Burrow credential, by construction. */
 export function gatewayEnv(deps: Pick<HermesDeps, "env">, opts: HermesOptions): Record<string, string> {
   return harnessChildEnv(deps.env, { HERMES_HOME: opts.hermesHome });
 }
@@ -1345,7 +1346,7 @@ async function runGateway(opts: HermesOptions, deps: HermesDeps): Promise<number
  * `--stamp-only`: the machine contract, nothing else.
  * `--gateway-only` (the relaunch inside tmux): exec `hermes gateway run`.
  * Otherwise: stamp (human lines on stderr), then start or attach to the
- * `suite-<name>` session — or, with `--no-session`, run the gateway in the
+ * `burrow-<name>` session — or, with `--no-session`, run the gateway in the
  * foreground.
  */
 function stampParts(args: string[], deps: HermesDeps) {

@@ -1,5 +1,5 @@
 /**
- * Claude Code's WIRING to a Suite install — everything `suite claude` needs
+ * Claude Code's WIRING to a Burrow install — everything `suite claude` needs
  * that no other harness does:
  *
  *   plugin        the channel plugin checkout (cloned once, bun-installed)
@@ -13,13 +13,15 @@
  * from the saved connection.
  *
  * IDEMPOTENT AND LAZY. Each piece is checked and only what is missing or stale
- * is done: an existing checkout is not pulled (a launch must not depend on the
- * network), an existing CLAUDE.md is never touched, and an MCP entry that
- * already matches the saved connection is not re-registered. A launch on a
- * fully wired folder runs no git, no bun and no `claude mcp` at all.
+ * is done: a checkout already at {@link CLAUDE_CODE_CHANNEL_REF} is not touched
+ * (a launch must not depend on the network), an existing CLAUDE.md is never
+ * touched, and an MCP entry that already matches the saved connection is not
+ * re-registered. A launch on a fully wired folder runs no git, no bun and no
+ * `claude mcp` at all.
  */
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { isLive, liveProbe, type LiveProbe } from "./migrate.ts";
 import {
   CLAUDE_MD,
   conventionsFilename,
@@ -35,19 +37,23 @@ import { row } from "./ui.ts";
 import { entryAgrees } from "./env_names.ts";
 import {
   CHANNEL_SERVER,
+  CLAUDE_CODE_CHANNEL_REF,
   LEGACY_ALIASES,
   PLUGIN_DIRNAME,
   TOOLS_SERVER,
   channelAddArgs,
   channelWsUrl,
   claudeJsonPath,
-  cloneOrUpdate,
+  classifyPullFailure,
   connectionReport,
   ConvergenceFailed,
   defaultCheckout,
   envReference,
+  noGitPrompt,
   packageCount,
+  pluginRepo,
   projectKeys,
+  pullRemedyLines,
   registerServers,
   scopeView,
   spinner,
@@ -69,6 +75,10 @@ export interface WiringDeps {
   isTTY: boolean;
   store: CredentialStore;
   out(line: string): void;
+  /** The process probe the at-pin step consults. Defaults to the live one (migrate.ts). */
+  probe?: LiveProbe;
+  /** The commit the plugin checkout is held at. Defaults to {@link CLAUDE_CODE_CHANNEL_REF}. */
+  pin?: string;
 }
 
 export interface WiringOptions {
@@ -230,8 +240,12 @@ export function needsRegistration(plan: McpPlan): boolean {
 /* ------------------------------------------------------------------------- */
 
 export interface WiringResult {
-  /** "failed": the clone or `bun install` failed; the launch went on (see {@link launchWarning}). */
-  checkout: CheckoutOutcome | "present" | "failed";
+  /**
+   * "failed": the clone, fetch, checkout or `bun install` failed. "held": the
+   * checkout is not at the pin and was deliberately left where it is (dirty,
+   * diverged, or in use). The launch went on in both (see {@link launchWarning}).
+   */
+  checkout: CheckoutOutcome | "present" | "failed" | "held";
   claudeMd: "write" | "skip";
   conventions: ConventionsPlan["claudeMd"];
   /** Entries written by this call, by name. Empty when both were current. */
@@ -260,22 +274,177 @@ export function launchWarning(cwd: string, step: string, error: unknown): string
   ];
 }
 
+/** The marker `bun install` leaves in node_modules: the commit its dependencies were installed for. */
+export const DEPS_MARKER = ".burrow-cli-deps-ref";
+
+const SHA40 = /^[0-9a-f]{40}$/;
+
 /**
- * Ensure the plugin checkout exists and has its dependencies. Clones when it
- * is absent; an existing checkout is used as it is, never pulled.
+ * HEAD's commit, read from the files under `<dir>/.git` WITHOUT running git:
+ * a detached HEAD, or a branch through its loose ref or packed-refs. Null when
+ * it cannot be read that way (a `.git` file, a missing ref), and the caller
+ * then asks git. This is what lets a launch at the pin run no git at all.
  */
-async function ensureCheckout(deps: WiringDeps, dir: string): Promise<CheckoutOutcome | "present"> {
-  let outcome: CheckoutOutcome | "present" = "present";
-  if (!existsSync(resolve(dir, ".git")) || !existsSync(resolve(dir, "src", "index.ts"))) {
+export function readHeadSha(dir: string): string | null {
+  const gitDir = resolve(dir, ".git");
+  let head: string;
+  try {
+    head = readFileSync(resolve(gitDir, "HEAD"), "utf8").trim();
+  } catch {
+    return null;
+  }
+  if (SHA40.test(head)) return head;
+  const m = /^ref: (refs\/\S+)$/.exec(head);
+  if (m === null) return null;
+  const ref = m[1] as string;
+  try {
+    const loose = readFileSync(resolve(gitDir, ref), "utf8").trim();
+    if (SHA40.test(loose)) return loose;
+  } catch {}
+  try {
+    for (const line of readFileSync(resolve(gitDir, "packed-refs"), "utf8").split("\n")) {
+      const [sha, name] = line.trim().split(" ");
+      if (name === ref && sha !== undefined && SHA40.test(sha)) return sha;
+    }
+  } catch {}
+  return null;
+}
+
+export type PinOutcome = "cloned" | "advanced" | "at-pin" | "held";
+
+export interface PinResult {
+  outcome: PinOutcome;
+  /** Why a "held" checkout was left where it is; null otherwise. Printed as a launch warning. */
+  problem: string | null;
+}
+
+const short = (sha: string): string => (sha === "" ? "an unreadable HEAD" : sha.slice(0, 7));
+
+/**
+ * HOLD THE PLUGIN CHECKOUT AT {@link CLAUDE_CODE_CHANNEL_REF}.
+ *
+ * Before 0.9.0 an existing checkout was used as it was and never pulled, so a
+ * host stayed on whatever commit it first cloned: hive's sat at b238164
+ * (2026-07-31). Now, mirroring the openclaw and hermes verbs' ensure-at-pin:
+ *
+ *   - HEAD is the pin: nothing. No git (HEAD is read from the files), no network.
+ *   - Absent: clone, then check out the pin.
+ *   - Behind the pin, clean and not in use: fetch only when the pin is not
+ *     already in the object store, `checkout --detach <pin>`, `bun install`,
+ *     and record the pin in node_modules/{@link DEPS_MARKER}.
+ *   - Dirty, diverged (HEAD is not an ancestor of the pin, including a HEAD
+ *     ahead of it), or referenced by a live process: LEFT EXACTLY WHERE IT IS
+ *     and reported as `held`, with the reason. Never reset, never forced: a
+ *     checkout somebody is working in, or that a running agent's channel
+ *     plugin is executing from, is not this launch's to move. A later launch
+ *     with nothing referencing it moves it.
+ *
+ * A failed clone, fetch, checkout or `bun install` throws; the caller warns and
+ * launches anyway (see {@link launchWarning}).
+ */
+export async function ensurePluginAtPin(
+  deps: Pick<WiringDeps, "env" | "run" | "isTTY" | "out">,
+  dir: string,
+  pin: string = CLAUDE_CODE_CHANNEL_REF,
+  probe: LiveProbe = liveProbe(),
+): Promise<PinResult> {
+  const gitEnv = noGitPrompt(deps.env);
+  const git = async (args: string[]) => await deps.run(["git", "-C", dir, ...args], { env: gitEnv });
+  const detail = (r: { stdout: string; stderr: string }): string => (r.stderr || r.stdout).trim();
+
+  /** Make sure the pin is in the object store, fetching only when it is not. */
+  async function havePin(): Promise<void> {
+    if ((await git(["cat-file", "-e", `${pin}^{commit}`])).exitCode === 0) return;
+    const f = await git(["fetch", "--quiet", "origin"]);
+    if (f.exitCode !== 0) {
+      const d = detail(f);
+      throw new Error(
+        [`the plugin checkout at ${dir} could not fetch ${pin}:`, d, ...pullRemedyLines(classifyPullFailure(d), dir, undefined, deps.env)].join("\n"),
+      );
+    }
+    if ((await git(["cat-file", "-e", `${pin}^{commit}`])).exitCode !== 0) {
+      throw new Error(`the plugin checkout at ${dir} fetched origin and still has no commit ${pin}; is origin the channel plugin's repo?`);
+    }
+  }
+
+  async function checkoutPin(): Promise<void> {
+    await havePin();
+    const co = await git(["checkout", "--quiet", "--detach", pin]);
+    if (co.exitCode !== 0) throw new Error(`git checkout ${pin} in ${dir} failed: ${detail(co)}`);
+  }
+
+  let outcome: PinOutcome;
+  let problem: string | null = null;
+  if (!existsSync(resolve(dir, ".git"))) {
     const spin = spinner("plugin", deps);
     try {
-      outcome = await cloneOrUpdate(dir, deps);
+      mkdirSync(dirname(dir), { recursive: true });
+      const r = await deps.run(["git", "clone", pluginRepo(deps.env), dir], { env: gitEnv });
+      if (r.exitCode !== 0) throw new Error(`git clone failed: ${detail(r)}`);
+      await checkoutPin();
     } finally {
       spin.stop();
     }
-    deps.out(row("plugin", PLUGIN_DIRNAME, outcome));
+    outcome = "cloned";
+  } else {
+    let head = readHeadSha(dir);
+    if (head === null) {
+      const r = await git(["rev-parse", "HEAD"]);
+      head = r.exitCode === 0 ? r.stdout.trim() : "";
+    }
+    if (head === pin) {
+      outcome = "at-pin";
+    } else if (isLive(dir, probe())) {
+      outcome = "held";
+      problem =
+        `the plugin checkout at ${dir} is at ${short(head)}, not the pin ${short(pin)}, and a running process uses it ` +
+        `(or the process table could not be read). It is left as it is so no live agent has its code moved under it; ` +
+        `a launch with nothing running from it will move it.`;
+    } else {
+      const st = await git(["status", "--porcelain", "--untracked-files=no"]);
+      if (st.exitCode !== 0) throw new Error(`git status in ${dir} failed: ${detail(st)}`);
+      if (st.stdout.trim() !== "") {
+        outcome = "held";
+        problem =
+          `the plugin checkout at ${dir} has uncommitted changes and is at ${short(head)}, not the pin ${short(pin)}. ` +
+          `It is never reset or forced: commit or stash the changes there, or move it aside, and the next launch moves it to the pin.`;
+      } else {
+        await havePin();
+        const anc = await git(["merge-base", "--is-ancestor", "HEAD", pin]);
+        if (anc.exitCode === 1) {
+          outcome = "held";
+          problem =
+            `the plugin checkout at ${dir} is at ${short(head)}, which is not behind the pin ${short(pin)} (local commits, or ahead of it). ` +
+            `It is never reset or forced: resolve it there, or move it aside, and the next launch clones the pin.`;
+        } else if (anc.exitCode !== 0) {
+          throw new Error(`git merge-base --is-ancestor HEAD ${pin} in ${dir} failed: ${detail(anc)}`);
+        } else {
+          const spin = spinner("plugin", deps);
+          try {
+            const co = await git(["checkout", "--quiet", "--detach", pin]);
+            if (co.exitCode !== 0) throw new Error(`git checkout ${pin} in ${dir} failed: ${detail(co)}`);
+          } finally {
+            spin.stop();
+          }
+          outcome = "advanced";
+        }
+      }
+    }
+    if (outcome === "advanced") deps.out(row("plugin", PLUGIN_DIRNAME, `${short(head)} -> ${short(pin)}`));
   }
-  if (outcome !== "present" || !existsSync(resolve(dir, "node_modules"))) {
+  if (outcome === "cloned") deps.out(row("plugin", PLUGIN_DIRNAME, "cloned"));
+
+  // Dependencies: after any move, when node_modules is missing, or when the
+  // marker names a different commit than the one checked out.
+  const atPin = outcome !== "held";
+  const marker = resolve(dir, "node_modules", DEPS_MARKER);
+  const markerRef = existsSync(marker) ? readFileSync(marker, "utf8").trim() : null;
+  const needsDeps =
+    outcome === "cloned" ||
+    outcome === "advanced" ||
+    !existsSync(resolve(dir, "node_modules")) ||
+    (atPin && markerRef !== null && markerRef !== pin);
+  if (needsDeps) {
     const spin = spinner("dependencies", deps);
     let out = "";
     try {
@@ -285,9 +454,27 @@ async function ensureCheckout(deps: WiringDeps, dir: string): Promise<CheckoutOu
     } finally {
       spin.stop();
     }
+    if (atPin) {
+      mkdirSync(resolve(dir, "node_modules"), { recursive: true });
+      writeFileSync(marker, `${pin}\n`);
+    }
     deps.out(row("dependencies", packageCount(out) || "up to date", "installed"));
   }
-  return outcome;
+  return { outcome, problem };
+}
+
+/** {@link PinOutcome} as the wiring result reports it. */
+function checkoutField(outcome: PinOutcome): WiringResult["checkout"] {
+  switch (outcome) {
+    case "cloned":
+      return "cloned";
+    case "advanced":
+      return "updated";
+    case "at-pin":
+      return "present";
+    case "held":
+      return "held";
+  }
 }
 
 /**
@@ -341,7 +528,9 @@ export async function ensureClaudeWiring(
   };
   let checkout: WiringResult["checkout"];
   try {
-    checkout = await ensureCheckout(deps, checkoutDir);
+    const pinned = await ensurePluginAtPin(deps, checkoutDir, deps.pin ?? CLAUDE_CODE_CHANNEL_REF, deps.probe ?? liveProbe());
+    checkout = checkoutField(pinned.outcome);
+    if (pinned.problem !== null) warn("moving the channel plugin to its pin", new Error(pinned.problem));
   } catch (error) {
     warn("the channel plugin install", error);
     checkout = "failed";

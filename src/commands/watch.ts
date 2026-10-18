@@ -29,7 +29,7 @@ import {
   projectSlugResolved,
   resolveTmux,
 } from "../halt.ts";
-import { SESSION_PREFIX, type TmuxDeps, detectState, liveTmuxDeps } from "../tmux.ts";
+import { SESSION_PREFIXES, isWatcherSession, type TmuxDeps, detectState, liveTmuxDeps } from "../tmux.ts";
 import { RSS_CEILING_BYTES, isSupervised } from "../supervisor.ts";
 import { answerOnce, liveDialogIo, type DialogIo } from "../claude_dialogs.ts";
 import { readAgentConnection } from "../agent_connections.ts";
@@ -90,14 +90,19 @@ export interface WatchTarget {
  * Restricted to sessions this CLI named. Other people's tmux sessions on a
  * shared box are not ours to type into, and a stray `/clear` sent to one would
  * be indistinguishable from the user's own keystrokes.
+ *
+ * Both prefixes are ours (`burrow-`, and `suite-` for a session that predates
+ * 0.9). The watcher's own fallback session (`burrow-watch`, `suite-watch`)
+ * carries the prefix but runs no agent, so it is never a target.
  */
-export function parseTargets(stdout: string, prefix: string = SESSION_PREFIX): WatchTarget[] {
+export function parseTargets(stdout: string, prefixes: readonly string[] = SESSION_PREFIXES): WatchTarget[] {
   const out: WatchTarget[] = [];
   const seen = new Set<string>();
   for (const line of stdout.split("\n")) {
     const [session, cwd] = line.split("\t");
     if (!session || !cwd) continue;
-    if (!session.startsWith(`${prefix}-`)) continue;
+    if (!prefixes.some((p) => session.startsWith(`${p}-`))) continue;
+    if (isWatcherSession(session)) continue;
     if (seen.has(session)) continue;
     seen.add(session);
     out.push({ session, cwd });
@@ -144,7 +149,7 @@ export function recentAsks(tail: string, limit = 5): string[] {
  *
  * Discovery is TRANSCRIPT-FIRST, not tmux-first, and that is deliberate. The
  * host where this failure is most frequent turned out to run its agent outside
- * any suite-cli tmux session — a tmux-only sweep saw nothing there at all,
+ * any tmux session of ours — a tmux-only sweep saw nothing there at all,
  * while its transcripts showed 9 of 12 sessions halted. Observation must not
  * depend on us owning the session; only the recovery keystrokes do.
  */

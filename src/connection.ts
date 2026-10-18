@@ -1,5 +1,5 @@
 /**
- * The INSTALL CONNECTION: which Suite this machine talks to, and as whom.
+ * The INSTALL CONNECTION: which Burrow install this machine talks to, and as whom.
  *
  * An install is a server — a URL, a runtime id and a token. Connecting a
  * machine to one is harness-neutral: it is the same three values whether the
@@ -39,7 +39,7 @@ import {
   writeAgentConnection,
 } from "./agent_connections.ts";
 import type { SuiteConfig } from "./config.ts";
-import { configDir } from "./paths.ts";
+import { configEntry } from "./paths.ts";
 import { solicitCredentials, TOKEN_KEY, type CredentialStore, type Prompter } from "./secrets.ts";
 import { row } from "./ui.ts";
 
@@ -49,7 +49,7 @@ type Env = Record<string, string | undefined>;
 export const CREDENTIALS_FILENAME = "credentials.json";
 
 export function credentialsPath(env: Env = process.env): string {
-  return resolve(configDir(env), CREDENTIALS_FILENAME);
+  return configEntry(CREDENTIALS_FILENAME, env);
 }
 
 export interface SavedCredentials {

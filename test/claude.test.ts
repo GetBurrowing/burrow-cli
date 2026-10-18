@@ -133,8 +133,8 @@ describe("argv delivered to Claude", () => {
   });
 });
 
-describe("the Suite participation flags", () => {
-  // These exist because a Suite runtime is unattended. Without
+describe("the Burrow participation flags", () => {
+  // These exist because a Burrow runtime is unattended. Without
   // --dangerously-skip-permissions it stops on the first tool-call prompt
   // waiting for a human who is not there; without --continue every launch is
   // a cold session. One assertion per side throughout: a rule that fired
@@ -741,11 +741,11 @@ describe("supervision on session create", () => {
       binary: "/home/q/.local/bin/suite",
       intervalSeconds: 60,
     });
-    expect(res.watchdog).toContain("suite-watch");
-    expect(calls.some((c) => c.includes("suite-watch.service"))).toBe(true);
+    expect(res.watchdog).toContain("burrow-watch");
+    expect(calls.some((c) => c.includes("burrow-watch.service"))).toBe(true);
     // Restore unit written but NOT enabled — the operator opts in.
-    expect(calls.some((c) => c.includes("suite-agents.service"))).toBe(true);
-    expect(calls.some((c) => c.includes("enable") && c.includes("suite-agents"))).toBe(false);
+    expect(calls.some((c) => c.includes("burrow-agents.service"))).toBe(true);
+    expect(calls.some((c) => c.includes("enable") && c.includes("burrow-agents"))).toBe(false);
   });
 
   /** Supervision is insurance; the agent is the point. A failure must not throw. */
@@ -1048,5 +1048,72 @@ describe("the --continue fallback in the pane command", () => {
     expect(r.exit).toBe(1);
     // CONTROL: just inside the window it does fall back.
     expect(runScript({ firstExit: 1, secondsElapsed: 299 }).launches).toHaveLength(2);
+  });
+});
+
+/* ------------------------------------------------------------------------- */
+/* 0.8 `suite-` sessions stay found: never orphan a running agent             */
+/* ------------------------------------------------------------------------- */
+
+describe("a live 0.8 suite- session is attached to, never duplicated", () => {
+  const derived = sessionNameFromConfig(emptyConfig(), "/projects/ledger");
+  const legacy = derived.replace(/^burrow-/, "suite-");
+
+  /** A tmux server holding only the legacy session, its agent alive or gone. */
+  function legacyServer(agentAlive: boolean) {
+    return async (argv: string[]): Promise<RunResult> => {
+      if (argv.includes("list-panes")) return { exitCode: 0, stdout: `${legacy}\t4242\tzsh\n`, stderr: "" };
+      if (argv[0] === "ps") return { exitCode: 0, stdout: agentAlive ? PS_WITH_AGENT : PS_WITHOUT_AGENT, stderr: "" };
+      return { exitCode: 0, stdout: "", stderr: "" };
+    };
+  }
+
+  test("new sessions are named burrow-*", () => {
+    expect(derived).toMatch(/^burrow-ledger-[0-9a-f]{8}$/);
+    expect(legacy).toMatch(/^suite-ledger-[0-9a-f]{8}$/);
+  });
+
+  test("with a live suite-X and no burrow-X, `burrow claude` attaches to suite-X and creates nothing", async () => {
+    const r = recorder({}, legacyServer(true));
+    expect(await runClaude(r.deps, { userArgs: [], force: false })).toBe(0);
+    expect(r.ran.filter((a) => a.includes("new-session"))).toEqual([]);
+    expect(r.ran.filter((a) => a.includes("kill-session"))).toEqual([]);
+    expect(r.execed).toEqual([["tmux", "attach-session", "-t", legacy]]);
+  });
+
+  test("positive control: with no legacy session the same launch creates burrow-X", async () => {
+    const r = recorder();
+    expect(await runClaude(r.deps, { userArgs: [], force: false })).toBe(0);
+    const created = r.ran.filter((a) => a.includes("new-session"));
+    expect(created).toHaveLength(1);
+    expect(created[0]?.slice(0, 5)).toEqual(["tmux", "new-session", "-d", "-s", derived]);
+  });
+
+  test("a STALE suite-X (its agent gone) is recycled and the agent comes back as burrow-X", async () => {
+    const made: string[] = [];
+    const r = recorder({}, async (argv) => {
+      if (argv.includes("new-session")) {
+        made.push(argv[argv.indexOf("-s") + 1] ?? "");
+        return { exitCode: 0, stdout: "", stderr: "" };
+      }
+      if (argv.includes("list-panes")) {
+        const rows = [`${legacy}\t4242\tzsh`, ...made.map((m) => `${m}\t5000\tzsh`)];
+        return { exitCode: 0, stdout: `${rows.join("\n")}\n`, stderr: "" };
+      }
+      if (argv[0] === "ps") {
+        return { exitCode: 0, stdout: `${PS_WITHOUT_AGENT}  5000     1 zsh -zsh\n  5001  5000 claude claude --continue\n`, stderr: "" };
+      }
+      return { exitCode: 0, stdout: "", stderr: "" };
+    });
+    expect(await runClaude(r.deps, { userArgs: [], force: false })).toBe(0);
+    expect(r.ran.filter((a) => a.includes("kill-session"))).toEqual([["tmux", "kill-session", "-t", legacy]]);
+    expect(made).toEqual([derived]);
+  });
+
+  test("an explicit --session has no legacy twin: suite-<name> is not looked for", async () => {
+    const r = recorder({}, legacyServer(true));
+    await runClaude(r.deps, { userArgs: [], force: false, explicitSession: "ledger-0000" });
+    const created = r.ran.filter((a) => a.includes("new-session"));
+    expect(created[0]?.slice(0, 5)).toEqual(["tmux", "new-session", "-d", "-s", "ledger-0000"]);
   });
 });

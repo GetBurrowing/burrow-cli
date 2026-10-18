@@ -21,8 +21,11 @@ import {
   upsertEntry,
 } from "../roster.ts";
 import {
+  LEGACY_SESSION_PREFIX,
   type TmuxDeps,
+  currentPrefixName,
   descendants,
+  hasOwnPrefix,
   isContinueWrapper,
   liveTmuxDeps,
   looksLikeAgent,
@@ -30,6 +33,7 @@ import {
   parseProcesses,
 } from "../tmux.ts";
 import { resolveTmux } from "../halt.ts";
+import { runsUnmanagedCli } from "../migrate.ts";
 import { answerLaunchDialogs, liveDialogIo, type AnswerResult, type DialogIo } from "../claude_dialogs.ts";
 import { CLI_NAME } from "../version.ts";
 
@@ -121,7 +125,7 @@ export async function liveSessions(deps: RestoreDeps): Promise<string[]> {
  */
 export async function runningSessions(
   deps: RestoreDeps,
-  prefix = "suite-",
+  owns: (session: string) => boolean = hasOwnPrefix,
 ): Promise<RunningSession[]> {
   const tmux = resolveTmux(deps.tmux.which);
   const panes = await deps.tmux.run([
@@ -164,7 +168,7 @@ export async function runningSessions(
       // NEVER a silent skip for a session we own. A pane whose directory we
       // cannot read is exactly the case that must be said out loud, because
       // the alternative is a sweep that reports success having seen nothing.
-      if (session.startsWith(prefix)) {
+      if (owns(session)) {
         deps.log(
           `${session}: cannot determine its working directory (tmux reported neither a start nor a current path) — not adopted`,
         );
@@ -189,6 +193,24 @@ export async function runningSessions(
     out.push({ session, cwd, argv: agent.args.split(/\s+/).filter((a) => a !== "") });
   }
   return out;
+}
+
+/**
+ * The roster entry a DEAD legacy-prefixed entry is relaunched as: `suite-X`
+ * becomes `burrow-X`, in its `session` field and in the `-s` argument of its
+ * recorded command, and nothing else changes. Null when the entry keeps its
+ * name: it is not `suite-`-prefixed, or it runs a dev checkout's cli.ts, whose
+ * name an outside watchdog checks (a renamed `suite-oddjob` reads as a dead
+ * Oddjob to oddjob-watchdog.service, which starts a duplicate).
+ */
+export function relaunchRename(entry: RosterEntry, env: Record<string, string | undefined>): RosterEntry | null {
+  if (!entry.session.startsWith(`${LEGACY_SESSION_PREFIX}-`)) return null;
+  if (runsUnmanagedCli(entry.command, env)) return null;
+  const session = currentPrefixName(entry.session);
+  const command = [...entry.command];
+  const s = command.indexOf("-s");
+  if (s !== -1 && command[s + 1] === entry.session) command[s + 1] = session;
+  return { ...entry, session, command };
 }
 
 export interface RestoreResult {
@@ -230,20 +252,53 @@ export async function runRestore(
 
   const live = await liveSessions(deps);
   const result: RestoreResult = { started: [], skipped: [], failed: [] };
+  const plan = restorePlan(entries, live);
+
+  // A DEAD `suite-` entry comes back as `burrow-` (relaunchRename). Every
+  // rename is applied in ONE roster write, before any replay, so the roster
+  // never names a session that is about to be created under another name. An
+  // entry whose burrow name already has its own roster entry is superseded by
+  // it and dropped, so the agent is not started twice. A dry run writes nothing.
+  const env = { ...deps.tmux.env, HOME: home };
+  const recorded = new Set(entries.map((e) => e.session));
+  const renamed = new Map<RosterEntry, RosterEntry | "superseded">();
+  for (const d of plan) {
+    if (d.action !== "start") continue;
+    const next = relaunchRename(d.entry, env);
+    if (next === null) continue;
+    renamed.set(d.entry, recorded.has(next.session) ? "superseded" : next);
+  }
+  if (opts.apply && renamed.size > 0) {
+    const rewritten: RosterEntry[] = [];
+    for (const e of entries) {
+      const r = renamed.get(e);
+      if (r === "superseded") continue;
+      rewritten.push(r ?? e);
+    }
+    deps.writeRoster(rosterPath(home), serializeRoster(rewritten));
+  }
   const tmux = resolveTmux(deps.tmux.which);
   // One poll per restored Claude session, all running at once: at boot every
   // agent comes up together, and answering them one after another would make
   // the last one wait for all the others' windows.
   const answering: Promise<AnswerResult>[] = [];
 
-  for (const { entry, action, reason } of restorePlan(entries, live)) {
+  for (const { entry: recordedEntry, action, reason } of plan) {
     if (action === "skip") {
-      result.skipped.push(entry.session);
-      deps.log(`${entry.session}: skipped — ${reason}`);
+      result.skipped.push(recordedEntry.session);
+      deps.log(`${recordedEntry.session}: skipped — ${reason}`);
       continue;
     }
+    const r = renamed.get(recordedEntry);
+    if (r === "superseded") {
+      result.skipped.push(recordedEntry.session);
+      deps.log(`${recordedEntry.session}: skipped — superseded by ${currentPrefixName(recordedEntry.session)}${opts.apply ? "; dropped from the roster" : ""}`);
+      continue;
+    }
+    const entry = r ?? recordedEntry;
+    const as = r === undefined ? "" : ` as ${entry.session}`;
     if (!opts.apply) {
-      deps.log(`${entry.session}: would start (${reason})`);
+      deps.log(`${recordedEntry.session}: would start${as} (${reason})`);
       result.started.push(entry.session);
       continue;
     }
@@ -264,7 +319,7 @@ export async function runRestore(
     const { exitCode, stderr } = await deps.tmux.run(argv);
     if (exitCode === 0) {
       result.started.push(entry.session);
-      deps.log(`${entry.session}: started in ${entry.cwd}`);
+      deps.log(`${entry.session}: started in ${entry.cwd}${r === undefined ? "" : ` (recorded as ${recordedEntry.session})`}`);
       if (entry.kind === "claude" && deps.dialogs !== undefined) {
         answering.push(answerLaunchDialogs(deps.dialogs, { session: entry.session, cwd: entry.cwd, home }));
       }

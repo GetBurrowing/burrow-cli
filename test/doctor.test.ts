@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import {
   CLAUDE_VERSION_FLOOR,
+  renderLeftovers,
   OVERRIDE_ENV_VARS,
   apiKeyOverride,
   authSupported,
@@ -100,6 +101,8 @@ interface FakeOptions {
   env?: Record<string, string | undefined>;
   exists?: (path: string) => boolean;
   sessionState?: "live" | "stale" | "none";
+  /** The name the pane listing reports the session under. Default: the derived burrow name. */
+  paneSession?: string;
   config?: SuiteConfig | null;
   color?: boolean;
   utf8?: boolean;
@@ -232,7 +235,7 @@ function fakeDeps(options: FakeOptions = {}): DoctorDeps & { lines: string[]; ar
     // Stage 4's detector: a pane listing, then a process snapshot.
     if (name === "tmux" && args[0] === "list-panes") {
       if (sessionState === "none") return ok;
-      return { ...ok, stdout: `${SESSION_NAME}\t4242\t-sh\n` };
+      return { ...ok, stdout: `${options.paneSession ?? SESSION_NAME}\t4242\t-sh\n` };
     }
     if (name === "ps") {
       if (sessionState === "live") return { ...ok, stdout: "  4243  4242 claude claude\n" };
@@ -457,7 +460,7 @@ describe("each check fires on a broken input", () => {
     expect(check.status).not.toBe("pass");
 
     // AND THE OTHER HALF. `⏸ Pending approval` is a project-approval state, not
-    // a connectivity verdict — measured on a real box, both Suite servers
+    // a connectivity verdict — measured on a real box, both Burrow servers
     // reported pending while the channel was demonstrably delivering messages.
     // Printing `✘` there is a failure reported for something that works.
     expect(check.status).toBe("skip");
@@ -487,6 +490,25 @@ describe("each check fires on a broken input", () => {
     // is being detected — not merely "a session exists".
     const live = await report({ sessionState: "live" });
     expect(byId(live.checks, "session").status).toBe("pass");
+  });
+});
+
+describe("doctor finds a 0.8 suite- session under its old name", () => {
+  const legacy = SESSION_NAME.replace(/^burrow-/, "suite-");
+  test("the derived name is burrow-; a live suite- twin passes as running, named as itself", async () => {
+    expect(SESSION_NAME).toMatch(/^burrow-/);
+    const { checks } = await report({ sessionState: "live", paneSession: legacy });
+    expect(byId(checks, "session")).toMatchObject({ status: "pass", value: "agent running", detail: legacy });
+  });
+
+  test("a stale suite- twin is a failure named as itself, never 'none for this directory'", async () => {
+    const { checks } = await report({ sessionState: "stale", paneSession: legacy });
+    expect(byId(checks, "session")).toMatchObject({ status: "fail", value: "stale", detail: legacy });
+  });
+
+  test("positive control: a session under neither name is none, under the burrow name", async () => {
+    const { checks } = await report({ sessionState: "live", paneSession: "someone-else" });
+    expect(byId(checks, "session")).toMatchObject({ status: "pass", value: "none for this directory", detail: SESSION_NAME });
   });
 });
 
@@ -1025,7 +1047,7 @@ describe("the tools api check", () => {
     // The consequence names the invisible symptom, not the status code.
     expect(text).toContain("exposes no Burrow tools");
     expect(text).toContain("nothing anywhere prints an error");
-    // It reached the application, so nothing in front of Suite is implicated.
+    // It reached the application, so nothing in front of Burrow is implicated.
     expect(text).toContain("The request reached Burrow");
     // Expired and never-valid look identical from here: re-enter, do not mint.
     expect(text).toContain("rather than minting a new one");
@@ -1038,7 +1060,7 @@ describe("the tools api check", () => {
 
   /**
    * THE TEXT DIFFERENCE IS THE TICKET. `rejected` and `unreachable` need
-   * OPPOSITE fixes — one is a wrong credential Suite refused, the other is
+   * OPPOSITE fixes — one is a wrong credential Burrow refused, the other is
    * nothing answering at all — so a test asserting only "it failed" would pass
    * on a doctor that printed the same paragraph for both.
    */
@@ -1238,7 +1260,7 @@ describe("the token match check", () => {
   });
 
   /**
-   * DIFFERENT HOSTS IS A SKIP, DELIBERATELY. Two Suite deployments on one box
+   * DIFFERENT HOSTS IS A SKIP, DELIBERATELY. Two Burrow deployments on one box
    * is a legitimate configuration and two credentials is then correct, so this
    * check says nothing rather than inventing a verdict. Note the tokens here
    * ALSO differ — the same input that fails above — so what is being tested is
@@ -1302,7 +1324,7 @@ describe("the token match check", () => {
 describe("a server that is PENDING APPROVAL and WORKING", () => {
   /**
    * THE ANTI-VACUITY FIXTURE FOR THE WHOLE TIER, and the state a real box was
-   * measured in: `claude mcp list` reports `⏸ Pending approval` for BOTH Suite
+   * measured in: `claude mcp list` reports `⏸ Pending approval` for BOTH Burrow
    * servers while the tools endpoint answers a real `tools/list` and the channel
    * delivers messages. A doctor that reads pending as a failure prints red for a
    * machine that works, which is the misdiagnosis this tier exists to end.
@@ -1348,4 +1370,25 @@ test("liveDoctorDeps honours NO_COLOR and a non-UTF-8 locale", async () => {
   expect(deps.utf8).toBe(false);
   const utf8 = await liveDoctorDeps({ LANG: "en_US.UTF-8", HOME: "/nonexistent-fixture-home" });
   expect(utf8.utf8).toBe(true);
+});
+
+describe("the pre-0.9.0 leftovers section", () => {
+  test("each old directory, what still uses it, or that nothing does", () => {
+    const lines = renderLeftovers([
+      { path: "/h/.local/share/suite", users: ["bun /h/.local/share/suite/cli/src/cli.ts watch"] },
+      { path: "/h/.local/state/suite", users: [] },
+    ]);
+    expect(lines).toEqual([
+      "",
+      "  directories from before 0.9.0 (never deleted automatically)",
+      "    /h/.local/share/suite",
+      "      in use: bun /h/.local/share/suite/cli/src/cli.ts watch",
+      "    /h/.local/state/suite",
+      "      no running process uses it; safe to remove by hand",
+    ]);
+  });
+
+  test("nothing left: no section at all", () => {
+    expect(renderLeftovers([])).toEqual([]);
+  });
 });

@@ -1,10 +1,10 @@
 /**
- * The bridge between a Suite runtime channel and one `codex app-server`.
+ * The bridge between a Burrow runtime channel and one `codex app-server`.
  *
- *   Suite ──attention──▶ bridge ──turn/start──▶ codex app-server
- *   Suite ◀──reply────── bridge ◀──suite_reply── Codex (via the suite-channel MCP server)
+ *   Burrow ──attention──▶ bridge ──turn/start──▶ codex app-server
+ *   Burrow ◀──reply────── bridge ◀──suite_reply── Codex (via the suite-channel MCP server)
  *
- * ONE THREAD PER SPACE. Each Suite space gets its own persistent Codex thread,
+ * ONE THREAD PER SPACE. Each Burrow space gets its own persistent Codex thread,
  * and its id is saved, so a restart resumes the same conversation
  * (`thread/resume`) instead of starting cold. Why per space, not one thread
  * for the whole runtime and not one per message:
@@ -332,7 +332,7 @@ export class CodexBridge {
   /**
    * Answer a server → client request according to the approval policy.
    *
-   * Nobody is at a Suite runtime's keyboard, so every request is answered at
+   * Nobody is at a Burrow runtime's keyboard, so every request is answered at
    * once — an unanswered request stalls the turn forever — and every answer
    * is logged with what it was about.
    *

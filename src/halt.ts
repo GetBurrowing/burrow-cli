@@ -387,14 +387,14 @@ export interface ReorientInput {
   contextTokens: number | null;
   /** Most recent real asks, oldest first. Reconstructed, never remembered. */
   recentAsks: string[];
-  /** Suite-side facts, supplied by a caller that holds credentials. */
+  /** Burrow-side facts, supplied by a caller that holds credentials. */
   suiteFacts?: string[];
 }
 
 /**
  * The prompt handed to the session after the clear.
  *
- * Every line is reconstructed from the transcript or supplied by Suite. None of
+ * Every line is reconstructed from the transcript or supplied by Burrow. None of
  * it asks the model to recall anything, because the clear is precisely the
  * event that destroyed what it would recall.
  */

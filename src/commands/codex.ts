@@ -1,5 +1,5 @@
 /**
- * `suite codex` — run a Codex agent federated into Startup Suite, through
+ * `suite codex` — run a Codex agent federated into Burrow, through
  * `codex app-server` (JSON-RPC over stdio), under the same tmux / watchdog /
  * restore supervision as `suite claude`.
  *
@@ -7,7 +7,7 @@
  *
  *   suite codex                 (outer) connection, login, then tmux
  *     └ suite codex --no-session (in the pane) the bridge: runtime socket ⇄ app-server
- *         └ codex app-server     with the Suite MCP servers as `-c` overrides
+ *         └ codex app-server     with the Burrow MCP servers as `-c` overrides
  *             └ suite codex --reply-mcp   the `suite-channel` MCP server (suite_reply …)
  *
  * FOUR RULES:
@@ -22,13 +22,13 @@
  *     `~/.codex`: the agent's login, threads and config are the agent's, and a
  *     person's own Codex sessions on the same account never mix with it.
  *     `--codex-home DIR` points elsewhere deliberately.
- *  3. MCP BY OVERRIDE, NOT BY EDITING CONFIG. The Suite servers are passed as
+ *  3. MCP BY OVERRIDE, NOT BY EDITING CONFIG. The Burrow servers are passed as
  *     `-c mcp_servers.…` on the app-server argv, so nothing is written into
  *     any config.toml and nothing outlives the process. The runtime token
  *     reaches Codex only as the environment variable its
  *     `bearer_token_env_var` names — Codex's one route for an MCP bearer token —
  *     and never in an argv (asserted).
- *  4. THE SAME SESSION MACHINERY. tmux session `suite-<agent>`, recorded for
+ *  4. THE SAME SESSION MACHINERY. tmux session `burrow-<agent>`, recorded for
  *     `suite restore`, watchdog ensured on create; `--no-session` is what the
  *     pane and a service manager run.
  */
@@ -57,7 +57,7 @@ export const CODEX_INSTALL_HINT = "install it with `npm install -g @openai/codex
 export const MISSING_CODEX_EXIT = 4;
 export const NOT_LOGGED_IN_EXIT = 7;
 
-/** The env var Codex reads the Suite MCP bearer token from (rule 3). Not SUITE_*: see harness_env.ts. */
+/** The env var Codex reads the Burrow MCP bearer token from (rule 3). Not SUITE_*: see harness_env.ts. */
 export const MCP_TOKEN_ENV = "CODEX_SUITE_MCP_BEARER";
 /** Env vars carrying the operator's extra headers, one per configured header name. */
 export const headerEnvName = (i: number): string => `CODEX_SUITE_MCP_HEADER_${i}`;
@@ -139,7 +139,7 @@ export function bridgeSocketPath(root: string, env: Record<string, string | unde
 const tomlString = (s: string): string => JSON.stringify(s);
 
 /**
- * `codex app-server` with the two Suite MCP servers. Pure; holds no secret —
+ * `codex app-server` with the two Burrow MCP servers. Pure; holds no secret —
  * only the NAMES of the env vars that carry them.
  */
 export function appServerArgv(input: {
@@ -209,7 +209,7 @@ export interface BridgeInput {
   log(line: string): void;
 }
 
-/** Codex's own environment: the allowlist plus its home. No Suite credential (that is added at spawn, see rule 3). */
+/** Codex's own environment: the allowlist plus its home. No Burrow credential (that is added at spawn, see rule 3). */
 export function codexEnv(env: Record<string, string | undefined>, codexHome: string): Record<string, string> {
   return harnessChildEnv(env, { CODEX_HOME: codexHome });
 }

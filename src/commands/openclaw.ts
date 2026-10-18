@@ -1,5 +1,5 @@
 /**
- * `suite openclaw` — stamp an OpenClaw agent root Suite-ready through
+ * `suite openclaw` — stamp an OpenClaw agent root Burrow-ready through
  * OpenClaw's own non-interactive path, then run its gateway in a persistent
  * tmux session.
  *
@@ -7,11 +7,11 @@
  * state lives under it (`OPENCLAW_STATE_DIR=<root>/.openclaw`,
  * `OPENCLAW_CONFIG_PATH=<root>/.openclaw/openclaw.json`,
  * `OPENCLAW_HOME=<root>`), NEVER `~/.openclaw`; the gateway runs in tmux
- * `suite-<name>` through a `--no-session` relaunch of this CLI.
+ * `burrow-<name>` through a `--no-session` relaunch of this CLI.
  *
  * `--stamp-only` is the stage-1 machine contract (src/stamp_result.ts): one
  * JSON document on stdout, exit 0/1/2/3, and no session started. It is THE
- * implementation of "provision the OpenClaw channel for a Suite agent": other
+ * implementation of "provision the OpenClaw channel for a Burrow agent": other
  * tools (core's installer `setup channel` step) call it rather than cloning
  * openclaw-suite-channel and running its install.sh.
  *
@@ -56,7 +56,7 @@ import { existsSync, readFileSync, statSync, writeFileSync, mkdirSync } from "no
 import { createServer } from "node:net";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { harnessChildEnv, spawnHarness } from "../harness_env.ts";
-import { dataDir } from "../paths.ts";
+import { dataEntry } from "../paths.ts";
 import { assertNoSecretsInArgv, createStore } from "../secrets.ts";
 import {
   canonicalJson,
@@ -112,7 +112,7 @@ type Env = Record<string, string | undefined>;
 /* ------------------------------------------------------------------------- */
 
 /**
- * DEPLOYER: BUMP THIS BEFORE suite-cli MERGES.
+ * DEPLOYER: BUMP THIS BEFORE burrow-cli MERGES.
  *
  * This is the commit tagged v0.8.0 on burrow-channel-openclaw main (PR #32,
  * BURROW_* names with SUITE_* fallback, task 01a14b9f-b62c; Burrow rename C).
@@ -123,8 +123,8 @@ type Env = Record<string, string | undefined>;
  */
 export const OPENCLAW_CHANNEL_REF = "ad307416839aaf266ce6fd941dbcc25446e0445c";
 /** The channel repo's name. Its owner comes from repo_source.ts (SUITE_GITHUB_OWNER). */
-// Not renamed to burrow in 0.8.0: the channel repo rename is task C's; the old name redirects on GitHub.
-export const OPENCLAW_CHANNEL_REPO_NAME = "openclaw-suite-channel";
+// The repo's own name since Burrow rename C. Its old name, openclaw-suite-channel, redirects; nothing relies on that.
+export const OPENCLAW_CHANNEL_REPO_NAME = "burrow-channel-openclaw";
 
 export function openclawChannelRepo(env: Env = process.env): string {
   return httpsCloneUrl(OPENCLAW_CHANNEL_REPO_NAME, env);
@@ -366,12 +366,12 @@ export function workspaceFor(root: string): string {
 
 /** Where the channel plugin checkout lives. Shared across agents: it is a program. */
 export function channelCheckoutDir(env: Env): string {
-  return join(dataDir(env), "openclaw-suite-channel");
+  return dataEntry("burrow-channel-openclaw", env);
 }
 
 /** Where `--install-openclaw` puts the pinned CLI. */
 export function managedOpenclawDir(env: Env): string {
-  return join(dataDir(env), "openclaw");
+  return dataEntry("openclaw", env);
 }
 
 export function managedOpenclawBin(env: Env): string {
@@ -785,6 +785,12 @@ export function resolveOpenclawBin(opts: OpenclawOptions, deps: Pick<OpenclawDep
   return deps.which("openclaw");
 }
 
+/**
+ * The pin `npm ci` last installed, inside the checkout's node_modules. Keeps its
+ * pre-0.9 name on purpose: existing checkouts carry it, and a new name would
+ * read as "never installed" and re-run `npm ci` under a gateway that may be
+ * loading those modules.
+ */
 const CHECKOUT_MARKER = ".suite-cli-deps-ref";
 
 export function openclawWriter(ctx: { opts: OpenclawOptions | null }, deps: OpenclawDeps): HarnessWriter & { state: WriterState } {
@@ -1274,7 +1280,7 @@ export async function stampOpenclaw(args: string[], deps: OpenclawDeps, io: Stam
  * `--stamp-only`: the machine contract, nothing else.
  * `--gateway-only` (the relaunch inside tmux): exec `openclaw gateway run`.
  * Otherwise: stamp (human lines on stderr), then start or attach to the
- * `suite-<name>` session — or, with `--no-session`, run the gateway in the
+ * `burrow-<name>` session — or, with `--no-session`, run the gateway in the
  * foreground.
  */
 export async function runOpenclaw(args: string[], deps: OpenclawDeps): Promise<number> {

@@ -10,6 +10,80 @@ that matters in the field: is this one newer than what I had?
 Minor for a new capability or a changed default; patch for a fix that changes no
 behaviour anyone was relying on.
 
+## 0.9.0
+
+Burrow rename B2: what 0.8.0 left under the old names moves, once, on the first
+0.9 run, and the CLI's repo becomes `burrow-cli`. No running agent is stopped,
+orphaned or duplicated by any of it.
+
+- **One-shot state migration** (`src/migrate.ts`, run from `cli.ts` before
+  dispatch; skipped for `--version`, `--help`, `update`, `pane-status` and every
+  `--stamp-only`; stderr only). Everything now resolves under `<data>/burrow`,
+  `<state>/burrow` (roster, session logs) and `<config>/burrow`. An entry no
+  live process references is renamed (across filesystems: copied to
+  `<target>.incoming`, renamed into place, source removed); a live one is copied
+  and the original left byte-identical; a refused one gets a
+  `MOVED-TO-BURROW.txt` breadcrumb, is recorded in `<state>/burrow/migration.json`,
+  keeps resolving to its old path for that entry only, and is retried on each
+  run. The config dir moves an allowlist (`config.json`, `state.json`,
+  `watch.env`, `agents`, `credentials.json`) and leaves anything else as
+  foreign. `watch.env`'s `SUITE_TELEMETRY_AUTH` becomes `BURROW_TELEMETRY_AUTH`
+  at 0600. Plugin checkouts are renamed as they move:
+  `claude-code-suite-channel` -> `burrow-channel-claude-code`, and the openclaw
+  and hermes equivalents. A lock serialises concurrent first runs; once done,
+  a run reads `migration.json` and nothing else. Old dirs are never deleted;
+  `burrow doctor` lists them and what still uses them. `install.sh` puts the
+  library at `<data>/burrow/cli`; the old `<data>/suite/cli` is retired, not
+  moved, because the running watch daemon executes from it.
+- **Recorded paths are rewritten**: `~/.claude.json` channel entries (through
+  the claude CLI, read back, restored on a failed add), `openclaw.json`
+  `plugins.load.paths`, `.dsh` patch files and Hermes `config.yaml`, each with
+  a backup. A dev checkout's agent is listed, never written.
+- **Units**: `burrow-watch` and `burrow-agents` (launchd
+  `technology.milvenan.burrow-*`), `KillMode=process` in both. The migration
+  stops the old unit before starting the new one, carries enablement across and
+  retires the old file to `*.retired-by-burrow-<ts>`; it never stops a unit
+  whose cgroup holds a tmux server or pane, and the supervised daemon never
+  stops its own unit.
+- **tmux sessions are `burrow-*`.** A live `suite-X` is still found, attached
+  and restored by every verb; a stale one is recycled and comes back as
+  `burrow-X`. An entry running a dev checkout keeps its recorded name.
+- **The Claude Code plugin is pinned.** `CLAUDE_CODE_CHANNEL_REF` is
+  `a77532e6623405c2eb9043d2d663a1e09a3e45f2` (burrow-channel-claude-code 0.4.1).
+  Before, an existing checkout was never pulled, so a host stayed on the commit
+  it first cloned. `burrow claude` now holds it at the pin: at the pin it runs
+  no git at all (HEAD is read from the files); behind it, clean and unused, it
+  fetches only when the pin is missing, `checkout --detach`es the pin, runs
+  `bun install` and records the pin in `node_modules/.burrow-cli-deps-ref`. A
+  dirty, diverged or in-use checkout is left exactly where it is, with a
+  launch warning saying why, and the agent starts anyway. Never reset, never
+  forced. `HERMES_CHANNEL_REF` moves to `36e3d5398d724be0fe55232a7df536454ca189c9`
+  (burrow-channel-hermes v0.3.1). `OPENCLAW_CHANNEL_REF` stays at v0.8.0.
+- **Tags install.** `BURROW_CLI_REF=v0.8.0` used to 404, because `install.sh`
+  read every non-SHA as a branch. A SHA and a full `refs/heads/*` or
+  `refs/tags/*` ref are fetched as given; a bare name is tried as a branch, then
+  as a tag on a 404, so a branch still wins. A failed install names every URL it
+  tried and what each answered. The ref is now validated in `install.sh` too.
+- **The repo is `burrow-cli`.** Every fetch of this CLI's own files (the
+  installer, the tarball, the commits API) tries `burrow-cli` first and
+  `suite-cli` only on a 404, so it works before `gh repo rename` and after it
+  without relying on GitHub's redirect. Any other failure stops rather than
+  falling back. `BURROW_CLI_REPO` names one repo instead. The channel repos are
+  cloned by their own names: `burrow-channel-claude-code`,
+  `burrow-channel-openclaw`, `burrow-channel-hermes`. The units'
+  `Documentation=` and the README install line point at `burrow-cli`.
+- **The product is Burrow in the code, the README and the docs.** Comments,
+  messages, test names and the bundled dsh plugin's tool description say
+  Burrow. The old name stays only on the lines `test/product_name.test.ts`
+  lists, each with its reason: changelog entries before this one, the license
+  holder, the GitHub org literal, and a verbatim pre-0.9 unit file. The test
+  fails on an unlisted line, on a listed line that is gone, and on the product
+  called by both names. In the shipped files the old repo name stays where
+  the fallback fetches it, in the README's compatibility note, and in the
+  OpenClaw plugin's on-disk deps marker, which existing checkouts carry. The README's
+  Compatibility section now describes the one-shot move and its breadcrumbs
+  in place of the config-dir existence rule.
+
 ## 0.8.1
 
 Ported from the 2026-09-08 dsh working tree (most of which already landed

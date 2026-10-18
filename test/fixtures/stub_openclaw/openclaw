@@ -303,14 +303,14 @@ if (a0 === "plugins" && a1 === "inspect") {
     cliError(`Plugin not found: ${a2}. Run \`openclaw plugins list\` to see installed plugins.`);
   }
   if (knobs.inspect === "garbage") {
-    out("Startup Suite Channel\nStatus: loaded");
+    out("Burrow Channel\nStatus: loaded");
     process.exit(0);
   }
   const status = knobs.inspect === "error" ? "error" : "loaded";
   out({
     plugin: {
       id: a2,
-      name: "Startup Suite Channel",
+      name: "Burrow Channel",
       status,
       enabled: get(d, "plugins.entries.startup-suite-channel-plugin.enabled") === true,
       ...(status === "error" ? { error: "Cannot find module 'phoenix'" } : {}),

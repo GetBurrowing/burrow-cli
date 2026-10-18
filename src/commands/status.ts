@@ -9,7 +9,7 @@
  *     the inventory (src/agent_inventory.ts — the rows `status --json` emits):
  *     folder, runtime id, suite URL, and a marker for a folder with no record
  *     (src/agent_connections.ts) — NEVER the token. A 0.7.0 machine-level connection is reported as
- *     `legacy`, assigned to no folder, because it identifies none. The id is what Suite shows in its own UI, so it is the
+ *     `legacy`, assigned to no folder, because it identifies none. The id is what Burrow shows in its own UI, so it is the
  *     value that lets a human match this machine to a row on a screen; the
  *     token identifies nothing to a human and printing it puts a credential in
  *     a terminal scrollback, a screenshot and a pasted bug report.
@@ -34,7 +34,7 @@ import { SGR, glyphFor, paint, row } from "../ui.ts";
 import { CHANNEL_SERVER, whichBin } from "./init.ts";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { AGENT_NAME, SESSION_PREFIX, TMUX, detectState, type SessionState } from "../tmux.ts";
+import { AGENT_NAME, TMUX, detectState, hasOwnPrefix, type SessionState } from "../tmux.ts";
 import { channelStatus, liveDoctorDeps, liveInventorySource, type DoctorDeps } from "./doctor.ts";
 import {
   legacyConnection,
@@ -245,9 +245,13 @@ export function parseSessions(stdout: string): SessionRow[] {
   return rows;
 }
 
-/** Only OUR sessions. A user's own tmux sessions are none of our business. */
+/**
+ * Only OUR sessions. A user's own tmux sessions are none of our business. Ours
+ * carry either prefix: `burrow-` from 0.9, `suite-` for a session started
+ * before it that has not restarted since.
+ */
 export function ownSessions(rows: SessionRow[]): SessionRow[] {
-  return rows.filter((r) => r.name.startsWith(`${SESSION_PREFIX}-`));
+  return rows.filter((r) => hasOwnPrefix(r.name));
 }
 
 /**

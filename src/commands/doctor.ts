@@ -29,16 +29,17 @@
  * honoured and zero SGR bytes are emitted off a TTY.
  *
  * TWO HALVES, TWO REMEDIES. The report is split into the INSTALL CONNECTION
- * (`suite init`: which Suite, which runtime, which token) and the CLAUDE
+ * (`suite init`: which Burrow install, which runtime, which token) and the CLAUDE
  * HARNESS (`suite claude`: plugin checkout, MCP entries, session). A missing,
  * moved or unreadable Claude entry points at `suite claude`, which clones a
  * missing checkout and rewrites any entry that does not match the saved
- * connection — without asking for credentials. A credential Suite REJECTS
+ * connection — without asking for credentials. A credential Burrow REJECTS
  * points at `suite init`, because the fix is re-entering it; the next
  * `suite claude` then rewrites both entries with it. (The canvas's
  * `suite init --repair` was never shipped: rule (b) says a `→` must be
  * runnable, and `suite claude` is now the non-interactive repair it wanted.)
  */
+import { legacyLeftovers, type Leftover } from "../migrate.ts";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { resolve } from "node:path";
 import { emptyConfig, type SuiteConfig } from "../config.ts";
@@ -74,9 +75,9 @@ import {
 } from "../ui.ts";
 import {
   TMUX,
-  detectState,
   liveTmuxDeps,
-  sessionNameFromConfig,
+  resolveLaunchSession,
+  sessionCandidatesFromConfig,
   type RunResult,
   type SessionState,
   type TmuxDeps,
@@ -142,7 +143,7 @@ export type CheckId = (typeof CHECK_IDS)[number];
 
 /**
  * THE TWO HALVES OF A WORKING SETUP, reported separately so a reader can see
- * which one is missing. The INSTALL CONNECTION (which Suite, as which runtime,
+ * which one is missing. The INSTALL CONNECTION (which Burrow install, as which runtime,
  * with what token, plus tmux) is harness-neutral and is what `suite init`
  * sets up. The CLAUDE HARNESS is this folder's Claude Code wiring — plugin,
  * MCP entries, session — which `suite claude` sets up from the connection.
@@ -216,7 +217,7 @@ export function parseAuthStatus(output: string): AuthStatus | null {
   }
 }
 
-/** The auth mode Suite channels require. Anything else is a failure. */
+/** The auth mode Burrow channels require. Anything else is a failure. */
 export const SUPPORTED_AUTH_METHOD = "claude.ai";
 
 export function authSupported(status: AuthStatus): boolean {
@@ -378,10 +379,10 @@ export function parseMcpHeaderValue(output: string, headerName: string): string 
  * EVERY header recorded on an MCP entry, by name.
  *
  * Lifted GENERICALLY — whatever the operator registered — and never against a
- * hardcoded list. The `Authorization` header is ours, but a Suite behind an
+ * hardcoded list. The `Authorization` header is ours, but a Burrow install behind an
  * identity-aware access proxy carries additional operator-specific headers whose
  * names are that operator's business; a probe that replayed only the ones we
- * happened to think of would be answered by the gateway instead of by Suite and
+ * happened to think of would be answered by the gateway instead of by Burrow and
  * would then blame the wrong thing.
  *
  * Only lines inside a `Headers:` block and `-H '…'` argv echoes are read, so a
@@ -447,7 +448,7 @@ export function tokenFingerprint(secret: string): string {
  * what `URL` itself does.
  *
  * The channel entry records a WEBSOCKET url (`SUITE_URL=wss://…/socket`) and
- * the tools entry an HTTPS one (`https://…/mcp`). They point at the same Suite
+ * the tools entry an HTTPS one (`https://…/mcp`). They point at the same Burrow install
  * or the setup is split-brained, and only the host can say so, so this must
  * return the same answer for both schemes. Null on unparseable input.
  */
@@ -690,6 +691,12 @@ export interface DoctorDeps {
    * absent, the `agents` check is skipped rather than guessed.
    */
   inventory?(): InventorySource;
+  /**
+   * The pre-0.9.0 directories still on disk and what still uses them
+   * (migrate.ts legacyLeftovers). Optional: absent, nothing is listed.
+   * Informational only; it never changes the exit code.
+   */
+  leftovers?(): Leftover[];
   tmux: TmuxDeps;
   color: boolean;
   utf8: boolean;
@@ -851,7 +858,7 @@ export async function runChecks(deps: DoctorDeps): Promise<CheckResult[]> {
 }
 
 /**
- * Is this machine connected to a Suite install at all? Checked FIRST and on its
+ * Is this machine connected to a Burrow install at all? Checked FIRST and on its
  * own, because every harness depends on it and none of them owns it.
  *
  * The token is described, not judged: a machine set up by an older CLI kept
@@ -895,19 +902,19 @@ function installCheck(deps: DoctorDeps): CheckResult {
  * IS EVERY AGENT FOLDER ON THIS MACHINE WIRED AS ITSELF?
  *
  * The failure this exists for is silent: folder A's Claude entries name folder
- * B's runtime, so A joins Suite as B — B's tasks land in A, and B's own socket
+ * B's runtime, so A joins Burrow as B — B's tasks land in A, and B's own socket
  * is refused as a duplicate. Every surface A can see reports healthy.
  *
- * For every folder in union(saved records, ~/.claude.json projects with Suite
- * entries, roster cwds) it compares the runtime id and Suite host named by the
+ * For every folder in union(saved records, ~/.claude.json projects with Burrow
+ * entries, roster cwds) it compares the runtime id and Burrow host named by the
  * folder's record, its local Claude entry and its own `.mcp.json`; any
  * disagreement is `cross-wired`, naming the folder and the ids (ids are not
- * secrets). It ALSO fails on a USER-scope Suite entry, because that one applies
+ * secrets). It ALSO fails on a USER-scope Burrow entry, because that one applies
  * to every folder that has no local entry of its own.
  *
  * READ-ONLY. It reads ~/.claude.json directly, as claude_wiring.ts localEntries
  * does, and NEVER runs `claude mcp get/list` — those health-check a stdio
- * server by STARTING it, which joins Suite as that runtime a second time. It
+ * server by STARTING it, which joins Burrow as that runtime a second time. It
  * writes nothing and stamps nothing: the remedy is a command for a human.
  */
 async function agentsCheck(deps: DoctorDeps): Promise<CheckResult> {
@@ -1188,7 +1195,7 @@ function credentialsCheck(
  *
  * ONE RUNTIME CREDENTIAL NORMALLY SERVES BOTH SERVERS. The channel entry keeps
  * it in `SUITE_TOKEN`, the tools entry in an `Authorization: Bearer` header, and
- * when the two disagree on one Suite host at least one of them is wrong — which
+ * when the two disagree on one Burrow host at least one of them is wrong — which
  * produces a server that REGISTERS AND EXPOSES NOTHING.
  *
  * WHY SO CHEAP A CHECK EARNS ITS LINE: the broken configuration LOOKS PLAUSIBLE.
@@ -1201,7 +1208,7 @@ function credentialsCheck(
  * credential is presence-only (see {@link credentialsCheck}, which renders
  * `set`), and this check does not weaken it.
  *
- * DIFFERENT HOSTS IS A SKIP, NOT A FAILURE. Two Suite deployments on one box —
+ * DIFFERENT HOSTS IS A SKIP, NOT A FAILURE. Two Burrow deployments on one box —
  * a production federation and a local one — is a legitimate configuration, and
  * two credentials for two hosts is then exactly right. This check has nothing to
  * say about it, so it says nothing rather than inventing a verdict. Same for an
@@ -1502,8 +1509,10 @@ async function sessionCheck(deps: DoctorDeps, tmuxPath: string | null): Promise<
     return { id: "session", label: "session", status: "skip", reason: "needs tmux" };
   }
   const config = deps.config ?? emptyConfig();
-  const name = sessionNameFromConfig(config, deps.cwd);
-  const state: SessionState = await detectState(name, deps.tmux);
+  // The burrow name, or a 0.8 `suite-` twin still running (or stale) under its old name.
+  const found = await resolveLaunchSession(sessionCandidatesFromConfig(config, deps.cwd), deps.tmux);
+  const name = found.recycle ?? found.session;
+  const state: SessionState = found.recycle !== undefined ? "stale" : found.state;
   if (state === "live") {
     return { id: "session", label: "session", status: "pass", value: "agent running", detail: name };
   }
@@ -1547,9 +1556,26 @@ function compact(text: string, limit = 160): string {
 /* Entry points                                                               */
 /* ------------------------------------------------------------------------- */
 
+/**
+ * The leftovers section: each old directory, and the live processes still
+ * using it. The migration never deletes one; this is how an operator learns
+ * when removing it by hand is safe. Empty when there are none.
+ */
+export function renderLeftovers(list: Leftover[]): string[] {
+  if (list.length === 0) return [];
+  const lines = ["", "  directories from before 0.9.0 (never deleted automatically)"];
+  for (const l of list) {
+    lines.push(`    ${l.path}`);
+    if (l.users.length === 0) lines.push("      no running process uses it; safe to remove by hand");
+    for (const u of l.users) lines.push(`      in use: ${u}`);
+  }
+  return lines;
+}
+
 export async function runDoctor(deps: DoctorDeps): Promise<number> {
   const checks = await runChecks(deps);
   for (const line of renderReport(checks, { color: deps.color, utf8: deps.utf8 })) deps.out(line);
+  for (const line of renderLeftovers(deps.leftovers?.() ?? [])) deps.out(line);
   return exitCodeFor(checks);
 }
 
@@ -1569,6 +1595,7 @@ export async function liveDoctorDeps(
     configFile: own?.path ?? agentConfigPath(env, cwd),
     tokenSaved: own === null ? false : (readAgentSecrets(env, own.record.dir)?.token ?? "") !== "",
     inventory: () => liveInventorySource(env),
+    leftovers: () => legacyLeftovers(env),
     tmux,
     color: colorEnabled(env),
     utf8: utf8Enabled(env),

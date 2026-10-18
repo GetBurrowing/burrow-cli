@@ -13,74 +13,61 @@
  *     none of which hand-parsing gets right.
  */
 import { existsSync } from "node:fs";
-import { dirname, isAbsolute, resolve } from "node:path";
+import { dirname, resolve } from "node:path";
+import { entryPath } from "./migrate.ts";
+import { BURROW_DIRNAME, burrowRoot, type Env } from "./xdg.ts";
 
 export type Scope = "user" | "project";
 
 /** The default scope for every write this CLI performs. Never "project". */
 export const DEFAULT_SCOPE: Scope = "user";
 
-type Env = Record<string, string | undefined>;
-
-function home(env: Env): string {
-  const h = env.HOME;
-  if (h === undefined || h === "") {
-    throw new Error("HOME is not set; cannot resolve the user config directory");
-  }
-  return h;
-}
-
-/** The config directory's name before and after the Burrow rename. */
-export const CONFIG_DIRNAME = "burrow";
-export const LEGACY_CONFIG_DIRNAME = "suite";
-
-/** `$XDG_CONFIG_HOME` when absolute, else `~/.config`. */
-export function configBase(env: Env = process.env): string {
-  const xdg = env.XDG_CONFIG_HOME;
-  return xdg !== undefined && xdg !== "" && isAbsolute(xdg) ? xdg : resolve(home(env), ".config");
-}
-
-/** `<config>/suite`, whether or not it exists. Only ever READ from by a fallback; never created here. */
-export function legacyConfigDir(env: Env = process.env): string {
-  return resolve(configBase(env), LEGACY_CONFIG_DIRNAME);
-}
-
 /**
- * The config directory, decided by EXISTENCE, never by migrating:
- *
- *   `<config>/burrow` when it exists;
- *   else `<config>/suite` when it exists (a host set up before the rename);
- *   else `<config>/burrow` (a cold host).
- *
- * Reads and writes both go to the resolved directory, so an old host keeps
- * writing where its records already are, and nothing a user has is moved or
- * deleted. Core's agent-host writes `~/.config/suite/agents/<key>.json` itself;
- * on such a host the suite directory exists and is chosen by the same rule.
- * When BOTH exist, burrow wins, and agent records missing from it are still
- * read from the suite directory one file at a time (agent_connections.ts).
+ * Every path below is `<base>/burrow/...`. The pre-0.9.0 `suite` locations are
+ * named only in migrate.ts, which moves them once; {@link entryPath} is how an
+ * entry the migration had to refuse keeps resolving to its old location.
  */
+export { configBase, dataBase, stateBase, type Env } from "./xdg.ts";
+
+/** The directory name under each base. */
+export const CONFIG_DIRNAME = BURROW_DIRNAME;
+
+/** `<config>/burrow`. Unconditional: the migration has moved what was in `<config>/suite`. */
 export function configDir(env: Env = process.env): string {
-  const base = configBase(env);
-  const burrow = resolve(base, CONFIG_DIRNAME);
-  if (existsSync(burrow)) return burrow;
-  const legacy = resolve(base, LEGACY_CONFIG_DIRNAME);
-  if (existsSync(legacy)) return legacy;
-  return burrow;
+  return burrowRoot("config", env);
 }
 
-/** NOT renamed: absolute paths under it are recorded in MCP entries and service units. */
+/** `<data>/burrow`: the plugin checkouts and harness installs. The CLI library is `<data>/burrow/cli` (install.sh). */
 export function dataDir(env: Env = process.env): string {
-  const xdg = env.XDG_DATA_HOME;
-  const base = xdg !== undefined && xdg !== "" && isAbsolute(xdg) ? xdg : resolve(home(env), ".local", "share");
-  return resolve(base, "suite");
+  return burrowRoot("data", env);
+}
+
+/** `<state>/burrow`: the roster, session logs and the migration's own record. */
+export function stateDir(env: Env = process.env): string {
+  return burrowRoot("state", env);
+}
+
+/** `<config>/burrow/<name>`, or its old path while the migration has it refused. */
+export function configEntry(name: string, env: Env = process.env): string {
+  return entryPath("config", name, env);
+}
+
+/** `<data>/burrow/<name>`, or its old path while the migration has it refused. */
+export function dataEntry(name: string, env: Env = process.env): string {
+  return entryPath("data", name, env);
+}
+
+/** `<state>/burrow/<name>`, or its old path while the migration has it refused. */
+export function stateEntry(name: string, env: Env = process.env): string {
+  return entryPath("state", name, env);
 }
 
 export function configPath(env: Env = process.env): string {
-  return resolve(configDir(env), "config.json");
+  return configEntry("config.json", env);
 }
 
 export function statePath(env: Env = process.env): string {
-  return resolve(configDir(env), "state.json");
+  return configEntry("state.json", env);
 }
 
 /**

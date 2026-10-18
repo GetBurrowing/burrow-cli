@@ -350,7 +350,7 @@ describe("a first stamp", () => {
       expect(c.env.OPENCLAW_STATE_DIR).toBe(stateDirFor(root));
       expect(c.env.OPENCLAW_CONFIG_PATH).toBe(configPathFor(root));
       expect(c.env.OPENCLAW_HOME).toBe(root);
-      // Nothing inherited: not the operator's OpenClaw, not Suite, not systemd's hints.
+      // Nothing inherited: not the operator's OpenClaw, not Burrow, not systemd's hints.
       expect(Object.keys(c.env).filter((k) => /^OPENCLAW_/.test(k)).sort()).toEqual(["OPENCLAW_CONFIG_PATH", "OPENCLAW_HOME", "OPENCLAW_STATE_DIR"]);
       expect(Object.keys(c.env).filter((k) => k.startsWith("SUITE_") || k === "INVOCATION_ID" || k === "JOURNAL_STREAM")).toEqual([]);
       expect(scanEnv("child", c.env, parentCanary)).toEqual([]);
@@ -858,7 +858,7 @@ describe("the gateway session", () => {
     expect(classify(panes, dead, "suite-openclaw-01a0d8f8", OPENCLAW_GATEWAY_COMM)).toBe("stale");
   });
 
-  test("a fresh run creates suite-<name> running the --gateway-only relaunch, with no token anywhere, and records it", async () => {
+  test("a fresh run creates burrow-<name> running the --gateway-only relaunch, with no token anywhere, and records it", async () => {
     const tmux = fakeTmux();
     const written: Record<string, string> = {};
     const restore: RestoreDeps = {
@@ -873,7 +873,7 @@ describe("the gateway session", () => {
     const created = tmux.ran.filter((a) => a[1] === "new-session");
     expect(created).toHaveLength(1);
     const create = created[0] ?? [];
-    expect(create.slice(0, 5)).toEqual(["tmux", "new-session", "-d", "-s", "suite-openclaw-01a0d8f8"]);
+    expect(create.slice(0, 5)).toEqual(["tmux", "new-session", "-d", "-s", "burrow-openclaw-01a0d8f8"]);
     expect(create).toContain("--gateway-only");
     expect(create).toContain("--no-session");
     expect(create).toContain(String(FIRST_STAMP_PORT));
@@ -881,7 +881,7 @@ describe("the gateway session", () => {
     expect(create.some((a) => /^(start|restart|install)$/.test(a))).toBe(false);
     const roster = parseRoster(Object.values(written)[0] ?? "");
     expect(roster).toHaveLength(1);
-    expect(roster[0]).toMatchObject({ kind: "openclaw", session: "suite-openclaw-01a0d8f8", cwd: root });
+    expect(roster[0]).toMatchObject({ kind: "openclaw", session: "burrow-openclaw-01a0d8f8", cwd: root });
   });
 
   test("a live session is attached to, never duplicated", async () => {
@@ -987,7 +987,7 @@ describe("--stamp-only as a subprocess: the machine contract", () => {
 describe("pins", () => {
   test("the channel is pinned to the commit tagged v0.8.0 on burrow-channel-openclaw main (PR #32)", () => {
     expect(OPENCLAW_CHANNEL_REF).toBe("ad307416839aaf266ce6fd941dbcc25446e0445c");
-    expect(readFileSync(resolve(import.meta.dir, "..", "src", "commands", "openclaw.ts"), "utf8")).toContain("DEPLOYER: BUMP THIS BEFORE suite-cli MERGES");
+    expect(readFileSync(resolve(import.meta.dir, "..", "src", "commands", "openclaw.ts"), "utf8")).toContain("DEPLOYER: BUMP THIS BEFORE burrow-cli MERGES");
   });
   test("the OpenClaw pin", () => {
     expect(OPENCLAW_PACKAGE).toBe("openclaw@2026.9.4");

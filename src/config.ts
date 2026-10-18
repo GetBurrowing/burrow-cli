@@ -5,7 +5,7 @@
  * copying one small JSON document. That makes what it may contain a security
  * question, not a convenience one:
  *
- *   IT HOLDS NO SECRET VALUES. Ever. Suite URL, runtime id, the NAMES of any
+ *   IT HOLDS NO SECRET VALUES. Ever. Burrow URL, runtime id, the NAMES of any
  *   extra headers the operator's deployment needs, and the session-naming
  *   preference. Header VALUES and the token live in the credential store
  *   (see secrets.ts) and are handed to child processes, never serialised here.
@@ -22,7 +22,7 @@ import { assertWritable, configPath, type GitProbe, gitProbe } from "./paths.ts"
 export type SessionNaming = "cwd" | "runtime";
 
 export interface SuiteConfig {
-  /** Base URL of the Suite deployment, e.g. https://suite.example.invalid */
+  /** Base URL of the Burrow deployment, e.g. https://suite.example.invalid */
   suiteUrl: string;
   /** Runtime id this machine is federated as. Not a secret; the token is. */
   runtimeId: string;

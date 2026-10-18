@@ -51,7 +51,7 @@ describe("units never carry credentials", () => {
    */
   test("systemd sources an optional env file rather than inlining a token", () => {
     const unit = systemdUnit({ ...base, platform: "linux" });
-    expect(unit).toContain("EnvironmentFile=-/home/q/.config/suite/watch.env");
+    expect(unit).toContain("EnvironmentFile=-/home/q/.config/burrow/watch.env");
     expect(unit).not.toContain("SUITE_TELEMETRY_AUTH=");
     expect(unit).not.toContain("BURROW_TELEMETRY_AUTH=");
   });
@@ -123,7 +123,7 @@ describe("installing", () => {
     const { io, calls } = recordingIo();
     await installSupervisor(io, supervisorPlan({ ...base, platform: "linux" }));
     expect(calls[0]).toBe("mkdirp /home/q/.config/systemd/user");
-    expect(calls[1]).toBe("write /home/q/.config/systemd/user/suite-watch.service");
+    expect(calls[1]).toBe("write /home/q/.config/systemd/user/burrow-watch.service");
   });
 
   /**
@@ -234,7 +234,7 @@ describe("telemetry credential", () => {
 
   test("falls back to the env file, which is how macOS gets it at all", () => {
     const auth = readTelemetryAuth({ HOME: "/h" }, (p) => {
-      expect(p).toBe("/h/.config/suite/watch.env");
+      expect(p).toBe("/h/.config/burrow/watch.env");
       return "# comment\nSUITE_TELEMETRY_AUTH=Basic zzz\n";
     });
     expect(auth).toBe("Basic zzz");

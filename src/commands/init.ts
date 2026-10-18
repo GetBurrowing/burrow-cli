@@ -1,5 +1,5 @@
 /**
- * `suite init` — connect this machine to a Suite install. Harness-neutral.
+ * `suite init` — connect this machine to a Burrow install. Harness-neutral.
  *
  * An INSTALL is the server: a URL, a runtime id and a token. `suite init`
  * records those (plus bun, tmux and the watchdog, which every harness needs)
@@ -8,7 +8,7 @@
  *
  *     bun               1.2.4                 present
  *     tmux              3.5a                  present
- *     config            ~/.config/suite/config.json
+ *     config            ~/.config/burrow/config.json
  *
  * Each harness verb then does its OWN wiring from what init saved, lazily and
  * idempotently: `suite claude` clones the channel plugin, writes CLAUDE.md and
@@ -22,7 +22,7 @@
  *     `~/.claude.json` under the directory's key, never in the directory
  *     itself. It used to be `-s user`, which is ONE entry for every Claude on
  *     the machine, so installing a second agent re-pointed the first one at the
- *     second one's Suite and runtime. See {@link registerServers}.
+ *     second one's Burrow and runtime. See {@link registerServers}.
  *  2. WRITTEN IS NOT CONNECTED. After writing, the wiring health-checks. An
  *     entry that was written perfectly and cannot connect is the exact failure
  *     this tool exists to stop someone debugging by hand, so a green result
@@ -32,7 +32,6 @@
 import { dirname, resolve } from "node:path";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { mkdir } from "node:fs/promises";
 import {
   createStore,
   spawnWithSecrets,
@@ -40,7 +39,7 @@ import {
   type Prompter,
   type SpawnResult,
 } from "../secrets.ts";
-import { dataDir } from "../paths.ts";
+import { dataEntry } from "../paths.ts";
 import { promptConnection } from "../connection.ts";
 import { canonicalDir, writeAgentConnection } from "../agent_connections.ts";
 import { nextCommand, row } from "../ui.ts";
@@ -155,14 +154,28 @@ export interface InitOptions {
 }
 
 /** The Claude Code channel plugin's repo name. Its owner comes from repo_source.ts. */
-// Not renamed to burrow in 0.8.0: the channel repo rename is task C's; the old name redirects on GitHub.
-export const PLUGIN_REPO_NAME = "claude-code-suite-channel";
+// The repo's own name since Burrow rename C. Its old name, claude-code-suite-channel, redirects; nothing relies on that.
+export const PLUGIN_REPO_NAME = "burrow-channel-claude-code";
+
+/**
+ * DEPLOYER: BUMP THIS BEFORE burrow-cli MERGES.
+ *
+ * This is the commit tagged 0.4.1 on burrow-channel-claude-code main (PR #29,
+ * product-name copy to Burrow, Burrow rename F). Before 0.9.0 the checkout was
+ * cloned once and never moved again: hive's sat at b238164 (2026-07-31) while
+ * main moved on. `burrow claude` now holds the checkout at this commit; see
+ * {@link ensurePluginAtPin} in claude_wiring.ts.
+ * Pin a commit on main, never a branch tip: a squash merge deletes the branch
+ * and the tip would dangle.
+ */
+export const CLAUDE_CODE_CHANNEL_REF = "a77532e6623405c2eb9043d2d663a1e09a3e45f2";
 
 /** The plugin's clone URL under the owner `env` names (SUITE_GITHUB_OWNER). */
 export function pluginRepo(env: Env = process.env): string {
   return httpsCloneUrl(PLUGIN_REPO_NAME, env);
 }
-export const PLUGIN_DIRNAME = "claude-code-suite-channel";
+/** The checkout directory under `<data>/burrow`; migrate.ts CHECKOUT_DIR_MAP renames the old one to it. */
+export const PLUGIN_DIRNAME = "burrow-channel-claude-code";
 export const CHANNEL_SERVER = "suite-channel";
 export const TOOLS_SERVER = "startup-suite";
 
@@ -179,7 +192,7 @@ export const TOOLS_SERVER = "startup-suite";
  *   - It needs no approval, unlike a project-scope `.mcp.json`.
  *
  * WHY NOT `user`: user scope is one entry per machine. Installing a second
- * agent replaced the first agent's entries with the second one's Suite and
+ * agent replaced the first agent's entries with the second one's Burrow install and
  * runtime, so the first agent's next restart would have federated as the
  * wrong runtime into the wrong install (found on a real host, 2026-09-26).
  *
@@ -194,7 +207,7 @@ export const TOOLS_SERVER = "startup-suite";
 export const MCP_SCOPE = "local";
 
 export function defaultCheckout(env: Record<string, string | undefined>): string {
-  return resolve(dataDir(env), PLUGIN_DIRNAME);
+  return dataEntry(PLUGIN_DIRNAME, env);
 }
 
 /* ------------------------------------------------------------------------- */
@@ -454,27 +467,6 @@ export function noGitPrompt(
   return { ...env, GIT_TERMINAL_PROMPT: "0" };
 }
 
-/**
- * Clone the plugin, or fast-forward an existing checkout.
- *
- * `--ff-only` and then STOP on failure. The alternative — a reset or a force —
- * silently destroys whatever the user was doing in that directory, and this
- * command was invoked to set up a tool, not to arbitrate their git state.
- */
-export async function cloneOrUpdate(dir: string, deps: Pick<InitDeps, "run" | "env">): Promise<CheckoutOutcome> {
-  if (existsSync(resolve(dir, ".git"))) {
-    const r = await deps.run(["git", "pull", "--ff-only"], { cwd: dir, env: noGitPrompt(deps.env) });
-    if (r.exitCode !== 0) throw new PullFailed(dir, r.stderr || r.stdout);
-    return "updated";
-  }
-  await mkdir(resolve(dir, ".."), { recursive: true });
-  const r = await deps.run(["git", "clone", pluginRepo(deps.env), dir], { env: noGitPrompt(deps.env) });
-  if (r.exitCode !== 0) {
-    throw new Error(`git clone failed: ${(r.stderr || r.stdout).trim()}`);
-  }
-  return "cloned";
-}
-
 /** Count of installed packages, when bun says; empty string when it does not. */
 export function packageCount(bunInstallOutput: string): string {
   const m = /(\d+)\s+packages?\s+installed/i.exec(bunInstallOutput);
@@ -494,14 +486,14 @@ export function packageCount(bunInstallOutput: string): string {
  * Whether the pasted URL is secure, whichever family it was written in.
  *
  * The operator may paste either the browser URL or the runtime WebSocket URL —
- * both name the same Suite — so both derivations have to work from either, and
+ * both name the same Burrow install — so both derivations have to work from either, and
  * neither may inherit the scheme it was handed.
  *
  * THIS IS WHAT WENT WRONG. `toolsHttpUrl` used to leave the protocol alone.
  * Given the runtime URL (`wss://…/runtime/ws`) it emitted `wss://…/mcp` into
  * the HTTP MCP slot, and the client refused it with
  * `ERR_INVALID_ARG_VALUE: protocol must be http:, https: or s3:` — an error
- * naming neither Suite nor the URL that produced it. Observed on a real setup.
+ * naming neither Burrow nor the URL that produced it. Observed on a real setup.
  *
  * The second bug was quieter and in the other function: `channelWsUrl` mapped
  * `http:` to `ws:` and EVERYTHING ELSE to `wss:`, so a deliberate local
@@ -569,11 +561,23 @@ export function channelAddArgs(entry: ChannelEntry): string[] {
     ["TOKEN", entry.tokenLiteral],
     ["ALLOW_PERMISSION_RELAY", "0"],
   ];
-  const envArgs: string[] = [];
+  const env: Array<[string, string]> = [];
   for (const [suffix, value] of pairs) {
-    for (const [name, v] of Object.entries(bothNames(suffix, value))) envArgs.push("-e", `${name}=${v}`);
+    for (const [name, v] of Object.entries(bothNames(suffix, value))) env.push([name, v]);
   }
-  return ["claude", "mcp", "add", CHANNEL_SERVER, "-s", MCP_SCOPE, ...envArgs, "--", "bun", entry.indexPath];
+  return stdioAddArgs(CHANNEL_SERVER, MCP_SCOPE, env, ["bun", entry.indexPath]);
+}
+
+/**
+ * argv for `claude mcp add NAME -s SCOPE -e K=V ... -- COMMAND...`: the shape
+ * {@link channelAddArgs} writes, for any stdio entry. migrate.ts uses it to
+ * re-add an entry with only its path changed when the installed claude has no
+ * `mcp add-json`. Carries env values (a token, often): never log the result.
+ */
+export function stdioAddArgs(name: string, scope: string, env: Array<[string, string]>, command: string[]): string[] {
+  const envArgs: string[] = [];
+  for (const [k, v] of env) envArgs.push("-e", `${k}=${v}`);
+  return ["claude", "mcp", "add", name, "-s", scope, ...envArgs, "--", ...command];
 }
 
 /**
@@ -620,7 +624,7 @@ export function toolsAddArgs(
  * `⏸ Pending approval` in `claude mcp list` is a PROJECT-APPROVAL state, not a
  * connectivity verdict: it says this project has not yet approved a user-scope
  * server, and says NOTHING about whether that server works. Measured on a real
- * box, BOTH Suite servers reported pending while the channel was demonstrably
+ * box, BOTH Burrow servers reported pending while the channel was demonstrably
  * delivering messages.
  *
  * It used to fall into the `not-connected` alternation below, which made
@@ -760,7 +764,7 @@ export function userScopeChannelRuntime(text: string): { present: boolean; runti
  *
  * LEFT ALONE, NEVER REMOVED OR MIGRATED. Another agent directory on this
  * machine may have no entry of its own and be running on that one right now;
- * removing it would take that agent off Suite at its next restart, and nothing
+ * removing it would take that agent off Burrow at its next restart, and nothing
  * in the file says which directory it belongs to, so it cannot be moved there.
  * This directory's local entry takes precedence here regardless.
  */
@@ -1148,7 +1152,7 @@ export interface InitResult {
 }
 
 /**
- * `suite init`: connect this machine to a Suite install. HARNESS-NEUTRAL.
+ * `suite init`: connect this machine to a Burrow install. HARNESS-NEUTRAL.
  *
  * Every step here is one that any harness on this machine needs:
  *
@@ -1313,7 +1317,9 @@ export async function runInit(deps: InitDeps, options: InitOptions = {}): Promis
     say(
       supervisor.installed
         ? `watchdog: ${supervisor.summary}`
-        : `watchdog NOT running: ${supervisor.summary}`,
+        : supervisor.deferred === true
+          ? `watchdog deferred: ${supervisor.summary}`
+          : `watchdog NOT running: ${supervisor.summary}`,
     );
 
     // Agent restore-on-boot: written, deliberately NOT enabled. An operator
@@ -1328,8 +1334,7 @@ export async function runInit(deps: InitDeps, options: InitOptions = {}): Promis
       intervalSeconds: 60,
       env: deps.env,
     });
-    if (restore) {
-      writeRestoreUnit(deps.supervisorIo, restore);
+    if (restore && writeRestoreUnit(deps.supervisorIo, restore)) {
       say(`agent restore-on-boot written (NOT enabled). To turn it on:`);
       say(`  ${restore.enableHint}`);
     }
