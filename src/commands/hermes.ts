@@ -69,7 +69,7 @@ function parseYaml(text: string): unknown {
   return parse(text);
 }
 import { harnessChildEnv, spawnHarness } from "../harness_env.ts";
-import { dataDir } from "../paths.ts";
+import { dataEntry } from "../paths.ts";
 import { assertNoSecretsInArgv, createStore } from "../secrets.ts";
 import {
   canonicalJson,
@@ -394,7 +394,7 @@ export function agentNameForRoot(root: string): string {
 
 /** Where the channel plugin checkout lives. Shared across agents: it is a program. */
 export function channelCheckoutDir(env: Env): string {
-  return join(dataDir(env), "hermes-suite-channel");
+  return dataEntry("burrow-channel-hermes", env);
 }
 
 export function tokenFilePath(hermesHome: string): string {
@@ -847,7 +847,7 @@ export function hermesWriter(ctx: { opts: HermesOptions | null }, deps: HermesDe
   async function installHermes(): Promise<void> {
     const home = opts().hermesHome;
     const source = deps.hermesInstaller ?? HERMES_INSTALLER_URL;
-    const dir = join(dataDir(deps.env), "hermes-agent");
+    const dir = dataEntry("hermes-agent", deps.env);
     const script = join(dir, `install-${HERMES_AGENT_REF.slice(0, 12)}.sh`);
     mkdirSync(dir, { recursive: true, mode: 0o700 });
     if (!existsSync(script)) {

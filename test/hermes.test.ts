@@ -387,7 +387,7 @@ describe("stamping from nothing (file: ref)", () => {
 
     const o = outcomes(result);
     expect(o[`sanctioned_token_file ${tokenFilePath(hermesHome)}`]).toBe("written");
-    expect(o[`plugin_checkout ${join(home, ".local", "share", "suite", "hermes-suite-channel")}@${channelRef}`]).toBe("written");
+    expect(o[`plugin_checkout ${join(home, ".local", "share", "burrow", "burrow-channel-hermes")}@${channelRef}`]).toBe("written");
     expect(o["config_set model.context_length"]).toBe("written");
     expect(statSync(tokenFilePath(hermesHome)).mode & 0o777).toBe(0o600);
 

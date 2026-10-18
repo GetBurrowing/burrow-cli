@@ -56,7 +56,7 @@ import { existsSync, readFileSync, statSync, writeFileSync, mkdirSync } from "no
 import { createServer } from "node:net";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { harnessChildEnv, spawnHarness } from "../harness_env.ts";
-import { dataDir } from "../paths.ts";
+import { dataEntry } from "../paths.ts";
 import { assertNoSecretsInArgv, createStore } from "../secrets.ts";
 import {
   canonicalJson,
@@ -366,12 +366,12 @@ export function workspaceFor(root: string): string {
 
 /** Where the channel plugin checkout lives. Shared across agents: it is a program. */
 export function channelCheckoutDir(env: Env): string {
-  return join(dataDir(env), "openclaw-suite-channel");
+  return dataEntry("burrow-channel-openclaw", env);
 }
 
 /** Where `--install-openclaw` puts the pinned CLI. */
 export function managedOpenclawDir(env: Env): string {
-  return join(dataDir(env), "openclaw");
+  return dataEntry("openclaw", env);
 }
 
 export function managedOpenclawBin(env: Env): string {

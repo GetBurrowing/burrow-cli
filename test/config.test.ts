@@ -19,7 +19,9 @@ import {
   configPath,
   dataDir,
   gitProbe,
+  stateDir,
 } from "../src/paths.ts";
+import { STATE_FILENAME } from "../src/migrate.ts";
 import { createStore, TOKEN_KEY } from "../src/secrets.ts";
 
 /* Invented values only — this repository is public. */
@@ -72,8 +74,11 @@ describe("config paths", () => {
     expect(configPath({ HOME: "/home/nobody" })).toBe("/home/nobody/.config/burrow/config.json");
   });
 
-  test("the data dir does NOT move: lib and plugin paths under it are recorded elsewhere", () => {
-    expect(dataDir({ HOME: "/home/nobody" })).toBe("/home/nobody/.local/share/suite");
+  test("the data and state dirs are burrow too, under their XDG bases", () => {
+    expect(dataDir({ HOME: "/home/nobody" })).toBe("/home/nobody/.local/share/burrow");
+    expect(dataDir({ HOME: "/home/nobody", XDG_DATA_HOME: "/xd" })).toBe("/xd/burrow");
+    expect(stateDir({ HOME: "/home/nobody" })).toBe("/home/nobody/.local/state/burrow");
+    expect(stateDir({ HOME: "/home/nobody", XDG_STATE_HOME: "/xs" })).toBe("/xs/burrow");
   });
 
   test("a relative XDG_CONFIG_HOME is ignored rather than trusted", () => {
@@ -83,7 +88,7 @@ describe("config paths", () => {
   });
 });
 
-describe("configDir resolves burrow-first by existence, never by migrating", () => {
+describe("configDir is burrow; only the read view of an unmigrated host sees suite", () => {
   const homes: string[] = [];
   afterEach(async () => {
     for (const h of homes.splice(0)) await rm(h, { recursive: true, force: true });
@@ -98,30 +103,40 @@ describe("configDir resolves burrow-first by existence, never by migrating", () 
   test("an empty HOME (cold host) resolves to burrow, and nothing is created", async () => {
     const h = await home();
     expect(configDir({ HOME: h })).toBe(join(h, ".config", "burrow"));
+    expect(configPath({ HOME: h })).toBe(join(h, ".config", "burrow", "config.json"));
     expect(await readdir(h)).toEqual([]);
   });
 
-  test("an old host (only ~/.config/suite) keeps resolving to suite", async () => {
+  test("configDir is burrow even when only ~/.config/suite exists", async () => {
+    const h = await home("suite");
+    expect(configDir({ HOME: h })).toBe(join(h, ".config", "burrow"));
+  });
+
+  test("before the migration has run, an entry only suite has reads from suite (the machine-read verbs skip it)", async () => {
     const h = await home("suite");
     await writeFile(join(h, ".config", "suite", "config.json"), "{}\n");
-    expect(configDir({ HOME: h })).toBe(join(h, ".config", "suite"));
     expect(configPath({ HOME: h })).toBe(join(h, ".config", "suite", "config.json"));
-    // Not moved, not copied: burrow was never created.
+    // Read view only: nothing was moved or created.
     expect(await readdir(join(h, ".config"))).toEqual(["suite"]);
   });
 
-  test("when both exist, burrow wins and the suite dir is left exactly as it was", async () => {
-    const h = await home("suite", "burrow");
+  test("once migrated, an entry left in suite is NOT read: the burrow path wins outright", async () => {
+    const h = await home("suite");
     await writeFile(join(h, ".config", "suite", "config.json"), "{}\n");
-    expect(configDir({ HOME: h })).toBe(join(h, ".config", "burrow"));
-    expect(await readdir(join(h, ".config", "suite"))).toEqual(["config.json"]);
+    await mkdir(join(h, ".local", "state", "burrow"), { recursive: true });
+    await writeFile(
+      join(h, ".local", "state", "burrow", STATE_FILENAME),
+      JSON.stringify({ version: 1, completedAt: "2026-10-18T00:00:00.000Z", moved: [], copiedLive: [], foreignLeft: [], refused: [], skipped: [] }),
+    );
+    expect(configPath({ HOME: h })).toBe(join(h, ".config", "burrow", "config.json"));
   });
 
-  test("the same rule applies under XDG_CONFIG_HOME", async () => {
-    const h = await home();
-    const xdg = join(h, "xdg");
-    await mkdir(join(xdg, "suite"), { recursive: true });
-    expect(configDir({ HOME: h, XDG_CONFIG_HOME: xdg })).toBe(join(xdg, "suite"));
+  test("when both exist before the migration, burrow wins and the suite dir is left exactly as it was", async () => {
+    const h = await home("suite", "burrow");
+    await writeFile(join(h, ".config", "suite", "config.json"), "{}\n");
+    await writeFile(join(h, ".config", "burrow", "config.json"), "{}\n");
+    expect(configPath({ HOME: h })).toBe(join(h, ".config", "burrow", "config.json"));
+    expect(await readdir(join(h, ".config", "suite"))).toEqual(["config.json"]);
   });
 });
 

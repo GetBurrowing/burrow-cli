@@ -160,7 +160,9 @@ wrong, and the next agent would repeat the mistake without a note.
 /**
  * The pre-0.8.0 name of {@link BURROW_CONVENTIONS}. CORE CONTRACT, do not remove:
  * core's agent-host dynamic-imports `/usr/local/share/suite/cli/src/claude_md.ts`
- * and reads this export, and its `--check` image-build gate requires a
+ * and reads this export (from 0.9.0 install.sh puts the library at
+ * `<data>/burrow/cli`, so core's import path and its chmod of
+ * `/usr/local/share/suite` must move when its pin moves to 0.9), and its `--check` image-build gate requires a
  * non-empty string containing `suite_reply`. Same string object, not a copy.
  */
 export const SUITE_CONVENTIONS = BURROW_CONVENTIONS;

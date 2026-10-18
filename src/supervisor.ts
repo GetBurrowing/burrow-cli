@@ -2,6 +2,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { webUrl, type Env } from "./repo_source.ts";
 import { burrowName, envValue, suiteName } from "./env_names.ts";
 import { CLI_NAME } from "./version.ts";
+import { configEntry } from "./paths.ts";
 
 /**
  * Keeping `suite watch` running without anyone remembering to start it.
@@ -190,8 +191,9 @@ export function serviceLocale(inherited?: string): string {
     : "en_US.UTF-8";
 }
 
-export function envFilePath(home: string): string {
-  return `${home}/.config/suite/watch.env`;
+/** `<config>/burrow/watch.env`. `home` wins over env.HOME; the XDG variables come from `env`. */
+export function envFilePath(home: string, env: Record<string, string | undefined> = process.env): string {
+  return configEntry("watch.env", { ...env, HOME: home === "" ? "/" : home });
 }
 
 export function systemdUnit(input: SupervisorInput): string {
@@ -421,7 +423,7 @@ export function readTelemetryAuth(
 ): string | null {
   const direct = envValue(env, "TELEMETRY_AUTH");
   if (direct) return direct;
-  const contents = readFile(envFilePath(env.HOME ?? ""));
+  const contents = readFile(envFilePath(env.HOME ?? "", env));
   if (contents === null) return null;
   // The env file is read with the same precedence as the environment: a
   // BURROW_TELEMETRY_AUTH line wins, a SUITE_ one still works.

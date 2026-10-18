@@ -117,7 +117,7 @@ export function createCleanEnv(options: CleanEnvOptions = {}): CleanEnv {
     bin,
     home,
     env,
-    checkout: resolve(home, ".local/share/suite/claude-code-suite-channel"),
+    checkout: resolve(home, ".local/share/burrow/burrow-channel-claude-code"),
     stub: (name, body) => writeStub(bin, name, body),
     log: () =>
       readFileSync(logFile, "utf8")

@@ -14,6 +14,8 @@
  * operator makes per machine, not a default they discover after it happens.
  */
 
+import { stateEntry, type Env } from "./paths.ts";
+
 export interface RosterEntry {
   /** tmux session name — the identity, and the dedupe key. */
   session: string;
@@ -37,8 +39,13 @@ export interface RosterEntry {
 
 export const ROSTER_VERSION = 1;
 
-export function rosterPath(home: string): string {
-  return `${home}/.local/state/suite/agents.json`;
+/**
+ * `<state>/burrow/agents.json`. `home` wins over env.HOME so a caller that
+ * names a home gets that home; the XDG variables still come from `env`. An
+ * empty home resolves from `/`, as the pre-0.9 string concatenation did.
+ */
+export function rosterPath(home: string, env: Env = process.env): string {
+  return stateEntry("agents.json", { ...env, HOME: home === "" ? "/" : home });
 }
 
 /**

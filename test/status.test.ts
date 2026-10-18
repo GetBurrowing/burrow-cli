@@ -334,7 +334,7 @@ function stampedHermes(label: string, verdict: string): { session: string; home:
     kind: "hermes",
     recordedAt: "2026-09-25T00:00:00.000Z",
   };
-  mkdirSync(join(home, ".local", "state", "suite"), { recursive: true });
+  mkdirSync(join(home, ".local", "state", "burrow"), { recursive: true });
   writeFileSync(rosterPath(home), serializeRoster([entry]));
   return { session, home, root, stub };
 }
@@ -450,7 +450,7 @@ describe("stamped agents in the fake-tmux status", () => {
   function fakeStampedHome(label: string): { home: string; root: string; ref: string } {
     const home = join(WORK_DIR, `fake-home-${label}`);
     const root = join(WORK_DIR, `fake-root-${label}`);
-    mkdirSync(join(home, ".local", "state", "suite"), { recursive: true });
+    mkdirSync(join(home, ".local", "state", "burrow"), { recursive: true });
     mkdirSync(root, { recursive: true });
     const ref = `file:${join(root, "runtime-token")}`;
     writeFileSync(join(root, STAMP_FILE), JSON.stringify({ harness: "openclaw", tokenRef: ref, verdict: "pass" }));

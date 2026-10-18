@@ -113,11 +113,14 @@ resolve_bin_dir() {
 	fi
 }
 
+# The library lives at <data>/burrow/cli from 0.9.0. The pre-0.9.0
+# <data>/suite/cli is never moved or deleted here: a running watch daemon may
+# still be executing from it. It is retired, and burrow doctor lists it.
 resolve_lib_dir() {
 	if [ -n "${XDG_DATA_HOME:-}" ]; then
-		echo "$XDG_DATA_HOME/suite/cli"
+		echo "$XDG_DATA_HOME/burrow/cli"
 	else
-		echo "$HOME/.local/share/suite/cli"
+		echo "$HOME/.local/share/burrow/cli"
 	fi
 }
 

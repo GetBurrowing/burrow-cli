@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import {
   CLAUDE_VERSION_FLOOR,
+  renderLeftovers,
   OVERRIDE_ENV_VARS,
   apiKeyOverride,
   authSupported,
@@ -1348,4 +1349,25 @@ test("liveDoctorDeps honours NO_COLOR and a non-UTF-8 locale", async () => {
   expect(deps.utf8).toBe(false);
   const utf8 = await liveDoctorDeps({ LANG: "en_US.UTF-8", HOME: "/nonexistent-fixture-home" });
   expect(utf8.utf8).toBe(true);
+});
+
+describe("the pre-0.9.0 leftovers section", () => {
+  test("each old directory, what still uses it, or that nothing does", () => {
+    const lines = renderLeftovers([
+      { path: "/h/.local/share/suite", users: ["bun /h/.local/share/suite/cli/src/cli.ts watch"] },
+      { path: "/h/.local/state/suite", users: [] },
+    ]);
+    expect(lines).toEqual([
+      "",
+      "  directories from before 0.9.0 (never deleted automatically)",
+      "    /h/.local/share/suite",
+      "      in use: bun /h/.local/share/suite/cli/src/cli.ts watch",
+      "    /h/.local/state/suite",
+      "      no running process uses it; safe to remove by hand",
+    ]);
+  });
+
+  test("nothing left: no section at all", () => {
+    expect(renderLeftovers([])).toEqual([]);
+  });
 });

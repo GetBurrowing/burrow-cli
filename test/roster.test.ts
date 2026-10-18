@@ -62,7 +62,8 @@ describe("the roster survives being wrong", () => {
   });
 
   test("the path is under state, not config — it is derived, not authored", () => {
-    expect(rosterPath("/home/q")).toBe("/home/q/.local/state/suite/agents.json");
+    expect(rosterPath("/home/q", {})).toBe("/home/q/.local/state/burrow/agents.json");
+    expect(rosterPath("/home/q", { XDG_STATE_HOME: "/xs" })).toBe("/xs/burrow/agents.json");
   });
 });
 

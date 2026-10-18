@@ -34,7 +34,7 @@ import type { SuiteConfig } from "../config.ts";
 import { agentConfig, readAgentConnection, readAgentSecrets } from "../agent_connections.ts";
 import { createStore, TOKEN_KEY, assertNoSecretsInArgv, ttyPrompter, type CredentialStore, type Prompter } from "../secrets.ts";
 import { ensureConnection, ensureToken, hasConnection } from "../connection.ts";
-import { dataDir } from "../paths.ts";
+import { dataEntry } from "../paths.ts";
 import { bothNames, envValue } from "../env_names.ts";
 import {
   attachArgv,
@@ -79,7 +79,7 @@ export const DSH_PACKAGES = ["@deepseek-ai/dsh@0.1.1-rc.2", "phoenix@^1.8.13", "
  * a program, not state. Agent state lives under the agent root instead.
  */
 export function harnessDir(env: NodeJS.ProcessEnv = process.env): string {
-  return join(dataDir(env), "deepseek");
+  return dataEntry("deepseek", env);
 }
 
 /**

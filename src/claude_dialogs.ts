@@ -37,6 +37,7 @@
  */
 import { mkdirSync, appendFileSync } from "node:fs";
 import { dirname } from "node:path";
+import { stateEntry } from "./paths.ts";
 import { TMUX, type TmuxDeps } from "./tmux.ts";
 import { resolveTmux } from "./halt.ts";
 
@@ -400,8 +401,8 @@ export async function answerOnce(io: DialogIo, opts: AnswerOptions): Promise<Ans
  * Per-session log, next to the restore roster. Every key this module sends is
  * written here, so "why did my agent trust that folder" has an answer on disk.
  */
-export function sessionLogPath(home: string, session: string): string {
-  return `${home}/.local/state/suite/sessions/${session}.log`;
+export function sessionLogPath(home: string, session: string, env: Record<string, string | undefined> = process.env): string {
+  return `${stateEntry("sessions", { ...env, HOME: home === "" ? "/" : home })}/${session}.log`;
 }
 
 /**

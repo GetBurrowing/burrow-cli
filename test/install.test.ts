@@ -141,7 +141,7 @@ describe("install.sh", () => {
     expect(existsSync(r.dest)).toBe(true);
     expect(r.stdout).toContain(`burrow ${VERSION}`);
     // The library was staged too, not just the launcher.
-    expect(existsSync(join(r.home, ".local", "share", "suite", "cli", "src", "cli.ts"))).toBe(true);
+    expect(existsSync(join(r.home, ".local", "share", "burrow", "cli", "src", "cli.ts"))).toBe(true);
     // The installed entrypoint answers --version without needing bun.
     const v = spawnSync(r.dest, ["--version"], { encoding: "utf8" });
     expect(v.status).toBe(0);
@@ -158,7 +158,7 @@ describe("install.sh", () => {
     const r = runInstaller(makeHome());
     expect(r.status).toBe(0);
     const plugin = join(
-      r.home, ".local", "share", "suite", "cli",
+      r.home, ".local", "share", "burrow", "cli",
       "assets", "dsh-plugins", "suite-federation", "index.js",
     );
     expect(existsSync(plugin)).toBe(true);
@@ -393,13 +393,22 @@ describe("install.sh", () => {
     expect(suite.stderr).toBe(ALIAS_NOTICE);
   });
 
-  test("both launchers point at the SAME, unmoved lib dir <data>/suite/cli", () => {
+  test("both launchers point at the SAME lib dir, <data>/burrow/cli", () => {
     const r = runInstaller(makeHome());
-    const lib = join(r.home, ".local", "share", "suite", "cli");
+    const lib = join(r.home, ".local", "share", "burrow", "cli");
     expect(readFileSync(r.dest, "utf8")).toContain(`BURROW_LIB_DIR="${lib}"`);
     expect(readFileSync(r.alias, "utf8")).toContain(`BURROW_LIB_DIR="${lib}"`);
     expect(existsSync(join(lib, "src", "cli.ts"))).toBe(true);
-    expect(existsSync(join(r.home, ".local", "share", "burrow"))).toBe(false);
+    expect(existsSync(join(r.home, ".local", "share", "suite"))).toBe(false);
+  });
+
+  test("XDG_DATA_HOME puts the lib at $XDG_DATA_HOME/burrow/cli", () => {
+    const home = makeHome();
+    const xdg = join(home, "xdg-data");
+    const r = runInstaller(home, { env: { XDG_DATA_HOME: xdg } });
+    expect(r.status).toBe(0);
+    expect(readFileSync(r.dest, "utf8")).toContain(`BURROW_LIB_DIR="${join(xdg, "burrow", "cli")}"`);
+    expect(existsSync(join(xdg, "burrow", "cli", "src", "cli.ts"))).toBe(true);
   });
 
   test("a reinstall over itself is announced under `burrow`", () => {
@@ -418,7 +427,7 @@ describe("install.sh", () => {
    */
   const OLD_VERSION = VERSION === "0.7.3" ? "0.7.2" : "0.7.3";
 
-  test("an old 0.7.3-style host (only ~/.local/bin/suite, lib at ~/.local/share/suite/cli) upgrades in place", () => {
+  test("an old 0.7.3-style host (only ~/.local/bin/suite, lib at ~/.local/share/suite/cli) upgrades, and the old lib is left untouched", () => {
     const home = makeHome();
     const lib = join(home, ".local", "share", "suite", "cli");
     mkdirSync(join(lib, "src"), { recursive: true });
@@ -447,10 +456,12 @@ describe("install.sh", () => {
     expect(readFileSync(r.alias, "utf8")).not.toContain(`SUITE_VERSION="${OLD_VERSION}"`);
     expect(spawnSync(r.alias, ["--version"], { encoding: "utf8" }).stdout).toBe(`${VERSION}\n`);
     expect(spawnSync(r.dest, ["--version"], { encoding: "utf8" }).stdout).toBe(`${VERSION}\n`);
-    // Same lib dir path, now holding the new library.
-    expect(readFileSync(join(lib, "src", "cli.ts"), "utf8")).not.toContain("the 0.7.3 library");
-    expect(readFileSync(r.dest, "utf8")).toContain(`BURROW_LIB_DIR="${lib}"`);
-    expect(existsSync(join(home, ".local", "share", "burrow"))).toBe(false);
+    // The new library goes to burrow/cli. The old one is RETIRED, never moved
+    // or deleted: a running watch daemon may still be executing from it.
+    const newLib = join(home, ".local", "share", "burrow", "cli");
+    expect(readFileSync(join(newLib, "src", "cli.ts"), "utf8")).not.toContain("the 0.7.3 library");
+    expect(readFileSync(r.dest, "utf8")).toContain(`BURROW_LIB_DIR="${newLib}"`);
+    expect(readFileSync(join(lib, "src", "cli.ts"), "utf8")).toBe("// the 0.7.3 library\n");
   });
 
   test("declining on an old host leaves the old `suite` alone and creates no `burrow`", () => {

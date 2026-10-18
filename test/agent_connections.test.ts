@@ -473,7 +473,7 @@ describe("the store", () => {
   });
 });
 
-describe("legacy ~/.config/suite agent records are read per file, never moved", () => {
+describe("before (or while refused by) the migration, ~/.config/suite agent records are read per file and never moved from here", () => {
   const noRepo: GitProbe = { repoRoot: () => null, isIgnored: () => false };
   const homes: string[] = [];
   afterEach(() => {
@@ -488,7 +488,7 @@ describe("legacy ~/.config/suite agent records are read per file, never moved", 
     mkdirSync(fresh);
     const env = { HOME: h };
     // An old host: only the suite dir exists, so the record is written THERE.
-    mkdirSync(resolve(h, ".config", "suite"), { recursive: true });
+    mkdirSync(resolve(h, ".config", "suite", "agents"), { recursive: true });
     writeAgentConnection(env, old, { suiteUrl: "https://old.example.invalid", runtimeId: "rt-old", headerNames: [] }, { token: "tok-old", headers: {} }, { probe: noRepo });
     return { env, old, fresh, suiteAgents: resolve(h, ".config", "suite", "agents"), burrowAgents: resolve(h, ".config", "burrow", "agents") };
   }
@@ -525,6 +525,31 @@ describe("legacy ~/.config/suite agent records are read per file, never moved", 
     expect(listAgentConnections(env).map((c) => c.record.runtimeId).sort()).toEqual(["rt-fresh", "rt-new"]);
     // The legacy pair is still there, untouched.
     expect(JSON.parse(readFileSync(resolve(suiteAgents, `${agentKey(old)}.json`), "utf8")).runtimeId).toBe("rt-old");
+  });
+
+  function writeState(home: string, refused: { kind: string; from: string; to: string }[]): void {
+    mkdirSync(resolve(home, ".local", "state", "burrow"), { recursive: true });
+    writeFileSync(
+      resolve(home, ".local", "state", "burrow", "migration.json"),
+      JSON.stringify({ version: 1, completedAt: "2026-10-18T00:00:00.000Z", moved: [], copiedLive: [], foreignLeft: [], refused, skipped: [] }),
+    );
+  }
+
+  test("once migrated with nothing refused, a record left in suite is never read", () => {
+    const { env, old, burrowAgents } = setup();
+    mkdirSync(burrowAgents, { recursive: true });
+    writeState(env.HOME ?? "", []);
+    expect(readAgentConnection(env, old).connection).toBeNull();
+    expect(listAgentConnections(env)).toEqual([]);
+  });
+
+  test("once migrated, a record the migration REFUSED is still read from suite, and only that one", () => {
+    const { env, old, suiteAgents, burrowAgents } = setup();
+    mkdirSync(burrowAgents, { recursive: true });
+    const name = `${agentKey(old)}.json`;
+    writeState(env.HOME ?? "", [{ kind: "config", from: resolve(suiteAgents, name), to: resolve(burrowAgents, name) }]);
+    expect(readAgentConnection(env, old).connection?.record.runtimeId).toBe("rt-old");
+    expect(readAgentSecrets(env, old)?.token).toBe("tok-old");
   });
 
   test("a key in neither dir is not found", () => {

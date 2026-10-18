@@ -39,6 +39,7 @@
  * `suite init --repair` was never shipped: rule (b) says a `→` must be
  * runnable, and `suite claude` is now the non-interactive repair it wanted.)
  */
+import { legacyLeftovers, type Leftover } from "../migrate.ts";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { resolve } from "node:path";
 import { emptyConfig, type SuiteConfig } from "../config.ts";
@@ -690,6 +691,12 @@ export interface DoctorDeps {
    * absent, the `agents` check is skipped rather than guessed.
    */
   inventory?(): InventorySource;
+  /**
+   * The pre-0.9.0 directories still on disk and what still uses them
+   * (migrate.ts legacyLeftovers). Optional: absent, nothing is listed.
+   * Informational only; it never changes the exit code.
+   */
+  leftovers?(): Leftover[];
   tmux: TmuxDeps;
   color: boolean;
   utf8: boolean;
@@ -1547,9 +1554,26 @@ function compact(text: string, limit = 160): string {
 /* Entry points                                                               */
 /* ------------------------------------------------------------------------- */
 
+/**
+ * The leftovers section: each old directory, and the live processes still
+ * using it. The migration never deletes one; this is how an operator learns
+ * when removing it by hand is safe. Empty when there are none.
+ */
+export function renderLeftovers(list: Leftover[]): string[] {
+  if (list.length === 0) return [];
+  const lines = ["", "  directories from before 0.9.0 (never deleted automatically)"];
+  for (const l of list) {
+    lines.push(`    ${l.path}`);
+    if (l.users.length === 0) lines.push("      no running process uses it; safe to remove by hand");
+    for (const u of l.users) lines.push(`      in use: ${u}`);
+  }
+  return lines;
+}
+
 export async function runDoctor(deps: DoctorDeps): Promise<number> {
   const checks = await runChecks(deps);
   for (const line of renderReport(checks, { color: deps.color, utf8: deps.utf8 })) deps.out(line);
+  for (const line of renderLeftovers(deps.leftovers?.() ?? [])) deps.out(line);
   return exitCodeFor(checks);
 }
 
@@ -1569,6 +1593,7 @@ export async function liveDoctorDeps(
     configFile: own?.path ?? agentConfigPath(env, cwd),
     tokenSaved: own === null ? false : (readAgentSecrets(env, own.record.dir)?.token ?? "") !== "",
     inventory: () => liveInventorySource(env),
+    leftovers: () => legacyLeftovers(env),
     tmux,
     color: colorEnabled(env),
     utf8: utf8Enabled(env),

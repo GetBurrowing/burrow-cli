@@ -8,7 +8,7 @@
  *
  *     bun               1.2.4                 present
  *     tmux              3.5a                  present
- *     config            ~/.config/suite/config.json
+ *     config            ~/.config/burrow/config.json
  *
  * Each harness verb then does its OWN wiring from what init saved, lazily and
  * idempotently: `suite claude` clones the channel plugin, writes CLAUDE.md and
@@ -40,7 +40,7 @@ import {
   type Prompter,
   type SpawnResult,
 } from "../secrets.ts";
-import { dataDir } from "../paths.ts";
+import { dataEntry } from "../paths.ts";
 import { promptConnection } from "../connection.ts";
 import { canonicalDir, writeAgentConnection } from "../agent_connections.ts";
 import { nextCommand, row } from "../ui.ts";
@@ -162,7 +162,8 @@ export const PLUGIN_REPO_NAME = "claude-code-suite-channel";
 export function pluginRepo(env: Env = process.env): string {
   return httpsCloneUrl(PLUGIN_REPO_NAME, env);
 }
-export const PLUGIN_DIRNAME = "claude-code-suite-channel";
+/** The checkout directory under `<data>/burrow`; migrate.ts CHECKOUT_DIR_MAP renames the old one to it. */
+export const PLUGIN_DIRNAME = "burrow-channel-claude-code";
 export const CHANNEL_SERVER = "suite-channel";
 export const TOOLS_SERVER = "startup-suite";
 
@@ -194,7 +195,7 @@ export const TOOLS_SERVER = "startup-suite";
 export const MCP_SCOPE = "local";
 
 export function defaultCheckout(env: Record<string, string | undefined>): string {
-  return resolve(dataDir(env), PLUGIN_DIRNAME);
+  return dataEntry(PLUGIN_DIRNAME, env);
 }
 
 /* ------------------------------------------------------------------------- */
