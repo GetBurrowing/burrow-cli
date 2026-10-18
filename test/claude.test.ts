@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { createStore } from "../src/secrets.ts";
@@ -51,7 +51,14 @@ function tempHome(): string {
   return dir;
 }
 afterAll(() => {
-  for (const dir of scratch) rmSync(dir, { recursive: true, force: true });
+  for (const dir of scratch) {
+    // A test below makes a dir read-only; give the write bit back so it can go.
+    try {
+      chmodSync(dir, 0o700);
+      chmodSync(resolve(dir, "ro"), 0o700);
+    } catch {}
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 /* ------------------------------------------------------------------------- */
@@ -713,6 +720,76 @@ describe("runClaude", () => {
     expect(
       await listSessionNames(fakeTmux({ run: async () => ({ exitCode: 0, stdout: "a\nb\n", stderr: "" }) })),
     ).toEqual(["a", "b"]);
+  });
+});
+
+/* ------------------------------------------------------------------------- */
+/* A refused notice-seen write does not cost the launch                       */
+/* ------------------------------------------------------------------------- */
+
+describe("a notice-seen write that is refused", () => {
+  /** The err lines that are the notice-write report, and nothing else. */
+  const reportLines = (err: string[], path: string) =>
+    err.filter((l) => l.includes("could not record that the notice was shown") && l.includes(path));
+
+  // The contract test, because it holds for root too: CI runs bun test as root
+  // (ci.yml), where chmod cannot make a file unwritable. A regular file where
+  // the state dir should be makes mkdir/write fail ENOTDIR whoever you are.
+  test("a state path under a regular file: the launch continues, one err line names the path", async () => {
+    const home = tempHome();
+    const blocker = resolve(home, "not-a-dir");
+    writeFileSync(blocker, "x");
+    const statePath = resolve(blocker, "state.json");
+    const r = recorder({ statePath });
+    const code = await runClaude(r.deps, { userArgs: ["-p", "hi"], force: false });
+    expect(code).toBe(0);
+    expect(r.execed).toEqual([[...HEAD, "-p", "hi"]]);
+    expect(r.out.filter((l) => l.includes(NOTICE_BODY)).length).toBe(1);
+    expect(reportLines(r.err, statePath).length).toBe(1);
+    expect(r.err.length).toBe(1);
+  });
+
+  // Root ignores the mode bits, so this runs only as non-root; the ENOTDIR case
+  // above is the one that holds under CI's root container.
+  test.skipIf(process.getuid?.() === 0)(
+    "a read-only state.json lacking the flag: exit 0, exec called, one err line (non-root only)",
+    async () => {
+      const home = tempHome();
+      const dir = resolve(home, "ro");
+      const statePath = resolve(dir, "state.json");
+      await writeState(statePath, { noticeSeen: false });
+      writeFileSync(statePath, "{}\n");
+      chmodSync(statePath, 0o444);
+      chmodSync(dir, 0o555);
+      // Positive control: if the fixture does not refuse a write, this test
+      // proves nothing, so it FAILS rather than passing on a writable file.
+      let refused: string | undefined;
+      try {
+        await Bun.write(statePath, "probe");
+      } catch (e) {
+        refused = (e as { code?: string }).code;
+      }
+      expect(refused).toBe("EACCES");
+      expect(readFileSync(statePath, "utf8")).toBe("{}\n");
+
+      const r = recorder({ statePath });
+      const code = await runClaude(r.deps, { userArgs: ["-p", "hi"], force: false });
+      expect(code).toBe(0);
+      expect(r.execed).toEqual([[...HEAD, "-p", "hi"]]);
+      expect(reportLines(r.err, statePath).length).toBe(1);
+      expect(r.err.length).toBe(1);
+      expect(r.err[0]).toContain("EACCES");
+      expect(readFileSync(statePath, "utf8")).toBe("{}\n");
+    },
+  );
+
+  test("regression: a writable state path records the flag and prints no err line", async () => {
+    const statePath = resolve(tempHome(), "state.json");
+    const r = recorder({ statePath });
+    expect(await runClaude(r.deps, { userArgs: ["-p", "hi"], force: false })).toBe(0);
+    expect(JSON.parse(readFileSync(statePath, "utf8"))).toEqual({ claudeNoticeSeen: true });
+    expect(r.err).toEqual([]);
+    expect(r.execed).toEqual([[...HEAD, "-p", "hi"]]);
   });
 });
 
