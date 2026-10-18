@@ -38,7 +38,6 @@ const NOT_A_HIT = new RegExp(`Startup-${OLD}/|test ${OLD.toLowerCase()}`);
 const COMBINED = new RegExp(`Burrow[ -]${OLD}`);
 
 const HISTORY = "A changelog entry before 0.9.0: a record of what shipped under the old name. Only the 0.9.0 entry is rewritten.";
-const LICENSE_HOLDER = "The copyright holder is the GitHub organisation's legal name, not product prose; changing it is a licensing decision.";
 const OWNER = "The GitHub org literal, which stays until the org itself is renamed: the installer default, its one source in repo_source.ts, and the tests that pin both.";
 const LEGACY_UNIT = "A pre-0.9.0 systemd unit, verbatim, as the migration finds it on a host; and the assertion that the swapped unit no longer says it.";
 
@@ -63,7 +62,6 @@ export const ALLOWLIST: readonly Allowed[] = [
   { file: "CHANGELOG.md", text: "clarify, plus every enabled MCP server, so the Suite bridge stays) and no", reason: HISTORY },
   { file: "CHANGELOG.md", text: "the Suite MCP bundle, shell and file tools widen what untrusted chat can", reason: HISTORY },
   { file: "CHANGELOG.md", text: "- **`suite init` seeds a starting `CLAUDE.md`** for new Suite agents \u2014 how a", reason: HISTORY },
-  { file: "LICENSE", text: "Copyright (c) 2026 Startup Suite", reason: LICENSE_HOLDER },
   { file: "README.md", text: "GitHub org is still `Startup-Suite` until it is renamed; `BURROW_GITHUB_OWNER`", reason: OWNER },
   { file: "install.sh", text: "OWNER=\"Startup-Suite\"", reason: OWNER },
   { file: "src/repo_source.ts", text: "* THE DEFAULT STAYS `Startup-Suite` until the rename is the last step left.", reason: OWNER },
