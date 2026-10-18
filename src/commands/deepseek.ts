@@ -284,6 +284,8 @@ export interface DeepseekDeps {
   stderr: { write(text: string): void };
   /** The directory the verb was run from. Defaults to `process.cwd()`. */
   cwd?(): string;
+  /** Environment the verb runs in. Defaults to `process.env` live. */
+  env?: Record<string, string | undefined>;
   /** Injected in tests; defaults to the live tmux. */
   tmux?: TmuxDeps;
   /**
@@ -672,7 +674,7 @@ export async function runInSession(
   cwd: string,
   env: Record<string, string>,
   store: CredentialStore,
-  deps: Pick<DeepseekDeps, "isTTY" | "exec" | "stderr" | "restore">,
+  deps: Pick<DeepseekDeps, "isTTY" | "exec" | "stderr" | "restore" | "env">,
   options: SessionOptions = {},
 ): Promise<number> {
   const tmux: TmuxDeps = options.tmux ?? liveTmuxDeps(env);
@@ -711,7 +713,7 @@ export async function runInSession(
     // the developer's home directory. Only on CREATE, as `suite claude` does:
     // re-attaching to a live session changes nothing about the host.
     if (deps.restore) {
-      recordLaunch(deps.restore, process.env.HOME ?? "", {
+      recordLaunch(deps.restore, deps.env?.HOME ?? "", {
         session,
         command: create,
         cwd,
@@ -805,6 +807,7 @@ export function liveDeepseekDeps(): DeepseekDeps {
     restore: liveRestoreDeps(),
     which: (bin) => Bun.which(bin),
     isTTY: () => process.stdout.isTTY === true,
+    env: process.env,
     run: async (argv, opts) => {
       const proc = Bun.spawn(argv, { cwd: opts.cwd, env: { ...process.env, ...(opts.env ?? {}) }, stdout: "inherit", stderr: "inherit" });
       return await proc.exited;

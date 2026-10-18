@@ -18,6 +18,7 @@
     "yaml": "^2.9.0"
   },
   "devDependencies": {
+    "@deepseek-ai/cordis": "4.0.2",
     "@types/bun": "latest",
     "typescript": "^5"
   }

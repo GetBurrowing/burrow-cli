@@ -14,8 +14,20 @@ const pushes: Array<{ event: string; payload: any }> = [];
 const handlers = new Map<string, Handler>();
 
 // Anything callable and chainable: `z.object({...})`, `z.string().required()`.
+// `~standard.validate` is what real cordis calls on the plugin's `Config`
+// schema (fiber.ts `resolveConfig`), and a truthy `issues` on its result
+// throws a ValidationError — so the mock validates and echoes the config.
+// Without the `~standard` branch, a bare chain proxy IS its own `~standard`,
+// and when this file's mock is the one the plugin's `Config` was built with
+// (test files share one process) validation "fails" with the proxy itself as
+// the issue list, and stringifying that proxy throws
+// "Symbol.toPrimitive returned an object". So the echo branch matters even
+// though these tests never compose the plugin through a real cordis Context.
 const chain: any = new Proxy(function () {}, {
-  get: () => chain,
+  get: (target: any, prop: string | symbol) => {
+    if (prop === "~standard") return { validate: (value: any) => ({ value }) };
+    return chain;
+  },
   apply: () => chain,
 });
 
@@ -71,7 +83,22 @@ function fakeCtx() {
     agentDefaultModel: { currentSelection: () => ({ provider: "deepseek", model: "deepseek-chat" }) },
     sessions: { flush: async () => {} },
   };
-  return { get: (k: string) => services[k], on() {}, logger: () => ({}) };
+  const listeners = new Map<string, Handler>();
+  const ctx = {
+    // The tools service is RESOLVED through the nested `ctx.inject`, not the
+    // plugin's own top-level `inject` — a missing one must leave the plugin
+    // alive. These tests exercise only dispatch attribution, so no tools
+    // service is offered and the nested scope never fires.
+    inject: (deps: string[], cb: (toolCtx: { get(k: string): any }) => void) => {
+      if (deps.includes("tools") && services.tools) cb({ get: (k: string) => services[k] });
+    },
+    get: (k: string) => services[k],
+    on(topic: string, fn: Handler) {
+      listeners.set(topic, fn);
+    },
+    logger: () => ({}),
+  };
+  return ctx;
 }
 
 async function usageFrameFor(payload: any) {

@@ -280,9 +280,11 @@ describe("D: launches are recorded for restore-on-boot", () => {
     // is a launch that silently never restores.
     const roster = JSON.parse(c.rosters[0]?.contents ?? "{}");
     expect(roster.agents).toHaveLength(1);
+    // The session name derives from the agent root's basename; deriving it
+    // here keeps the assertion tied to the fixture instead of a literal.
     expect(roster.agents[0]).toMatchObject({
       kind: "deepseek",
-      session: "suite-oddjob",
+      session: `suite-${root.split("/").pop()}`,
       cwd: root,
     });
     // The FULL tmux argv, replayed verbatim at restore time. Rebuilding the

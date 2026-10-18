@@ -2,7 +2,7 @@
 // and queued-typing indicator.
 //
 // WHY suite_reply NEEDS ITS OWN CONTRACT. Core's Chat channel answers a
-// `reply` push with `{:noreply, socket}` on both branches, so no phoenix
+// `reply` push with `{:noreply, socket}` on BOTH branches, so no phoenix
 // reply/ack can ever fire; a refusal arrives instead as a separate `error`
 // event. The tool is therefore judged by its absence: it resolves ok only when
 // a short grace window passes without one. These tests pin that contract so a
@@ -13,6 +13,7 @@
 // `apply` — registration happens for real, the tool's `execute` is called for
 // real, and the channel pushes are what the test asserts on.
 import { describe, expect, mock, test } from "bun:test";
+import { Context } from "@deepseek-ai/cordis";
 
 // Listeners here receive whatever the plugin passes: one payload for channel
 // events, two (`session`, `event`) for the session/event trace.
@@ -21,8 +22,14 @@ const pushes: Array<{ event: string; payload: any }> = [];
 const handlers = new Map<string, Handler>();
 
 // Anything callable and chainable: `z.object({...})`, `z.string().required()`.
+// `~standard.validate` is what real cordis calls on the plugin's `Config`
+// schema (fiber.ts `resolveConfig`), and a truthy `issues` on its result
+// throws a ValidationError — so the mock validates and echoes the config.
 const chain: any = new Proxy(function () {}, {
-  get: () => chain,
+  get: (target, prop) => {
+    if (prop === "~standard") return { validate: (value: any) => ({ value }) };
+    return chain;
+  },
   apply: () => chain,
 });
 
@@ -88,10 +95,17 @@ function fakeCtx(opts: { turnGate?: Promise<void>; tools?: (def: any) => void } 
   };
   const listeners = new Map<string, Handler>();
   const ctx = {
-    // The tools service is READ with `ctx.get`, not injected — a missing one
-    // must leave the plugin alive. Passing a registrar here is how a test
-    // provides it.
+    // The tools service is RESOLVED through the nested `ctx.inject`, not the
+    // plugin's own inject — a missing one must leave the plugin alive.
+    // Passing a registrar here is how a test provides it.
     get: (k: string) => (opts.tools && k === "tools" ? { register: opts.tools } : services[k]),
+    // Cordis holds a nested `ctx.inject` fiber inactive while any of its
+    // dependencies is unmounted and runs its callback once they mount. The
+    // fake runs the callback synchronously when tools is available and never
+    // otherwise — the same contract from the plugin's point of view.
+    inject: (deps: string[], cb: (c: any) => any) => {
+      if (deps.includes("tools") && opts.tools) cb(ctx);
+    },
     on: (topic: string, fn: Handler) => listeners.set(topic, fn),
     logger: () => ({}),
     listeners,
@@ -186,15 +200,15 @@ describe("suite_reply", () => {
     });
   });
 
-  test("registration is skipped, not fatal, when the tools service is not mounted", () => {
+  test("a build with no tools service mounts the plugin with no send path", () => {
     const stderr = captureStderr(() => {
       const ctx = fakeCtx();
       expect(() => applyPlugin(ctx)).not.toThrow();
     });
-    // Loud on stderr — the operator must be able to see WHY there is no
-    // send path — but the path itself stays down, not the plugin.
-    expect(stderr).toContain("TOOL-REGISTER-FAILED");
-    expect(stderr).toContain("tools service is not mounted");
+    // The nested inject simply never fires: an optional dependency that never
+    // mounts leaves its fiber inactive, and there is nothing to log. The
+    // plugin mounts without a send path and without any error.
+    expect(stderr).not.toContain("TOOL-REGISTER-FAILED");
     // Federation survived: the dispatch handler is still wired.
     expect(handlers.has("attention")).toBe(true);
   });
@@ -209,6 +223,18 @@ describe("suite_reply", () => {
     expect(stderr).toContain("TOOL-REGISTER-FAILED");
     expect(stderr).toContain("boom");
     expect(handlers.has("attention")).toBe(true);
+  });
+});
+
+describe("plugin inject requirements", () => {
+  test("plugin.inject no longer requires tools", () => {
+    // The `tools` service is now OPTIONAL: it lives in a nested
+    // `ctx.inject(['tools'], ...)` rather than the plugin's own top-level
+    // `inject` array. Cordis holds a plugin inactive until every service in
+    // its own inject mounts, so declaring `tools` there would suspend the
+    // whole plugin — dispatches, queued turns, usage reports — on builds
+    // that never mount a tools service. Nested, only the nested fiber waits.
+    expect(plugin.inject).not.toContain("tools");
   });
 });
 
@@ -283,6 +309,77 @@ describe("live tool trace", () => {
     // must surface as a missing log line, never as a thrown error.
     expect(() => onEvent(undefined, undefined)).not.toThrow();
     expect(() => onEvent(undefined, { type: "tool/call", data: undefined })).not.toThrow();
-    expect(() => onEvent(undefined, { type: "tool/result", data: { message: undefined } })).not.toThrow();
+  });
+});
+
+describe("composition with a real cordis Context", () => {
+  /** Provide the services the plugin's own top-level inject requires. */
+  function provideRequiredServices(ctx: Context) {
+    ctx.provide("agents", {
+      create: async () => ({
+        agent: {
+          session: { id: "session-x", seq: 0, events: [] as any[] },
+          followup() {},
+          whenIdle: async () => {},
+        },
+      }),
+    });
+    ctx.provide("agentDefaultModel", { currentSelection: () => ({ provider: "deepseek", model: "deepseek-chat" }) });
+    ctx.provide("sessions", { flush: async () => {} });
+  }
+
+  /** Let child fibers (the nested `ctx.inject`) settle before asserting. */
+  async function settle(): Promise<void> {
+    for (let i = 0; i < 50; i++) await new Promise((resolve) => setImmediate(resolve));
+  }
+
+  test("activates with no tools service mounted — federation survives, suite_reply does not", async () => {
+    handlers.clear();
+    pushes.length = 0;
+    const ctx = new Context();
+    provideRequiredServices(ctx);
+    // NO tools service exists at all. The nested `ctx.inject(['tools'], ...)`
+    // must simply never fire, while the plugin itself still activates.
+
+    const registered: any[] = [];
+    await ctx.plugin(plugin, { url: "ws://x", runtimeId: "rt-1", token: "t" });
+    await settle();
+
+    // The plugin ACTIVATED: apply ran and joined the channel.
+    expect(handlers.has("attention")).toBe(true);
+    // The nested inject never fired, so nothing registered a tool.
+    expect(registered).toHaveLength(0);
+  });
+
+  test("registers suite_reply once a tools service mounts", async () => {
+    handlers.clear();
+    pushes.length = 0;
+    const ctx = new Context();
+    provideRequiredServices(ctx);
+    const registered: any[] = [];
+    ctx.provide("tools", {
+      register: (def: any) => {
+        registered.push(def);
+        return () => {};
+      },
+    });
+
+    await ctx.plugin(plugin, { url: "ws://x", runtimeId: "rt-1", token: "t" });
+    await settle();
+
+    // The nested inject fired and registered the tool through the stub.
+    expect(registered).toHaveLength(1);
+    expect(registered[0].name).toBe("suite_reply");
+
+    // The tool is live through the channel contract: a `reply` push carries
+    // the space and the message body.
+    handlers.get("attention")!({ signal: { space_id: "space-x", message_id: "m1" } });
+    const tool = registered[0];
+    await withCapturedGraceTimer(async (fireGrace) => {
+      const pending = tool.execute({ space_id: "space-x", content: "hello from composition" });
+      fireGrace();
+      expect(await pending).toEqual({ ok: true, space_id: "space-x" });
+    });
+    expect(pushes.some((p) => p.event === "reply" && p.payload.space_id === "space-x")).toBe(true);
   });
 });

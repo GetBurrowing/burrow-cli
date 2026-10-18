@@ -26,7 +26,7 @@ import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { SessionId } from '@deepseek-ai/dsh-session'
 
 export const name = 'suite-federation'
-export const inject = ['agents', 'agentDefaultModel', 'sessions', 'tools']
+export const inject = ['agents', 'agentDefaultModel', 'sessions']
 
 export const Config = z.object({
   url: z.string().required(),
@@ -131,12 +131,9 @@ export function apply(ctx, config) {
     agents: ctx.get('agents'),
     defaultModel: ctx.get('agentDefaultModel'),
     sessions: ctx.get('sessions'),
-    // READ, not injected — for the tools service, absence is a supported
-    // shape, not a broken mount. See the send-path registration below.
-    tools: ctx.get('tools'),
   }
   process.stderr.write(
-    `[suite-federation] SERVICES agents=${!!services.agents} model=${!!services.defaultModel} sessions=${!!services.sessions} tools=${!!services.tools}\n`,
+    `[suite-federation] SERVICES agents=${!!services.agents} model=${!!services.defaultModel} sessions=${!!services.sessions}\n`,
   )
   const sessionsBySpace = new Map()
   const inflight = new Set()
@@ -400,12 +397,17 @@ export function apply(ctx, config) {
   // otherwise-composed dsh build may not mount a tools service at all. Two
   // layers guard against turning that into "the plugin is dead":
   //
-  //  - `tools` is READ from `ctx`, never injected (`inject`). Cordis holds a
-  //    plugin INACTIVE until every injected service mounts, so declaring it
+  //  - `tools` is required only by a NESTED `ctx.inject`, never by the
+  //    plugin's own top-level `inject`. Cordis holds a plugin INACTIVE until
+  //    every service in its own inject is mounted, so declaring `tools` there
   //    would suspend federation — dispatches, queued turns, usage reports —
-  //    for the sake of one tool, on builds that will never mount it. A read
-  //    returns undefined instead, which is exactly the shape we want to
-  //    handle ourselves. (`ctx.get('loader')` above is the same pattern.)
+  //    for the sake of one tool, on builds that will never mount it. The
+  //    nested scope suspends only itself: while `tools` is absent its
+  //    callback never runs and the send path simply does not exist; when it
+  //    mounts, the callback runs and `tools.register` returns the exact
+  //    disposer that unregisters the tool, which this callback passes back to
+  //    cordis — so the tool unregisters with the service that owned it and
+  //    re-registers, fresh, if that service ever remounts.
   //  - Registration failure never rethrows. An error here used to bubble up
   //    through apply and take the whole plugin down; instead it is logged
   //    loudly on stderr and the plugin goes on without the send path. An
@@ -414,100 +416,104 @@ export function apply(ctx, config) {
   //
   // The try/catch exists to NAME the cause either way: the wrapped error
   // carries the failing expression, which an unwrapped one never does.
-  try {
-    if (services.tools === undefined) throw new Error('the tools service is not mounted — suite_reply is unavailable on this build')
-    services.tools.register(
-    defineTool({
-      name: 'suite_reply',
-      description:
-        'Post a message into a Startup Suite space. Use the space_id from the ' +
-        'dispatch you are answering, or one from space_list. You must already ' +
-        'be a participant of that space — Suite refuses a post to a space you ' +
-        'have not joined.',
-      parameters: {
-        space_id: { type: 'string', required: true, description: 'Target space UUID.' },
-        content: { type: 'string', required: true, description: 'Message body, markdown.' },
-      },
-      // `output` is mandatory — omitting it fails registration with
-      // "Cannot read properties of undefined (reading 'render')", an error
-      // that names neither the tool nor the missing field.
-      output: {
-        schema: {
-          type: 'object',
-          additionalProperties: false,
-          properties: {
-            ok: { type: 'boolean', required: true },
-            space_id: { type: 'string' },
-            error: { type: 'string' },
+  ctx.inject(['tools'], (toolCtx) => {
+    try {
+      const tools = toolCtx.get('tools')
+      if (!tools) throw new Error('the tools service is not mounted — suite_reply is unavailable on this build')
+      const disposer = tools.register(
+        defineTool({
+          name: 'suite_reply',
+          description:
+            'Post a message into a Startup Suite space. Use the space_id from the ' +
+            'dispatch you are answering, or one from space_list. You must already ' +
+            'be a participant of that space — Suite refuses a post to a space you ' +
+            'have not joined.',
+          parameters: {
+            space_id: { type: 'string', required: true, description: 'Target space UUID.' },
+            content: { type: 'string', required: true, description: 'Message body, markdown.' },
           },
-        },
-        render: (_args, value) =>
-          [{
-            type: 'text',
-            text: value?.ok
-              ? `Posted to ${value.space_id}.`
-              : `Could not post: ${value?.error ?? 'unknown error'}`,
-          }],
-      },
-      async execute(args) {
-        const spaceId = String(args?.space_id ?? '').trim()
-        const content = String(args?.content ?? '')
-        if (spaceId === '') return { ok: false, error: 'space_id is required' }
-        if (content.trim() === '') return { ok: false, error: 'content is empty' }
-        if (channel === null) return { ok: false, error: 'not connected to Suite' }
+          // `output` is mandatory — omitting it fails registration with
+          // "Cannot read properties of undefined (reading 'render')", an error
+          // that names neither the tool nor the missing field.
+          output: {
+            schema: {
+              type: 'object',
+              additionalProperties: false,
+              properties: {
+                ok: { type: 'boolean', required: true },
+                space_id: { type: 'string' },
+                error: { type: 'string' },
+              },
+            },
+            render: (_args, value) =>
+              [{
+                type: 'text',
+                text: value?.ok
+                  ? `Posted to ${value.space_id}.`
+                  : `Could not post: ${value?.error ?? 'unknown error'}`,
+              }],
+          },
+          async execute(args) {
+            const spaceId = String(args?.space_id ?? '').trim()
+            const content = String(args?.content ?? '')
+            if (spaceId === '') return { ok: false, error: 'space_id is required' }
+            if (content.trim() === '') return { ok: false, error: 'content is empty' }
+            if (channel === null) return { ok: false, error: 'not connected to Suite' }
 
-        // THE SERVER NEVER REPLIES TO A `reply` PUSH.
-        //
-        // `handle_in("reply", …)` returns `{:noreply, socket}` on BOTH
-        // branches, so `.receive('ok')` can never fire. Waiting for it timed
-        // out on every send while the message posted perfectly — telling the
-        // agent it had failed when it had not, which is the same lie as
-        // "success into an empty topic", just pointing the other way.
-        //
-        // A refusal arrives instead as a separate `error` EVENT, pushed
-        // immediately. So: send, watch briefly for that event, and report
-        // success only if none arrives. Not a delivery receipt — the honest
-        // reading is "Suite raised no objection", and the grace window is the
-        // whole strength of the claim.
-        const GRACE_MS = 1500
-        return await new Promise((resolve) => {
-          let settled = false
-          const ref = channel.on('error', (payload) => {
-            if (settled) return
-            settled = true
-            clearTimeout(timer)
-            channel.off('error', [ref])
-            const detail =
-              typeof payload?.error === 'string' ? payload.error : JSON.stringify(payload)
-            process.stderr.write(`[suite-federation] SEND-REFUSED ${detail}\n`)
-            resolve({ ok: false, error: detail })
-          })
-          const timer = setTimeout(() => {
-            if (settled) return
-            settled = true
-            channel.off('error', [ref])
-            process.stderr.write(`[suite-federation] SENT space=${spaceId} len=${content.length}\n`)
-            resolve({ ok: true, space_id: spaceId })
-          }, GRACE_MS)
-          try {
-            channel.push('reply', { space_id: spaceId, content })
-          } catch (error) {
-            if (settled) return
-            settled = true
-            clearTimeout(timer)
-            channel.off('error', [ref])
-            resolve({ ok: false, error: error?.message ?? String(error) })
-          }
-        })
-      },
-    }),
-    )
-    process.stderr.write('[suite-federation] TOOL-REGISTERED suite_reply\n')
-  } catch (error) {
-    // NON-FATAL, deliberately: the plugin continues without the send path.
-    // See the comment above — federation is worth more than suite_reply.
-    process.stderr.write(`[suite-federation] TOOL-REGISTER-FAILED (non-fatal, continuing) ${error?.stack ?? error}\n`)
-  }
+            // THE SERVER NEVER REPLIES TO A `reply` PUSH.
+            //
+            // `handle_in("reply", …)` returns `{:noreply, socket}` on BOTH
+            // branches, so `.receive('ok')` can never fire. Waiting for it timed
+            // out on every send while the message posted perfectly — telling the
+            // agent it had failed when it had not, which is the same lie as
+            // "success into an empty topic", just pointing the other way.
+            //
+            // A refusal arrives instead as a separate `error` EVENT, pushed
+            // immediately. So: send, watch briefly for that event, and report
+            // success only if none arrives. Not a delivery receipt — the honest
+            // reading is "Suite raised no objection", and the grace window is the
+            // whole strength of the claim.
+            const GRACE_MS = 1500
+            return await new Promise((resolve) => {
+              let settled = false
+              const ref = channel.on('error', (payload) => {
+                if (settled) return
+                settled = true
+                clearTimeout(timer)
+                channel.off('error', [ref])
+                const detail =
+                  typeof payload?.error === 'string' ? payload.error : JSON.stringify(payload)
+                process.stderr.write(`[suite-federation] SEND-REFUSED ${detail}\n`)
+                resolve({ ok: false, error: detail })
+              })
+              const timer = setTimeout(() => {
+                if (settled) return
+                settled = true
+                channel.off('error', [ref])
+                process.stderr.write(`[suite-federation] SENT space=${spaceId} len=${content.length}\n`)
+                resolve({ ok: true, space_id: spaceId })
+              }, GRACE_MS)
+              try {
+                channel.push('reply', { space_id: spaceId, content })
+              } catch (error) {
+                if (settled) return
+                settled = true
+                clearTimeout(timer)
+                channel.off('error', [ref])
+                resolve({ ok: false, error: error?.message ?? String(error) })
+              }
+            })
+          },
+        }),
+      )
+      process.stderr.write('[suite-federation] TOOL-REGISTERED suite_reply\n')
+      return disposer
+    } catch (error) {
+      // NON-FATAL, deliberately: the plugin continues without the send path.
+      // See the comment above — federation is worth more than suite_reply.
+      process.stderr.write(`[suite-federation] TOOL-REGISTER-FAILED (non-fatal, continuing) ${error?.stack ?? error}\n`)
+    }
+  })
 
   // LIVE TOOL TRACE.
   //

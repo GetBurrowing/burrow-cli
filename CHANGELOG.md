@@ -19,7 +19,7 @@ separately); this is the part that did not.
   `suite_reply` tool.** The hosted Suite MCP surface has no tool that posts a
   message into a space — only reads, plus `dm_create`, which is humans-only —
   and Claude-side agents get their `suite_reply` from a separate local MCP
-  bridge (Ryan's 2026-08-31 decision, task 01a05882: dsh's send path is named
+  bridge (a 2026-08-31 product decision keeps the dsh send path named
   `suite_reply`). This closes the gap over the websocket the plugin already
   holds. The contract is honest about what the channel can answer: core never
   replies to a `reply` push (`handle_in` returns `{:noreply, socket}` on both
@@ -27,15 +27,17 @@ separately); this is the part that did not.
   and resolves ok only if none arrives — a refusal check, not a delivery
   receipt. When `space_send_message` lands on the hosted surface this should
   be deleted in favour of it.
-- **Registration of the tool is non-fatal, and the tools service is read
-  rather than injected.** The plugin ships in every `burrow deepseek` install,
-  and dsh builds without a mounted tools service must lose the send path, not
-  the agent. Cordis holds a plugin INACTIVE until every entry in `inject`
-  mounts, so `tools` is read with `ctx.get('tools')` at apply (the same
-  pattern as `ctx.get('loader')`); `undefined`, or a throwing `register`, is
-  logged loudly on stderr (`TOOL-REGISTER-FAILED`) and federation carries on.
-  The tool itself arrives through `@deepseek-ai/dsh-tools` (`defineTool`),
-  now declared as the plugin's first dependency.
+- **Registration of the tool is non-fatal, and `tools` is an optional nested
+  inject.** The plugin ships in every `burrow deepseek` install, and dsh builds
+  without a mounted tools service must lose the send path, not the agent.
+  Cordis holds a plugin INACTIVE until every entry in its top-level `inject`
+  mounts, so `tools` is never listed there: it is resolved by a nested
+  `ctx.inject(['tools'], ...)` inside apply. A build without the service keeps
+  that nested fiber inactive and the plugin alive; a build with it registers
+  the tool (`TOOL-REGISTERED` on stderr), and a throwing `register` is logged
+  loudly (`TOOL-REGISTER-FAILED`) and never rethrown — federation carries on
+  either way. The tool itself arrives through `@deepseek-ai/dsh-tools`
+  (`defineTool`).
 - **The `session/event` live tool trace.** `tool/call` lines with truncated
   arguments and `tool/result` lines carrying only byte sizes are written to
   stderr as they are recorded, so a `burrow deepseek` pane shows what the
