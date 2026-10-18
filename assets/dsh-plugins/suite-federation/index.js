@@ -11,10 +11,16 @@
  *
  * One session per Suite space, held for the process lifetime, so a channel
  * conversation keeps its history the way a human participant would expect.
+ *
+ * THE ONE TOOL REGISTERED HERE IS `suite_reply` — the send path. Everything
+ * else arrives through the MCP surface, which today has no tool that posts a
+ * message into a space, and a runtime that can only ever answer the space that
+ * dispatched it cannot start a conversation. See the registration below.
  */
 import { randomUUID } from 'node:crypto'
 import WebSocket from 'ws'
 import { Socket } from 'phoenix'
+import { defineTool } from '@deepseek-ai/dsh-tools'
 import z from '@deepseek-ai/schemastery'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { SessionId } from '@deepseek-ai/dsh-session'
@@ -215,6 +221,12 @@ export function apply(ctx, config) {
         dropped += 1
       }
       pending.set(spaceId, queue)
+      // Tell the space it is queued rather than ignored. `typing` is the one
+      // liveness signal Suite already renders, and a queued message with no
+      // indicator is indistinguishable from a dropped one. The turn itself
+      // pushes typing at its start and clears it on failure, so a drain keeps
+      // the indicator honest without extra bookkeeping here.
+      channel?.push('typing', { space_id: spaceId, typing: true })
       process.stderr.write(
         `[suite-federation] QUEUED space=${spaceId} depth=${queue.length}` +
           (dropped > 0 ? ` dropped_oldest=${dropped}` : '') +
@@ -362,6 +374,177 @@ export function apply(ctx, config) {
     if (reconnectTimer) clearTimeout(reconnectTimer)
     try { channel?.leave() } catch {}
     try { socket?.disconnect() } catch {}
+  })
+
+  // THE SEND PATH.
+  //
+  // The hosted Suite MCP surface has 100 tools and none of them post a
+  // message to a space — only reads (`space_get_messages`,
+  // `space_search_messages`) and `dm_create`, which is humans-only. Claude-side
+  // agents get `suite_reply` from a SEPARATE local MCP server (the
+  // claude-code-suite-channel bridge), so they can start a conversation
+  // anywhere; a dsh agent could only ever answer the space that had just
+  // dispatched it.
+  //
+  // This closes that gap over the websocket this plugin already holds, rather
+  // than waiting on a core change. When `space_send_message` lands on the
+  // hosted surface this should be deleted in favour of it — one send path is
+  // better than two that can drift.
+  //
+  // REGRESSION FILTER, NOT A HARD DEPENDENCY.
+  //
+  // This plugin ships inside every `burrow deepseek` install, and an older or
+  // otherwise-composed dsh build may not mount a tools service at all. Two
+  // layers guard against turning that into "the plugin is dead":
+  //
+  //  - `tools` is required only by a NESTED `ctx.inject`, never by the
+  //    plugin's own top-level `inject`. Cordis holds a plugin INACTIVE until
+  //    every service in its own inject is mounted, so declaring `tools` there
+  //    would suspend federation — dispatches, queued turns, usage reports —
+  //    for the sake of one tool, on builds that will never mount it. The
+  //    nested scope suspends only itself: while `tools` is absent its
+  //    callback never runs and the send path simply does not exist; when it
+  //    mounts, the callback runs and `tools.register` returns the exact
+  //    disposer that unregisters the tool, which this callback passes back to
+  //    cordis — so the tool unregisters with the service that owned it and
+  //    re-registers, fresh, if that service ever remounts.
+  //  - Registration failure never rethrows. An error here used to bubble up
+  //    through apply and take the whole plugin down; instead it is logged
+  //    loudly on stderr and the plugin goes on without the send path. An
+  //    agent that can still answer is worth more than one that also could
+  //    have posted but took the channel down trying.
+  //
+  // The try/catch exists to NAME the cause either way: the wrapped error
+  // carries the failing expression, which an unwrapped one never does.
+  ctx.inject(['tools'], (toolCtx) => {
+    try {
+      const tools = toolCtx.get('tools')
+      if (!tools) throw new Error('the tools service is not mounted — suite_reply is unavailable on this build')
+      const disposer = tools.register(
+        defineTool({
+          name: 'suite_reply',
+          description:
+            'Post a message into a Startup Suite space. Use the space_id from the ' +
+            'dispatch you are answering, or one from space_list. You must already ' +
+            'be a participant of that space — Suite refuses a post to a space you ' +
+            'have not joined.',
+          parameters: {
+            space_id: { type: 'string', required: true, description: 'Target space UUID.' },
+            content: { type: 'string', required: true, description: 'Message body, markdown.' },
+          },
+          // `output` is mandatory — omitting it fails registration with
+          // "Cannot read properties of undefined (reading 'render')", an error
+          // that names neither the tool nor the missing field.
+          output: {
+            schema: {
+              type: 'object',
+              additionalProperties: false,
+              properties: {
+                ok: { type: 'boolean', required: true },
+                space_id: { type: 'string' },
+                error: { type: 'string' },
+              },
+            },
+            render: (_args, value) =>
+              [{
+                type: 'text',
+                text: value?.ok
+                  ? `Posted to ${value.space_id}.`
+                  : `Could not post: ${value?.error ?? 'unknown error'}`,
+              }],
+          },
+          async execute(args) {
+            const spaceId = String(args?.space_id ?? '').trim()
+            const content = String(args?.content ?? '')
+            if (spaceId === '') return { ok: false, error: 'space_id is required' }
+            if (content.trim() === '') return { ok: false, error: 'content is empty' }
+            if (channel === null) return { ok: false, error: 'not connected to Suite' }
+
+            // THE SERVER NEVER REPLIES TO A `reply` PUSH.
+            //
+            // `handle_in("reply", …)` returns `{:noreply, socket}` on BOTH
+            // branches, so `.receive('ok')` can never fire. Waiting for it timed
+            // out on every send while the message posted perfectly — telling the
+            // agent it had failed when it had not, which is the same lie as
+            // "success into an empty topic", just pointing the other way.
+            //
+            // A refusal arrives instead as a separate `error` EVENT, pushed
+            // immediately. So: send, watch briefly for that event, and report
+            // success only if none arrives. Not a delivery receipt — the honest
+            // reading is "Suite raised no objection", and the grace window is the
+            // whole strength of the claim.
+            const GRACE_MS = 1500
+            return await new Promise((resolve) => {
+              let settled = false
+              const ref = channel.on('error', (payload) => {
+                if (settled) return
+                settled = true
+                clearTimeout(timer)
+                channel.off('error', [ref])
+                const detail =
+                  typeof payload?.error === 'string' ? payload.error : JSON.stringify(payload)
+                process.stderr.write(`[suite-federation] SEND-REFUSED ${detail}\n`)
+                resolve({ ok: false, error: detail })
+              })
+              const timer = setTimeout(() => {
+                if (settled) return
+                settled = true
+                channel.off('error', [ref])
+                process.stderr.write(`[suite-federation] SENT space=${spaceId} len=${content.length}\n`)
+                resolve({ ok: true, space_id: spaceId })
+              }, GRACE_MS)
+              try {
+                channel.push('reply', { space_id: spaceId, content })
+              } catch (error) {
+                if (settled) return
+                settled = true
+                clearTimeout(timer)
+                channel.off('error', [ref])
+                resolve({ ok: false, error: error?.message ?? String(error) })
+              }
+            })
+          },
+        }),
+      )
+      process.stderr.write('[suite-federation] TOOL-REGISTERED suite_reply\n')
+      return disposer
+    } catch (error) {
+      // NON-FATAL, deliberately: the plugin continues without the send path.
+      // See the comment above — federation is worth more than suite_reply.
+      process.stderr.write(`[suite-federation] TOOL-REGISTER-FAILED (non-fatal, continuing) ${error?.stack ?? error}\n`)
+    }
+  })
+
+  // LIVE TOOL TRACE.
+  //
+  // `session/event` is dsh's post-commit append feed: every event lands here
+  // as it is recorded, so a `burrow deepseek` pane shows the agent working
+  // rather than a burst of history after it finishes. The headless profile
+  // renders no UI, so without this the agent is opaque between ATTENTION and
+  // REPLY — you can see that it worked and not what it did.
+  //
+  // Registered on ctx, not on a session: sessions are created per space and
+  // this must not have to be re-attached each time one appears.
+  ctx.on('session/event', (_session, event) => {
+    try {
+      if (event?.type === 'tool/call') {
+        // Arguments are truncated: a bash command or a file write runs to
+        // thousands of characters, and what is wanted here is the shape of
+        // the work, not its contents.
+        const args = String(event.data?.arguments ?? '').replace(/\s+/g, ' ')
+        process.stderr.write(
+          `[suite-federation] TOOL ${event.data?.name} ${args.slice(0, 160)}${args.length > 160 ? '…' : ''}\n`,
+        )
+      } else if (event?.type === 'tool/result') {
+        // Only the size. A result carries the whole payload — often kilobytes
+        // — and echoing it would bury the trace in file contents.
+        const blocks = event.data?.message?.content ?? []
+        const bytes = blocks.reduce((n, b) => n + JSON.stringify(b ?? '').length, 0)
+        process.stderr.write(`[suite-federation] TOOL-RESULT ${bytes}b\n`)
+      }
+    } catch {
+      // A trace line must never be able to disturb the turn it is describing.
+    }
   })
 
   connect()

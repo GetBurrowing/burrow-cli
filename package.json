@@ -1,6 +1,6 @@
 {
   "name": "burrow-cli",
-  "version": "0.8.0",
+  "version": "0.8.1",
   "description": "Connects a machine to a Burrow install, then sets up and runs its agent harness",
   "license": "MIT",
   "type": "module",
@@ -18,6 +18,7 @@
     "yaml": "^2.9.0"
   },
   "devDependencies": {
+    "@deepseek-ai/cordis": "4.0.2",
     "@types/bun": "latest",
     "typescript": "^5"
   }

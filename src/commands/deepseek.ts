@@ -47,6 +47,7 @@ import {
   TMUX,
   type TmuxDeps,
 } from "../tmux.ts";
+import { type RestoreDeps, liveRestoreDeps, recordLaunch } from "./restore.ts";
 import { CLI_NAME } from "../version.ts";
 
 export const AGENT = "deepseek";
@@ -284,6 +285,8 @@ export interface DeepseekDeps {
   stderr: { write(text: string): void };
   /** The directory the verb was run from. Defaults to `process.cwd()`. */
   cwd?(): string;
+  /** Environment the verb runs in. Defaults to `process.env` live. */
+  env?: Record<string, string | undefined>;
   /** Injected in tests; defaults to the live tmux. */
   tmux?: TmuxDeps;
   /**
@@ -292,6 +295,14 @@ export interface DeepseekDeps {
    * first". Only used from a terminal; absent, the verb refuses as before.
    */
   prompter?: Prompter;
+  /**
+   * How launches are recorded for restore-on-boot. Optional by construction:
+   * a caller that supplies nothing records nothing, which is what keeps the
+   * test suite from writing a real roster into a developer's home directory.
+   * Sessions are recorded with kind "deepseek" so `suite restore` can relaunch
+   * them alongside recorded claude sessions.
+   */
+  restore?: RestoreDeps;
 }
 
 /** Whether the harness is already installed under `dir`. */
@@ -664,7 +675,7 @@ export async function runInSession(
   cwd: string,
   env: Record<string, string>,
   store: CredentialStore,
-  deps: Pick<DeepseekDeps, "isTTY" | "exec" | "stderr">,
+  deps: Pick<DeepseekDeps, "isTTY" | "exec" | "stderr" | "restore" | "env">,
   options: SessionOptions = {},
 ): Promise<number> {
   const tmux: TmuxDeps = options.tmux ?? liveTmuxDeps(env);
@@ -702,6 +713,21 @@ export async function runInSession(
     if (created.exitCode !== 0) {
       deps.stderr.write(`${CLI_NAME}: tmux could not create ${session}: ${created.stderr.trim()}\n`);
       return created.exitCode;
+    }
+    // Record for restore-on-boot. A by-product of launching, never a list the
+    // operator maintains — a hand-curated roster is wrong exactly when needed.
+    //
+    // INJECTED, not imported: a caller that supplies no restore deps records
+    // nothing. That is what stops the test suite writing a real roster into
+    // the developer's home directory. Only on CREATE, as `suite claude` does:
+    // re-attaching to a live session changes nothing about the host.
+    if (deps.restore) {
+      recordLaunch(deps.restore, deps.env?.HOME ?? "", {
+        session,
+        command: create,
+        cwd,
+        kind: "deepseek",
+      });
     }
     deps.stderr.write(`${CLI_NAME}: started ${session}\n`);
     options.onCreated?.(create);
@@ -787,8 +813,10 @@ export async function loadAgentCredentials(root: string, config: SuiteConfig): P
 
 export function liveDeepseekDeps(): DeepseekDeps {
   return {
+    restore: liveRestoreDeps(),
     which: (bin) => Bun.which(bin),
     isTTY: () => process.stdout.isTTY === true,
+    env: process.env,
     run: async (argv, opts) => {
       const proc = Bun.spawn(argv, { cwd: opts.cwd, env: { ...process.env, ...(opts.env ?? {}) }, stdout: "inherit", stderr: "inherit" });
       return await proc.exited;

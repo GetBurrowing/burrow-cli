@@ -20,6 +20,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type DeepseekDeps, runDeepseek } from "../src/commands/deepseek.ts";
+import type { RestoreDeps } from "../src/commands/restore.ts";
 import type { RunResult, TmuxDeps } from "../src/tmux.ts";
 import type { Prompter } from "../src/secrets.ts";
 
@@ -81,6 +82,7 @@ interface Captured {
   stderr: string;
   execs: Array<{ argv: string[]; cwd: string; env: Record<string, string> }>;
   tmuxCalls: string[][];
+  rosters: Array<{ path: string; contents: string }>;
 }
 
 function fakeTmux(state: "live" | "stale" | "none", calls: string[][]): TmuxDeps {
@@ -103,8 +105,21 @@ function fakeTmux(state: "live" | "stale" | "none", calls: string[][]): TmuxDeps
   };
 }
 
-function deps(opts: { cwd: string; tty?: boolean; tmux?: "live" | "stale" | "none" }): { d: DeepseekDeps; c: Captured } {
-  const c: Captured = { stderr: "", execs: [], tmuxCalls: [] };
+function deps(opts: {
+  cwd: string;
+  tty?: boolean;
+  tmux?: "live" | "stale" | "none";
+  /** Inject a capturing restore, so launch-recording is observable. */
+  restore?: boolean;
+}): { d: DeepseekDeps; c: Captured } {
+  const c: Captured = { stderr: "", execs: [], tmuxCalls: [], rosters: [] };
+  const restore: RestoreDeps = {
+    tmux: fakeTmux(opts.tmux ?? "none", c.tmuxCalls),
+    readRoster: () => null,
+    writeRoster: (p, contents) => void c.rosters.push({ path: p, contents: String(contents) }),
+    now: () => new Date("2026-10-08T00:00:00Z"),
+    log: () => {},
+  };
   const d: DeepseekDeps = {
     which: () => null,
     isTTY: () => opts.tty ?? false,
@@ -116,6 +131,7 @@ function deps(opts: { cwd: string; tty?: boolean; tmux?: "live" | "stale" | "non
     stderr: { write: (t) => void (c.stderr += t) },
     cwd: () => opts.cwd,
     ...(opts.tmux === undefined ? {} : { tmux: fakeTmux(opts.tmux, c.tmuxCalls) }),
+    ...(opts.restore ? { restore } : {}),
   };
   return { d, c };
 }
@@ -270,5 +286,47 @@ describe("C: from the agent folder, a live session is attached and a stale one r
     expect(created).toHaveLength(1);
     expect(created[0]?.slice(0, 5)).toEqual(["tmux", "new-session", "-d", "-s", "burrow-oddjob"]);
     expect(c.stderr).toContain("started burrow-oddjob");
+  });
+});
+
+describe("D: launches are recorded for restore-on-boot", () => {
+  test("a created deepseek session is recorded with its full tmux argv", async () => {
+    const { d, c } = deps({ cwd: root, tty: false, tmux: "none", restore: true });
+    expect(await runDeepseek([], d)).toBe(0);
+    expect(c.rosters).toHaveLength(1);
+    // Parsed as the same JSON `suite restore` reads back — a shape drift here
+    // is a launch that silently never restores.
+    const roster = JSON.parse(c.rosters[0]?.contents ?? "{}");
+    expect(roster.agents).toHaveLength(1);
+    // The session name derives from the agent root's basename; deriving it
+    // here keeps the assertion tied to the fixture instead of a literal.
+    expect(roster.agents[0]).toMatchObject({
+      kind: "deepseek",
+      session: `suite-${root.split("/").pop()}`,
+      cwd: root,
+    });
+    // The FULL tmux argv, replayed verbatim at restore time. Rebuilding the
+    // command at restore time is where a recovery quietly starts something
+    // subtly different from what was running.
+    expect(String(roster.agents[0]?.command.join(" "))).toContain(
+      `deepseek --root ${root} --no-session`,
+    );
+  });
+
+  test("attaching to a live session records nothing", async () => {
+    // Restore-on-boot replays launches. A re-attach is not one, and recording
+    // it would mark every attach as a fresh launch.
+    const { d, c } = deps({ cwd: root, tty: true, tmux: "live", restore: true });
+    expect(await runDeepseek([], d)).toBe(0);
+    expect(c.rosters).toHaveLength(0);
+  });
+
+  test("no injected restore records nothing", async () => {
+    const { d, c } = deps({ cwd: root, tty: false, tmux: "none" });
+    expect(await runDeepseek([], d)).toBe(0);
+    expect(c.rosters).toHaveLength(0);
+    // And the create itself still happened — the assertion is that recording
+    // stayed absent, not the launch.
+    expect(c.tmuxCalls.some((a) => a[1] === "new-session")).toBe(true);
   });
 });
