@@ -26,10 +26,27 @@
  */
 import { VERSION, CLI_NAME } from "../version.ts";
 import { burrowName, envSource, suiteName } from "../env_names.ts";
-import { OWNER_ENV_BURROW, apiCommitUrl, ownerFrom, rawUrl, repoSlug, type Env } from "../repo_source.ts";
+import {
+  CLI_REPO_ENV,
+  CLI_REPO_NAME,
+  LEGACY_CLI_REPO_NAME,
+  OWNER_ENV_BURROW,
+  apiCommitUrl,
+  cliRepoNames,
+  ownerFrom,
+  rawUrl,
+  repoSlug,
+  type Env,
+} from "../repo_source.ts";
 
 /** This CLI's repo name. Its owner comes from repo_source.ts. */
-export const REPO_NAME = "suite-cli";
+export const REPO_NAME = CLI_REPO_NAME;
+/**
+ * Its name before 0.9.0. Every fetch tries {@link REPO_NAME} first and this on
+ * a 404, so update works before and after `gh repo rename` without relying on
+ * GitHub's redirect (see repo_source.ts).
+ */
+export const LEGACY_REPO_NAME = LEGACY_CLI_REPO_NAME;
 
 /**
  * The env that pins a single, already-resolved owner. Keyed by the BURROW name
@@ -56,7 +73,10 @@ export type Fetcher = (typeof FETCHERS)[number];
 export const REQUIRED_TOOLS = ["tar", "sh"] as const;
 
 /**
- * Refs we are willing to interpolate into a shell command.
+ * Refs we are willing to interpolate into a shell command: a branch, a bare
+ * tag (`v0.8.0`), a full `refs/heads/<b>` or `refs/tags/<t>`, or a commit SHA.
+ * raw.githubusercontent.com serves the installer at both `<tag>` and
+ * `refs/tags/<tag>` (measured 200, 2026-10-18), and install.sh resolves either.
  *
  * The ref reaches `sh -c`, so it is the one attacker-shaped input on this path.
  * Git's own rules are wider than this; the narrow set is the point. A ref
@@ -70,16 +90,25 @@ export function refIsSafe(ref: string): boolean {
   return ref.length > 0 && ref.length <= 200 && SAFE_REF.test(ref) && !ref.includes("..");
 }
 
-/** Where the installer for `ref` lives, under the owner `env` names. */
-export function installerUrl(ref: string, env: Env = process.env): string {
-  return rawUrl(REPO_NAME, ref, "install.sh", env);
+/** Where the installer for `ref` lives in `repo` (default {@link REPO_NAME}), under the owner `env` names. */
+export function installerUrl(ref: string, env: Env = process.env, repo: string = REPO_NAME): string {
+  return rawUrl(repo, ref, "install.sh", env);
+}
+
+/** Every installer URL to try, in order: one per repo from {@link cliRepoNames}. */
+export function installerUrls(ref: string, env: Env = process.env): string[] {
+  return cliRepoNames(env).map((repo) => installerUrl(ref, env, repo));
 }
 
 /**
  * Resolve a ref to a commit SHA, avoiding raw.githubusercontent.com's
  * branch-name cache. Returns the original ref if resolution fails.
  */
-export async function resolveRefToSha(ref: string, env: Env = process.env): Promise<string> {
+export async function resolveRefToSha(
+  ref: string,
+  env: Env = process.env,
+  fetchImpl: (url: string, init: { headers: Record<string, string> }) => Promise<Response> = fetch,
+): Promise<string> {
   // Only resolve branch names; tags and SHAs are already immutable.
   if (/^[0-9a-f]{40}$/.test(ref)) return ref;
   try {
@@ -90,14 +119,19 @@ export async function resolveRefToSha(ref: string, env: Env = process.env): Prom
     })());
     const headers: Record<string, string> = { Accept: "application/vnd.github.v3+json" };
     if (token) headers.Authorization = `token ${token}`;
-    const res = await fetch(apiCommitUrl(REPO_NAME, ref, env), { headers });
-    if (!res.ok) return ref;
-    // `res.json()` is `unknown` under this tsconfig, so the shape is narrowed
-    // rather than asserted: a response without a string `sha` falls back to
-    // the ref we already have instead of installing from `undefined`.
-    const data: unknown = await res.json();
-    const sha = typeof data === "object" && data !== null ? (data as { sha?: unknown }).sha : undefined;
-    return typeof sha === "string" && sha !== "" ? sha : ref;
+    // burrow-cli first, suite-cli on a 404 only (see repo_source.ts).
+    for (const repo of cliRepoNames(env)) {
+      const res = await fetchImpl(apiCommitUrl(repo, ref, env), { headers });
+      if (res.status === 404) continue;
+      if (!res.ok) return ref;
+      // `res.json()` is `unknown` under this tsconfig, so the shape is narrowed
+      // rather than asserted: a response without a string `sha` falls back to
+      // the ref we already have instead of installing from `undefined`.
+      const data: unknown = await res.json();
+      const sha = typeof data === "object" && data !== null ? (data as { sha?: unknown }).sha : undefined;
+      return typeof sha === "string" && sha !== "" ? sha : ref;
+    }
+    return ref;
   } catch {
     return ref;
   }
@@ -146,7 +180,9 @@ export function updateArgv(ref: string, fetcher: Fetcher = "curl", env: Env = pr
   // ownerFrom has validated this as a bare GitHub slug, so it is safe inside
   // single quotes in the sh -c line below.
   const owner = ownerFrom(env);
-  const url = installerUrl(ref, ownerEnv(owner));
+  const repos = cliRepoNames(env);
+  const pinned = { ...ownerEnv(owner), [CLI_REPO_ENV]: env[CLI_REPO_ENV] };
+  const urls = installerUrls(ref, pinned);
 
   // GH_TOKEN is exported so install.sh can use it for its own tarball fetch.
   // The ${TOKEN:+...} expansion emits the header only when a token was
@@ -161,12 +197,28 @@ export function updateArgv(ref: string, fetcher: Fetcher = "curl", env: Env = pr
   // `$$` is the pid of the `sh -c` running this line, so two concurrent
   // updates (or two users on one box) never share a temp file. It is removed
   // afterwards and the installer's own exit code is kept.
+  //
+  // THE REPO FALLS BACK ON A 404 ONLY. Each URL after the first is tried only
+  // when the one before it answered 404 (curl: `%{http_code}`; wget, which has
+  // no such report, exit 8 "server issued an error response"). Any other
+  // failure stops here with that fetch's exit code, so a network error never
+  // quietly installs from a different repo.
   const tmp = "/tmp/burrow-install.sh.$$";
-  const installer = `${installerEnvAssignments(owner, ref)} sh ${tmp}; rc=$?; rm -f ${tmp}; exit $rc`;
-  const download =
+  // An override (validated by cliRepoNames) is handed on, so the installer fetches its tarball from the same repo.
+  const override = env[CLI_REPO_ENV] ? `${CLI_REPO_ENV}='${repos[0]}' ` : "";
+  const installer = `${override}${installerEnvAssignments(owner, ref)} sh ${tmp}; rc=$?; rm -f ${tmp}; exit $rc`;
+  const one = (url: string): string =>
     fetcher === "curl"
-      ? `GH_TOKEN=$(gh auth token 2>/dev/null || true); export GH_TOKEN; curl -fsSL \${GH_TOKEN:+-H "Authorization: token $GH_TOKEN"} -o ${tmp} '${url}' && ${installer}`
-      : `GH_TOKEN=$(gh auth token 2>/dev/null || true); export GH_TOKEN; wget -q \${GH_TOKEN:+--header="Authorization: token $GH_TOKEN"} -O ${tmp} '${url}' && ${installer}`;
+      ? `code=$(curl -fsSL \${GH_TOKEN:+-H "Authorization: token $GH_TOKEN"} -w '%{http_code}' -o ${tmp} '${url}'); rc=$?`
+      : `wget -q \${GH_TOKEN:+--header="Authorization: token $GH_TOKEN"} -O ${tmp} '${url}'; rc=$?; code=$([ $rc -eq 8 ] && echo 404)`;
+  const steps = [one(urls[0] as string)];
+  for (const url of urls.slice(1)) steps.push(`if [ $rc -ne 0 ] && [ "$code" = 404 ]; then ${one(url)}; fi`);
+  const download = [
+    "GH_TOKEN=$(gh auth token 2>/dev/null || true); export GH_TOKEN",
+    ...steps,
+    `if [ $rc -ne 0 ]; then rm -f ${tmp}; exit $rc; fi`,
+    installer,
+  ].join("; ");
   return ["sh", "-c", download];
 }
 
@@ -202,9 +254,12 @@ export interface UpdateDeps {
  */
 export function announceLines(ref: string, env: Env = process.env): string[] {
   const suffix = ref === DEFAULT_REF ? "" : ` (ref ${ref})`;
+  const urls = installerUrls(ref, env);
+  const repos = cliRepoNames(env);
   return [
-    `updating ${CLI_NAME} ${VERSION}${suffix} — running the installer from ${installerUrl(ref, env)}`,
-    `repository ${repoSlug(REPO_NAME, env)}`,
+    `updating ${CLI_NAME} ${VERSION}${suffix} — running the installer from ${urls[0]}`,
+    ...(urls.length > 1 ? [`  (or, if that 404s, ${urls.slice(1).join(", then ")})`] : []),
+    `repository ${repos.map((repo) => repoSlug(repo, env)).join(", else ")}`,
     "",
   ];
 }
@@ -224,11 +279,12 @@ export async function runUpdate(deps: UpdateDeps): Promise<number> {
   let owner: string;
   try {
     owner = ownerFrom(deps.env);
+    cliRepoNames(deps.env);
   } catch (e) {
     deps.err(`${CLI_NAME}: refusing to update: ${(e as Error).message}`);
     return UPDATE_REFUSED_EXIT;
   }
-  const env = ownerEnv(owner);
+  const env = { ...ownerEnv(owner), [CLI_REPO_ENV]: deps.env[CLI_REPO_ENV] };
 
   // Preconditions BEFORE the announcement: telling somebody what you are about
   // to do and then not doing it is worse than refusing up front.

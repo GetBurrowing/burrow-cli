@@ -288,7 +288,9 @@ describe("install.sh", () => {
 
   test("SUITE_GITHUB_OWNER names the org in the tarball URL the installer fetches", () => {
     const r = runWithOwner("GetBurrowing");
-    const url = "https://codeload.github.com/GetBurrowing/suite-cli/tar.gz/refs/heads/main";
+    // burrow-cli first: the stub's failure carries no status, so it is not a
+    // 404 and the installer stops there rather than trying suite-cli.
+    const url = "https://codeload.github.com/GetBurrowing/burrow-cli/tar.gz/refs/heads/main";
     expect(r.fetched).toContain(url);
     expect(r.stderr).toContain(`could not download suite-cli from ${url}`);
     expect(r.status).not.toBe(0);
@@ -298,13 +300,13 @@ describe("install.sh", () => {
   test("a SHA ref under the override uses codeload's SHA path", () => {
     const sha = "0123456789abcdef0123456789abcdef01234567";
     expect(runWithOwner("GetBurrowing", sha).fetched).toContain(
-      `https://codeload.github.com/GetBurrowing/suite-cli/tar.gz/${sha}`,
+      `https://codeload.github.com/GetBurrowing/burrow-cli/tar.gz/${sha}`,
     );
   });
 
   test("CONTROL: unset and empty both mean the default org", () => {
     for (const owner of [undefined, ""]) {
-      expect(runWithOwner(owner).fetched).toContain("https://codeload.github.com/Startup-Suite/suite-cli/tar.gz/refs/heads/main");
+      expect(runWithOwner(owner).fetched).toContain("https://codeload.github.com/Startup-Suite/burrow-cli/tar.gz/refs/heads/main");
     }
   });
 
@@ -480,7 +482,7 @@ describe("install.sh", () => {
 
   const SHA_A = "0123456789abcdef0123456789abcdef01234567";
   const codeload = (owner: string, ref: string) =>
-    `https://codeload.github.com/${owner}/suite-cli/tar.gz/${/^[0-9a-f]{40}$/.test(ref) ? ref : `refs/heads/${ref}`}`;
+    `https://codeload.github.com/${owner}/burrow-cli/tar.gz/${/^[0-9a-f]{40}$/.test(ref) ? ref : `refs/heads/${ref}`}`;
 
   test("ref: SUITE_CLI_REF alone is honoured (core's agent-host passes it)", () => {
     expect(runWithEnv({ SUITE_CLI_REF: SHA_A }).fetched).toContain(codeload("Startup-Suite", SHA_A));
@@ -538,4 +540,172 @@ describe("install.sh", () => {
     expect(r.status).toBe(0);
     expect(existsSync(r.alias)).toBe(true);
   });
+});
+
+/*
+ * TAGS AND THE REPO NAME, with a stub curl that logs every URL it is asked
+ * for, in order, and answers like codeload: 200 (and the tarball) for a URL in
+ * STUB_SERVE, else a 404 status and curl -f's exit 22. MEASURED 2026-10-18
+ * against suite-cli: /tar.gz/v0.8.0 200, /tar.gz/refs/tags/v0.8.0 200,
+ * /tar.gz/refs/heads/v0.8.0 404, and every burrow-cli URL 404 (the repo does
+ * not exist under that name until the rename).
+ */
+describe("install.sh: refs and the repo name", () => {
+  const SHA = "0123456789abcdef0123456789abcdef01234567";
+  const at = (repo: string, path: string) => `https://codeload.github.com/Startup-Suite/${repo}/tar.gz/${path}`;
+
+  /** Run the installer against the codeload stub; `serve` URLs answer 200 with `archive`. */
+  function runCodeload(env: Record<string, string>, serve: string[] = [], archive: string = tarball) {
+    const home = makeHome();
+    const stubDir = join(home, "stub-bin");
+    mkdirSync(stubDir, { recursive: true });
+    const log = join(home, "urls.log");
+    writeFileSync(
+      join(stubDir, "curl"),
+      [
+        "#!/bin/sh",
+        'out=""; url=""',
+        'while [ $# -gt 0 ]; do',
+        '  case "$1" in',
+        '  -o) out="$2"; shift ;;',
+        '  https://*) url="$1" ;;',
+        "  esac",
+        "  shift",
+        "done",
+        `printf '%s\\n' "$url" >>"${log}"`,
+        'case " $STUB_SERVE " in',
+        `*" $url "*) cp "$STUB_ARCHIVE" "$out"; printf 200; exit 0 ;;`,
+        "esac",
+        // A failure with no HTTP status at all (curl exit 6: no such host).
+        'if [ -n "$STUB_EXIT" ]; then printf 000; exit "$STUB_EXIT"; fi',
+        "printf 404",
+        "exit 22",
+        "",
+      ].join("\n"),
+    );
+    chmodSync(join(stubDir, "curl"), 0o755);
+    const r = spawnSync("sh", [INSTALL_SH], {
+      input: "",
+      encoding: "utf8",
+      env: {
+        PATH: `${stubDir}:${ghlessPath()}`,
+        HOME: home,
+        XDG_BIN_HOME: join(home, ".local", "bin"),
+        XDG_DATA_HOME: join(home, ".local", "share"),
+        STUB_SERVE: serve.join(" "),
+        STUB_ARCHIVE: archive,
+        ...env,
+      },
+    });
+    return {
+      status: r.status ?? -1,
+      stderr: r.stderr ?? "",
+      urls: existsSync(log) ? readFileSync(log, "utf8").split("\n").filter((l) => l !== "") : [],
+      dest: join(home, ".local", "bin", "burrow"),
+    };
+  }
+
+  test("v0.8.0 (a bare tag): the branch path first, then the tag path, and it installs", () => {
+    // Today's world: burrow-cli 404s everywhere, suite-cli serves the tag.
+    const r = runCodeload({ BURROW_CLI_REF: "v0.8.0" }, [at("suite-cli", "refs/tags/v0.8.0")]);
+    expect(r.urls).toEqual([
+      at("burrow-cli", "refs/heads/v0.8.0"),
+      at("burrow-cli", "refs/tags/v0.8.0"),
+      at("suite-cli", "refs/heads/v0.8.0"),
+      at("suite-cli", "refs/tags/v0.8.0"),
+    ]);
+    expect(r.status).toBe(0);
+    expect(existsSync(r.dest)).toBe(true);
+  });
+
+  test("after the rename: v0.8.0 is served by burrow-cli and suite-cli is never fetched", () => {
+    const r = runCodeload({ BURROW_CLI_REF: "v0.8.0" }, [at("burrow-cli", "refs/tags/v0.8.0")]);
+    expect(r.urls).toEqual([at("burrow-cli", "refs/heads/v0.8.0"), at("burrow-cli", "refs/tags/v0.8.0")]);
+    expect(r.status).toBe(0);
+  });
+
+  test("refs/tags/v0.8.0: one URL per repo, verbatim", () => {
+    const r = runCodeload({ BURROW_CLI_REF: "refs/tags/v0.8.0" }, [at("burrow-cli", "refs/tags/v0.8.0")]);
+    expect(r.urls).toEqual([at("burrow-cli", "refs/tags/v0.8.0")]);
+    expect(r.status).toBe(0);
+  });
+
+  test("a SHA: one URL, verbatim", () => {
+    const r = runCodeload({ BURROW_CLI_REF: SHA }, [at("burrow-cli", SHA)]);
+    expect(r.urls).toEqual([at("burrow-cli", SHA)]);
+    expect(r.status).toBe(0);
+  });
+
+  test("main: the branch path, and a branch wins over a tag of the same name", () => {
+    const r = runCodeload({}, [at("burrow-cli", "refs/heads/main"), at("burrow-cli", "refs/tags/main")]);
+    expect(r.urls).toEqual([at("burrow-cli", "refs/heads/main")]);
+    expect(r.status).toBe(0);
+  });
+
+  test("burrow-cli 404 falls back to suite-cli, in that order", () => {
+    const r = runCodeload({}, [at("suite-cli", "refs/heads/main")]);
+    expect(r.urls).toEqual([at("burrow-cli", "refs/heads/main"), at("burrow-cli", "refs/tags/main"), at("suite-cli", "refs/heads/main")]);
+    expect(r.status).toBe(0);
+  });
+
+  test("burrow-cli 200 means suite-cli is never fetched", () => {
+    const r = runCodeload({}, [at("burrow-cli", "refs/heads/main"), at("suite-cli", "refs/heads/main")]);
+    expect(r.urls).toEqual([at("burrow-cli", "refs/heads/main")]);
+    expect(r.urls.some((u) => u.includes("/suite-cli/"))).toBe(false);
+  });
+
+  test("a failure that is not a 404 stops at the first URL: never falls through to another ref or repo", () => {
+    const r = runCodeload({ STUB_EXIT: "6" }, [at("suite-cli", "refs/heads/main")]);
+    expect(r.urls).toEqual([at("burrow-cli", "refs/heads/main")]);
+    expect(r.status).not.toBe(0);
+    expect(r.stderr).toContain(`${at("burrow-cli", "refs/heads/main")} (000)`);
+    expect(existsSync(r.dest)).toBe(false);
+  });
+
+  test("nothing anywhere: the failure names EVERY URL tried, with its status", () => {
+    const r = runCodeload({ BURROW_CLI_REF: "v9.9.9" });
+    expect(r.status).not.toBe(0);
+    expect(r.urls).toHaveLength(4);
+    for (const url of r.urls) expect(r.stderr).toContain(`${url} (404)`);
+    expect(existsSync(r.dest)).toBe(false);
+  });
+
+  test("a burrow-cli-<sha> archive root installs (the renamed repo's tarball)", () => {
+    const stage = mkdtempSync(join(workRoot, "renamed."));
+    const root = join(stage, `burrow-cli-${SHA}`);
+    mkdirSync(root, { recursive: true });
+    for (const entry of ["install.sh", "package.json", "src", "bin", "assets"]) {
+      expect(spawnSync("cp", ["-R", join(REPO_ROOT, entry), join(root, entry)]).status).toBe(0);
+    }
+    const archive = join(stage, "burrow-cli.tar.gz");
+    expect(spawnSync("tar", ["-czf", archive, "-C", stage, `burrow-cli-${SHA}`]).status).toBe(0);
+    const r = runCodeload({ BURROW_CLI_REF: SHA }, [at("burrow-cli", SHA)], archive);
+    expect(r.status).toBe(0);
+    expect(existsSync(r.dest)).toBe(true);
+    expect(spawnSync(r.dest, ["--version"], { encoding: "utf8" }).stdout.trim()).toBe(VERSION);
+  });
+
+  test("BURROW_CLI_REPO names one repo, with no fallback", () => {
+    const r = runCodeload({ BURROW_CLI_REPO: "my-fork" });
+    expect(r.urls).toEqual([at("my-fork", "refs/heads/main"), at("my-fork", "refs/tags/main")]);
+    expect(r.status).not.toBe(0);
+  });
+
+  for (const bad of ["../x", "a/b", "-x", ".x", "a b", "x;id"]) {
+    test(`BURROW_CLI_REPO=${JSON.stringify(bad)} is refused by name BEFORE any fetch`, () => {
+      const r = runCodeload({ BURROW_CLI_REPO: bad });
+      expect(r.status).not.toBe(0);
+      expect(r.urls).toEqual([]);
+      expect(r.stderr).toContain("BURROW_CLI_REPO=");
+    });
+  }
+
+  for (const bad of ["a b", "../x", "-x", "x;id"]) {
+    test(`the ref ${JSON.stringify(bad)} is refused BEFORE any fetch`, () => {
+      const r = runCodeload({ BURROW_CLI_REF: bad });
+      expect(r.status).not.toBe(0);
+      expect(r.urls).toEqual([]);
+      expect(r.stderr).toContain("is not a plain branch, tag or commit");
+    });
+  }
 });

@@ -32,7 +32,6 @@
 import { dirname, resolve } from "node:path";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { mkdir } from "node:fs/promises";
 import {
   createStore,
   spawnWithSecrets,
@@ -155,8 +154,21 @@ export interface InitOptions {
 }
 
 /** The Claude Code channel plugin's repo name. Its owner comes from repo_source.ts. */
-// Not renamed to burrow in 0.8.0: the channel repo rename is task C's; the old name redirects on GitHub.
-export const PLUGIN_REPO_NAME = "claude-code-suite-channel";
+// The repo's own name since Burrow rename C. Its old name, claude-code-suite-channel, redirects; nothing relies on that.
+export const PLUGIN_REPO_NAME = "burrow-channel-claude-code";
+
+/**
+ * DEPLOYER: BUMP THIS BEFORE burrow-cli MERGES.
+ *
+ * This is the commit tagged 0.4.1 on burrow-channel-claude-code main (PR #29,
+ * product-name copy to Burrow, Burrow rename F). Before 0.9.0 the checkout was
+ * cloned once and never moved again: hive's sat at b238164 (2026-07-31) while
+ * main moved on. `burrow claude` now holds the checkout at this commit; see
+ * {@link ensurePluginAtPin} in claude_wiring.ts.
+ * Pin a commit on main, never a branch tip: a squash merge deletes the branch
+ * and the tip would dangle.
+ */
+export const CLAUDE_CODE_CHANNEL_REF = "a77532e6623405c2eb9043d2d663a1e09a3e45f2";
 
 /** The plugin's clone URL under the owner `env` names (SUITE_GITHUB_OWNER). */
 export function pluginRepo(env: Env = process.env): string {
@@ -453,27 +465,6 @@ export function noGitPrompt(
   // run git with no PATH, no HOME and therefore no credential helper or SSH
   // config — turning "cannot authenticate" into a different, stranger failure.
   return { ...env, GIT_TERMINAL_PROMPT: "0" };
-}
-
-/**
- * Clone the plugin, or fast-forward an existing checkout.
- *
- * `--ff-only` and then STOP on failure. The alternative — a reset or a force —
- * silently destroys whatever the user was doing in that directory, and this
- * command was invoked to set up a tool, not to arbitrate their git state.
- */
-export async function cloneOrUpdate(dir: string, deps: Pick<InitDeps, "run" | "env">): Promise<CheckoutOutcome> {
-  if (existsSync(resolve(dir, ".git"))) {
-    const r = await deps.run(["git", "pull", "--ff-only"], { cwd: dir, env: noGitPrompt(deps.env) });
-    if (r.exitCode !== 0) throw new PullFailed(dir, r.stderr || r.stdout);
-    return "updated";
-  }
-  await mkdir(resolve(dir, ".."), { recursive: true });
-  const r = await deps.run(["git", "clone", pluginRepo(deps.env), dir], { env: noGitPrompt(deps.env) });
-  if (r.exitCode !== 0) {
-    throw new Error(`git clone failed: ${(r.stderr || r.stdout).trim()}`);
-  }
-  return "cloned";
 }
 
 /** Count of installed packages, when bun says; empty string when it does not. */

@@ -123,8 +123,8 @@ type Env = Record<string, string | undefined>;
  */
 export const OPENCLAW_CHANNEL_REF = "ad307416839aaf266ce6fd941dbcc25446e0445c";
 /** The channel repo's name. Its owner comes from repo_source.ts (SUITE_GITHUB_OWNER). */
-// Not renamed to burrow in 0.8.0: the channel repo rename is task C's; the old name redirects on GitHub.
-export const OPENCLAW_CHANNEL_REPO_NAME = "openclaw-suite-channel";
+// The repo's own name since Burrow rename C. Its old name, openclaw-suite-channel, redirects; nothing relies on that.
+export const OPENCLAW_CHANNEL_REPO_NAME = "burrow-channel-openclaw";
 
 export function openclawChannelRepo(env: Env = process.env): string {
   return httpsCloneUrl(OPENCLAW_CHANNEL_REPO_NAME, env);

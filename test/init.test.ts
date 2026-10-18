@@ -31,9 +31,10 @@ import {
   userScopeChannelRuntime,
   userScopeLines,
   pluginRepo,
+  CLAUDE_CODE_CHANNEL_REF,
 } from "../src/commands/init.ts";
 import { CLAUDE_MD } from "../src/claude_md.ts";
-import { ensureClaudeWiring, type WiringResult } from "../src/claude_wiring.ts";
+import { DEPS_MARKER, ensureClaudeWiring, type WiringResult } from "../src/claude_wiring.ts";
 import { loadSavedSecrets } from "../src/connection.ts";
 import { agentConfig, readAgentConnection } from "../src/agent_connections.ts";
 import { createStore, spawnWithSecrets, type Prompter } from "../src/secrets.ts";
@@ -190,6 +191,9 @@ async function initThenWire(
       // The test's own runner, so a test that scripts `claude mcp add` scripts
       // the wiring's. The TOKEN still comes only from the fresh store above.
       run: deps.run,
+      // Nothing references the scratch checkout; injected so the result does
+      // not depend on the host's process table.
+      probe: () => ({ args: [], cwds: [] }),
     },
     config,
   );
@@ -639,37 +643,59 @@ describe("a failed pull says what actually went wrong", () => {
 });
 
 describe("an existing checkout", () => {
-  test("is used as it is: neither pulled nor re-cloned, so a launch needs no network", async () => {
-    const fx = makeFixture();
+  const OLD = "b238164b238164b238164b238164b238164b2381";
+
+  function existing(fx: ReturnType<typeof makeFixture>, head: string): void {
     mkdirSync(resolve(fx.checkout, ".git"), { recursive: true });
     mkdirSync(resolve(fx.checkout, "src"), { recursive: true });
+    mkdirSync(resolve(fx.checkout, "node_modules"), { recursive: true });
+    writeFileSync(resolve(fx.checkout, ".git/HEAD"), `${head}\n`);
     writeFileSync(resolve(fx.checkout, "src/index.ts"), "");
+  }
+
+  const gitCalls = (fx: ReturnType<typeof makeFixture>) => fx.log().filter((l) => l.startsWith("git\t"));
+
+  test("at the pin it is used as it is: no git at all, so a launch needs no network", async () => {
+    const fx = makeFixture();
+    existing(fx, CLAUDE_CODE_CHANNEL_REF);
     const deps = makeDeps(fx, scriptedPrompter(credentialAnswers()));
     const { wiring } = await initThenWire(deps);
     expect(wiring.checkout).toBe("present");
-    expect(invocation(fx, ["git", "pull", "--ff-only"])).toBeNull();
-    expect(invocation(fx, ["git", "clone"])).toBeNull();
+    expect(gitCalls(fx)).toEqual([]);
   });
 
-  // Before the 0.8.0 release fix a failed fast-forward threw out of the wiring
-  // and stopped the launch. A plugin checkout is a convergence step: it now
-  // warns loudly and the launch goes on (claude_wiring.ts launchWarning). The
-  // no-force promise is unchanged.
-  test("an incomplete checkout is fast-forwarded; a failed fast-forward is warned about, the launch goes on, and it is never forced", async () => {
-    const fx = makeFixture({ pullFails: true });
-    // .git but no src/index.ts: not usable, so the wiring tries to update it.
-    mkdirSync(resolve(fx.checkout, ".git"), { recursive: true });
+  test("behind the pin (hive's b238164 shape): moved to the pin, detached, never pulled", async () => {
+    const fx = makeFixture();
+    existing(fx, OLD);
+    const deps = makeDeps(fx, scriptedPrompter(credentialAnswers()));
+    const { wiring } = await initThenWire(deps);
+    expect(wiring.checkout).toBe("updated");
+    expect(readFileSync(resolve(fx.checkout, ".git/HEAD"), "utf8").trim()).toBe(CLAUDE_CODE_CHANNEL_REF);
+    expect(invocation(fx, ["git", "-C", fx.checkout, "checkout", "--quiet", "--detach", CLAUDE_CODE_CHANNEL_REF])).not.toBeNull();
+    expect(invocation(fx, ["git", "pull"])).toBeNull();
+    expect(fx.log().some((l) => l.startsWith("bun\tinstall"))).toBe(true);
+    expect(readFileSync(resolve(fx.checkout, "node_modules", DEPS_MARKER), "utf8").trim()).toBe(CLAUDE_CODE_CHANNEL_REF);
+  });
+
+  // Before 0.9.0 a checkout that could not be fast-forwarded threw (0.8.0
+  // made that a warning). Now a diverged checkout is HELD: warned about, left
+  // exactly where it is, and the launch goes on. The no-force promise is unchanged.
+  test("diverged from the pin: warned about, the launch goes on, HEAD unchanged, and it is never forced", async () => {
+    const fx = makeFixture();
+    fx.env.STUB_GIT_DIVERGED = "1";
+    existing(fx, OLD);
     const deps = makeDeps(fx, scriptedPrompter(credentialAnswers()));
 
     const { wiring } = await initThenWire(deps);
-    expect(wiring.checkout).toBe("failed");
+    expect(wiring.checkout).toBe("held");
     const said = deps.lines.join("\n");
-    expect(said).toContain("WARNING: the channel plugin install failed");
-    expect(said).toContain("could not be fast-forwarded");
+    expect(said).toContain("WARNING: moving the channel plugin to its pin failed");
+    expect(said).toContain("never reset or forced");
     expect(wiring.warnings.length).toBeGreaterThan(0);
+    expect(readFileSync(resolve(fx.checkout, ".git/HEAD"), "utf8").trim()).toBe(OLD);
 
-    expect(invocation(fx, ["git", "pull", "--ff-only"])).not.toBeNull();
-    for (const line of fx.log()) {
+    for (const line of gitCalls(fx)) {
+      expect(line).not.toMatch(/\tcheckout\b/);
       expect(line).not.toMatch(/\treset\b/);
       expect(line).not.toMatch(/--force|-f\b/);
       expect(line).not.toMatch(/\tclean\b/);

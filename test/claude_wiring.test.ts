@@ -12,7 +12,15 @@ import { existsSync, mkdirSync, statSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { runClaude, type ClaudeDeps } from "../src/commands/claude.ts";
 import { channelState, legacyAliases, needsRegistration } from "../src/claude_wiring.ts";
-import { CHANNEL_SERVER, TOOLS_SERVER, channelWsUrl, defaultCheckout, runInit, toolsHttpUrl } from "../src/commands/init.ts";
+import {
+  CHANNEL_SERVER,
+  CLAUDE_CODE_CHANNEL_REF,
+  TOOLS_SERVER,
+  channelWsUrl,
+  defaultCheckout,
+  runInit,
+  toolsHttpUrl,
+} from "../src/commands/init.ts";
 import {
   agentConfigPath,
   agentCredentialsPath,
@@ -208,6 +216,8 @@ describe("burrow claude wires this folder from the saved connection", () => {
     mkdirSync(resolve(checkout, "src"), { recursive: true });
     mkdirSync(resolve(checkout, "node_modules"), { recursive: true });
     writeFileSync(resolve(checkout, "src/index.ts"), "");
+    // At the pin, read from the file: the at-pin path runs no git at all.
+    writeFileSync(resolve(checkout, ".git/HEAD"), `${CLAUDE_CODE_CHANNEL_REF}\n`);
     writeFileSync(resolve(fx.root, "CLAUDE.md"), "# mine\n@SUITE_CONVENTIONS.md\n");
     writeClaudeJson(fx, { [CHANNEL_SERVER]: currentChannel(fx), [TOOLS_SERVER]: currentTools() });
     const before = fx.log().length;

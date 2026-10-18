@@ -1,6 +1,6 @@
 #!/bin/sh
-# suite-cli installer (the burrow CLI). POSIX sh only: this runs via
-#   curl -fsSL https://raw.githubusercontent.com/<owner>/suite-cli/main/install.sh | sh
+# burrow-cli installer (the burrow CLI). POSIX sh only: this runs via
+#   curl -fsSL https://raw.githubusercontent.com/<owner>/burrow-cli/main/install.sh | sh
 # where <owner> is the GitHub org (see BURROW_GITHUB_OWNER below; the README
 # has the current command).
 # before anything is installed on the machine, including bun. No bashisms,
@@ -75,17 +75,50 @@ case "$OWNER" in
 esac
 [ "${#OWNER}" -le 39 ] ||
 	die "$OWNER_VAR=\"$OWNER\" is longer than a GitHub owner name can be (39 characters)"
-REPO="${OWNER}/suite-cli"
 
-# codeload.github.com serves tarballs by commit SHA at /tar.gz/<sha>, but
-# branch names need /tar.gz/refs/heads/<branch>. Detect SHAs (40 hex chars)
-# and use the appropriate path.
+# The repo the tarball comes from. burrow-cli first, then suite-cli, its name
+# before 0.9.0, tried ONLY when burrow-cli answers 404. That is right before
+# `gh repo rename` (burrow-cli 404s) and after it (burrow-cli answers, and
+# suite-cli is never asked), without relying on GitHub's rename redirect.
+# BURROW_CLI_REPO names one repo instead, with no fallback; it is new in 0.9.0,
+# so it has no SUITE_* twin. Validated like the owner, before any fetch.
+_repo_chars="${_owner_chars}._"
+if [ -n "${BURROW_CLI_REPO:-}" ]; then
+	case "$BURROW_CLI_REPO" in
+	-* | .* | *..* | *[!"$_repo_chars"-]*)
+		die "BURROW_CLI_REPO=\"$BURROW_CLI_REPO\" is not a GitHub repository name (letters, digits, '-', '_' or '.', not starting with '-' or '.')"
+		;;
+	esac
+	[ "${#BURROW_CLI_REPO}" -le 100 ] ||
+		die "BURROW_CLI_REPO=\"$BURROW_CLI_REPO\" is longer than a GitHub repository name can be (100 characters)"
+	REPO_NAMES="$BURROW_CLI_REPO"
+else
+	REPO_NAMES="burrow-cli suite-cli"
+fi
+
+# The ref reaches URLs and is word-split below, so it is refused by name unless
+# it is a plain branch, tag, refs/... or SHA: the same set `burrow update`
+# accepts (src/commands/update.ts SAFE_REF).
 case "$REF" in
-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f])
-	TARBALL_URL="${TARBALL_OVERRIDE:-https://codeload.github.com/${REPO}/tar.gz/${REF}}"
+"" | [!"$_repo_chars"]* | *[!"$_repo_chars"/-]* | *..*)
+	die "the ref \"$REF\" (BURROW_CLI_REF or SUITE_CLI_REF) is not a plain branch, tag or commit"
+	;;
+esac
+
+# The codeload paths to try, in order (src/repo_source.ts codeloadRefPaths is
+# the same rule). MEASURED 2026-10-18: /tar.gz/refs/tags/v0.8.0 200,
+# /tar.gz/refs/heads/v0.8.0 404, so a bare name read as a branch can never
+# install a tag.
+#   40-hex SHA, refs/heads/*, refs/tags/*  verbatim, one path
+#   anything else                          refs/heads/<name>, then
+#                                          refs/tags/<name> on a 404
+# A branch still wins over a tag of the same name.
+case "$REF" in
+[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f] | refs/heads/* | refs/tags/*)
+	REF_PATHS="$REF"
 	;;
 *)
-	TARBALL_URL="${TARBALL_OVERRIDE:-https://codeload.github.com/${REPO}/tar.gz/refs/heads/${REF}}"
+	REF_PATHS="refs/heads/$REF refs/tags/$REF"
 	;;
 esac
 
@@ -163,13 +196,19 @@ resolve_gh_token() {
 	fi
 }
 
+# FETCH_CODE: the HTTP status of the last fetch when it is known ("404"), else
+# empty. Only a 404 moves on to the next candidate URL.
+FETCH_CODE=""
+
 fetch() {
 	# fetch <url> <dest-file>. Downloads to the caller's temp path only; the
 	# caller moves it into place. A partial file must never reach the
 	# destination.
 	resolve_gh_token
+	FETCH_CODE=""
 	if command -v curl >/dev/null 2>&1; then
-		# --fail turns an HTTP error into a non-zero exit rather than a body.
+		# --fail turns an HTTP error into a non-zero exit rather than a body;
+		# -w still prints the status, which is how a 404 is told apart.
 		#
 		# "${GH_TOKEN:-}", not "$GH_TOKEN": under `set -u` an unset parameter
 		# kills the whole script. When gh is not on PATH (the shape of the CI
@@ -177,16 +216,22 @@ fetch() {
 		# assigns the variable, and the bare form dies instantly with
 		# "GH_TOKEN: parameter not set" and exit 2.
 		if [ -n "${GH_TOKEN:-}" ]; then
-			curl -fsSL -H "Authorization: token ${GH_TOKEN}" "$1" -o "$2"
+			FETCH_CODE="$(curl -fsSL -w '%{http_code}' -H "Authorization: token ${GH_TOKEN}" "$1" -o "$2")" && return 0
 		else
-			curl -fsSL "$1" -o "$2"
+			FETCH_CODE="$(curl -fsSL -w '%{http_code}' "$1" -o "$2")" && return 0
 		fi
+		return 1
 	elif command -v wget >/dev/null 2>&1; then
+		# wget has no status report; -S prints the response headers on stderr,
+		# and the last status line is the one that counted.
+		_hdrs="$TMPDIR_SUITE/wget-headers"
 		if [ -n "${GH_TOKEN:-}" ]; then
-			wget -q --header="Authorization: token ${GH_TOKEN}" -O "$2" "$1"
+			wget -q -S --header="Authorization: token ${GH_TOKEN}" -O "$2" "$1" 2>"$_hdrs" && return 0
 		else
-			wget -q -O "$2" "$1"
+			wget -q -S -O "$2" "$1" 2>"$_hdrs" && return 0
 		fi
+		FETCH_CODE="$(sed -n 's/^ *HTTP\/[0-9.]* \([0-9][0-9][0-9]\).*/\1/p' "$_hdrs" | sed -n '$p')"
+		return 1
 	else
 		die "neither curl nor wget is available to download suite-cli"
 	fi
@@ -222,8 +267,30 @@ TMPDIR_SUITE="$(mktemp -d "${TMPDIR:-/tmp}/suite-install.XXXXXX")" ||
 	die "could not create a temporary directory"
 
 tarball="$TMPDIR_SUITE/suite-cli.tar.gz"
-fetch "$TARBALL_URL" "$tarball" ||
-	die "could not download suite-cli from $TARBALL_URL"
+# Every URL tried, with what it answered, so a failure names all of them.
+tried=""
+TARBALL_URL=""
+if [ -n "$TARBALL_OVERRIDE" ]; then
+	fetch "$TARBALL_OVERRIDE" "$tarball" ||
+		die "could not download suite-cli from $TARBALL_OVERRIDE"
+	TARBALL_URL="$TARBALL_OVERRIDE"
+else
+	for _repo in $REPO_NAMES; do
+		for _path in $REF_PATHS; do
+			_url="https://codeload.github.com/${OWNER}/${_repo}/tar.gz/${_path}"
+			if fetch "$_url" "$tarball"; then
+				TARBALL_URL="$_url"
+				break 2
+			fi
+			tried="${tried}${tried:+, }$_url (${FETCH_CODE:-failed})"
+			# Only a 404 means "not here, try the next name". Anything else
+			# (a 5xx, no network, a refused token) stops now, rather than
+			# installing from a place the operator did not ask for.
+			[ "$FETCH_CODE" = "404" ] || die "could not download suite-cli from $tried"
+		done
+	done
+	[ -n "$TARBALL_URL" ] || die "could not download suite-cli from $tried"
+fi
 [ -s "$tarball" ] || die "downloaded an empty archive from $TARBALL_URL"
 
 extract_dir="$TMPDIR_SUITE/extract"
@@ -231,7 +298,8 @@ mkdir -p "$extract_dir"
 tar -xzf "$tarball" -C "$extract_dir" ||
 	die "could not extract the downloaded archive"
 
-# The archive has a single top-level directory.
+# The archive has a single top-level directory: suite-cli-<ref> or, from the
+# renamed repo, burrow-cli-<ref>. Its name is not checked; package.json is.
 src_root=""
 for candidate in "$extract_dir"/*; do
 	if [ -d "$candidate" ] && [ -f "$candidate/package.json" ]; then

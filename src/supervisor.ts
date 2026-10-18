@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
-import { webUrl, type Env } from "./repo_source.ts";
+import { CLI_REPO_NAME, webUrl, type Env } from "./repo_source.ts";
 import { burrowName, envValue, suiteName } from "./env_names.ts";
 import { CLI_NAME } from "./version.ts";
 import { configEntry, stateBase } from "./paths.ts";
@@ -215,7 +215,7 @@ export const KILL_MODE_LINE = "KillMode=process";
 export function systemdUnit(input: SupervisorInput): string {
   return `[Unit]
 Description=Burrow agent session watchdog
-Documentation=${webUrl("suite-cli", input.env)}
+Documentation=${webUrl(CLI_REPO_NAME, input.env)}
 After=default.target
 
 [Service]
@@ -520,7 +520,7 @@ export const RESTORE_LAUNCHD_LABEL = "technology.milvenan.burrow-agents";
 export function restoreUnit(input: SupervisorInput): string {
   return `[Unit]
 Description=Restore Burrow agent sessions after boot
-Documentation=${webUrl("suite-cli", input.env)}
+Documentation=${webUrl(CLI_REPO_NAME, input.env)}
 After=default.target
 
 [Service]

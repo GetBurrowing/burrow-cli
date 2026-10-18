@@ -299,10 +299,12 @@ describe("D: launches are recorded for restore-on-boot", () => {
     const roster = JSON.parse(c.rosters[0]?.contents ?? "{}");
     expect(roster.agents).toHaveLength(1);
     // The session name derives from the agent root's basename; deriving it
-    // here keeps the assertion tied to the fixture instead of a literal.
+    // here keeps the assertion tied to the fixture instead of a literal. A
+    // NEW session takes the burrow- prefix (stage 3 of 01a14cc3; PR #36 wrote
+    // this test against the 0.8 suite- prefix, and the merge is where they met).
     expect(roster.agents[0]).toMatchObject({
       kind: "deepseek",
-      session: `suite-${root.split("/").pop()}`,
+      session: `burrow-${root.split("/").pop()}`,
       cwd: root,
     });
     // The FULL tmux argv, replayed verbatim at restore time. Rebuilding the

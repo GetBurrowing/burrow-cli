@@ -86,7 +86,7 @@ offer says so before you answer it.
 ## Install
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/Startup-Suite/suite-cli/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/Startup-Suite/burrow-cli/main/install.sh | sh
 ```
 
 The installer never uses `sudo`. It installs to `$XDG_BIN_HOME`, or
@@ -106,7 +106,7 @@ installer and tarball, the Claude Code plugin, and the OpenClaw and Hermes
 channels. `burrow update` prints the `owner/repo` it resolved.
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/<owner>/suite-cli/main/install.sh | BURROW_GITHUB_OWNER=<owner> sh
+curl -fsSL https://raw.githubusercontent.com/<owner>/burrow-cli/main/install.sh | BURROW_GITHUB_OWNER=<owner> sh
 ```
 
 ## Connect an agent folder
@@ -1085,6 +1085,13 @@ URL it was downloaded from**, so fetching a tag's installer without exporting
 the ref installs `main` and prints a perfectly successful-looking install of the
 wrong thing. A ref containing anything other than letters, digits, `.`, `_`,
 `-`, `/` is refused by name rather than quoted and hoped for.
+
+A tag works as a ref from 0.9.0, bare (`v0.9.0`) or full (`refs/tags/v0.9.0`).
+A bare name is tried as a branch first and as a tag on a 404, so a branch still
+wins over a tag of the same name; a SHA or a full `refs/...` ref is fetched as
+given. The repo is `burrow-cli`; its pre-0.9.0 name `suite-cli` is tried only
+when `burrow-cli` answers 404. `BURROW_CLI_REPO` names one repo instead, with
+no fallback.
 
 Update needs `curl` or `wget`, plus `tar` and `sh`. A missing one is named up
 front, before the announcement, rather than surfacing as broken-pipe noise three
