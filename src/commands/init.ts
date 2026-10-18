@@ -49,6 +49,7 @@ import {
   type SupervisorIo,
   type SupervisorResult,
   installSupervisor,
+  installedBinary,
   restoreUnitPlan,
   supervisorPlan,
   writeRestoreUnit,
@@ -1306,8 +1307,7 @@ export async function runInit(deps: InitDeps, options: InitOptions = {}): Promis
       home,
       // Absolute path: a service inherits a minimal PATH, and a bare name there
       // fails to start with no useful signal.
-      // Still `suite`, not `burrow`: the path is baked into installed units, and      // changing it rewrites every live host\'s watchdog unit (see supervisor.ts).
-      binary: `${home}/.local/bin/suite`,
+      binary: installedBinary(home),
       inheritedPath: deps.env.PATH,
       inheritedLocale: deps.env.LANG ?? deps.env.LC_ALL,
       intervalSeconds: 60,
@@ -1328,8 +1328,7 @@ export async function runInit(deps: InitDeps, options: InitOptions = {}): Promis
     const restore = restoreUnitPlan({
       platform: deps.platform,
       home,
-      // Still `suite`, not `burrow`: the path is baked into installed units, and      // changing it rewrites every live host\'s watchdog unit (see supervisor.ts).
-      binary: `${home}/.local/bin/suite`,
+      binary: installedBinary(home),
       inheritedPath: deps.env.PATH,
       intervalSeconds: 60,
       env: deps.env,

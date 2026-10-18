@@ -34,7 +34,7 @@ import { ensureConnection, ensureToken, loadSavedSecrets } from "../connection.t
 import { ensureClaudeWiring, localEntries, needsRegistration, planMcp } from "../claude_wiring.ts";
 import { type RestoreDeps, liveRestoreDeps, recordLaunch } from "./restore.ts";
 import type { RosterEntry } from "../roster.ts";
-import { type SupervisorIo, ensureSupervision, liveSupervisorIo } from "../supervisor.ts";
+import { type SupervisorIo, ensureSupervision, installedBinary, liveSupervisorIo } from "../supervisor.ts";
 import { CHANNEL_SERVER, TOOLS_SERVER, confirm, defaultCheckout, type InstallPlan, type Runner } from "./init.ts";
 import { CLAUDE_CODE_URL } from "./doctor.ts";
 import { colorEnabled } from "../ui.ts";
@@ -798,8 +798,7 @@ export async function runClaude(deps: ClaudeDeps, options: ClaudeOptions): Promi
         // and treats anything else as unsupported, so narrowing here is safe.
         platform: deps.platform as NodeJS.Platform,
         home,
-        // Still `suite`, not `burrow`: the path is baked into installed units, and        // changing it rewrites every live host\'s watchdog unit (see supervisor.ts).
-        binary: `${home}/.local/bin/suite`,
+        binary: installedBinary(home),
         inheritedPath: deps.env.PATH,
         inheritedLocale: deps.env.LANG ?? deps.env.LC_ALL,
         intervalSeconds: 60,

@@ -38,7 +38,7 @@ import { CONTINUE_WRAPPER_NAME, isContinueWrapper, looksLikeAgent, parseProcesse
 import { CLAUDE_CODE_URL } from "../src/commands/doctor.ts";
 import type { Prompter } from "../src/secrets.ts";
 import { sessionNameFromConfig } from "../src/tmux.ts";
-import { ensureSupervision } from "../src/supervisor.ts";
+import { ensureSupervision, installedBinary } from "../src/supervisor.ts";
 
 /* ------------------------------------------------------------------------- */
 /* Scratch HOME. Nothing in this file touches the real config dir.            */
@@ -727,9 +727,13 @@ describe("supervision on session create", () => {
    */
   test("ensureSupervision writes a unit and activates it", async () => {
     const calls: string[] = [];
+    const written = new Map<string, string>();
     const io = {
       mkdirp: (d: string) => calls.push(`mkdirp ${d}`),
-      writeFile: (p: string) => calls.push(`write ${p}`),
+      writeFile: (p: string, contents: string) => {
+        calls.push(`write ${p}`);
+        written.set(p, contents);
+      },
       run: async (argv: string[]) => {
         calls.push(argv.join(" "));
         return { exitCode: 0 };
@@ -738,9 +742,12 @@ describe("supervision on session create", () => {
     const res = await ensureSupervision(io, {
       platform: "linux",
       home: "/home/q",
-      binary: "/home/q/.local/bin/suite",
+      binary: installedBinary("/home/q"),
       intervalSeconds: 60,
     });
+    // The units name burrow, never the suite alias.
+    expect(written.get("/home/q/.config/systemd/user/burrow-watch.service")).toContain("ExecStart=/home/q/.local/bin/burrow watch");
+    expect(written.get("/home/q/.config/systemd/user/burrow-agents.service")).toContain("ExecStart=/home/q/.local/bin/burrow restore");
     expect(res.watchdog).toContain("burrow-watch");
     expect(calls.some((c) => c.includes("burrow-watch.service"))).toBe(true);
     // Restore unit written but NOT enabled — the operator opts in.

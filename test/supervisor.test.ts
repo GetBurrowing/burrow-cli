@@ -4,6 +4,8 @@ import {
   RSS_CEILING_BYTES,
   SERVICE_NAME,
   type SupervisorIo,
+  burrowBinaryFor,
+  installedBinary,
   installSupervisor,
   SUPERVISED_ENV,
   launchdBootstrappable,
@@ -11,6 +13,8 @@ import {
   tmuxSupervisorArgv,
   parseEnvFile,
   readTelemetryAuth,
+  restoreLaunchdPlist,
+  restoreUnit,
   restoreUnitPlan,
   serviceLocale,
   servicePath,
@@ -18,7 +22,7 @@ import {
   systemdUnit,
 } from "../src/supervisor.ts";
 
-const base = { home: "/home/q", binary: "/home/q/.local/bin/suite", intervalSeconds: 60 };
+const base = { home: "/home/q", binary: installedBinary("/home/q"), intervalSeconds: 60 };
 
 describe("the PATH clause", () => {
   /**
@@ -97,8 +101,47 @@ describe("plan per platform", () => {
 
   test("the unit invokes an absolute binary, never a bare name", () => {
     expect(systemdUnit({ ...base, platform: "linux" })).toContain(
-      "ExecStart=/home/q/.local/bin/suite watch",
+      "ExecStart=/home/q/.local/bin/burrow watch",
     );
+  });
+});
+
+describe("every unit invokes burrow, not the suite alias", () => {
+  const bin = installedBinary("/home/q");
+
+  test("the installed binary is ~/.local/bin/burrow", () => {
+    expect(bin).toBe("/home/q/.local/bin/burrow");
+  });
+
+  test("systemd watch and restore units", () => {
+    const watch = systemdUnit({ ...base, binary: bin, platform: "linux" });
+    const restore = restoreUnit({ ...base, binary: bin, platform: "linux" });
+    expect(watch).toContain("ExecStart=/home/q/.local/bin/burrow watch");
+    expect(restore).toContain("ExecStart=/home/q/.local/bin/burrow restore");
+    expect(`${watch}${restore}`).not.toContain("/bin/suite");
+  });
+
+  test("launchd watch and restore plists", () => {
+    const watch = launchdPlist({ ...base, binary: bin, platform: "darwin" });
+    const restore = restoreLaunchdPlist({ ...base, binary: bin, platform: "darwin" });
+    expect(watch).toContain("<string>/home/q/.local/bin/burrow</string>");
+    expect(restore).toContain("<string>/home/q/.local/bin/burrow</string>");
+    expect(`${watch}${restore}`).not.toContain("/bin/suite");
+  });
+
+  test("the tmux fallback carries it", () => {
+    const argv = tmuxSupervisorArgv(bin, 60).flat();
+    expect(argv.some((a) => a.includes("/home/q/.local/bin/burrow"))).toBe(true);
+    expect(argv.some((a) => a.includes("/bin/suite"))).toBe(false);
+  });
+
+  test("burrowBinaryFor maps a path named exactly suite to its burrow sibling, and nothing else", () => {
+    expect(burrowBinaryFor("/home/q/.local/bin/suite")).toBe("/home/q/.local/bin/burrow");
+    expect(burrowBinaryFor("/opt/x/suite")).toBe("/opt/x/burrow");
+    expect(burrowBinaryFor("/home/q/.local/bin/burrow")).toBe("/home/q/.local/bin/burrow");
+    expect(burrowBinaryFor("/opt/x/suite-old")).toBe("/opt/x/suite-old");
+    expect(burrowBinaryFor("/opt/suite/bin/runner")).toBe("/opt/suite/bin/runner");
+    expect(burrowBinaryFor("/opt/x/mysuite")).toBe("/opt/x/mysuite");
   });
 });
 

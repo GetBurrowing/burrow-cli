@@ -428,22 +428,41 @@ export async function installSupervisor(
   return { kind: plan.kind, installed: false, summary: `${plan.summary} — written but not started` };
 }
 
+/** Where install.sh puts the burrow executable, and so what every unit invokes. */
+export function installedBinary(home: string): string {
+  return `${home}/.local/bin/burrow`;
+}
+
 /**
- * Absolute path of the running suite executable, for baking into the unit.
+ * The legacy mapping, and the only place a `suite` executable is named: a
+ * path whose basename is exactly `suite` (the 0.8 binary, now the installer's
+ * alias, e.g. ~/.local/bin/suite) maps to its sibling `burrow`. Anything else
+ * is returned unchanged.
+ */
+export function burrowBinaryFor(binary: string): string {
+  const slash = binary.lastIndexOf("/");
+  if (binary.slice(slash + 1) !== "suite") return binary;
+  return `${binary.slice(0, slash + 1)}burrow`;
+}
+
+/**
+ * Absolute path of the running burrow executable, for baking into the unit.
  *
- * A service gets a minimal PATH, so a bare `suite` in ExecStart fails to start
+ * A service gets a minimal PATH, so a bare `burrow` in ExecStart fails to start
  * with nothing useful in the log. `argv[1]` is preferred when it is already
  * absolute (a source checkout run under bun); otherwise the installed location.
+ * An argv naming the `suite` alias bakes its `burrow` sibling instead.
  */
 export function resolveSelfBinary(
   env: Record<string, string | undefined>,
   argv: string[],
 ): string {
-  const home = env.HOME ?? "";
-  // Still `suite`: this path is baked into installed units' ExecStart/ProgramArguments.
-  const installed = `${home}/.local/bin/suite`;
+  const installed = installedBinary(env.HOME ?? "");
   const self = argv[1];
-  if (self && self.startsWith("/") && self.endsWith("/suite")) return self;
+  if (self && self.startsWith("/")) {
+    if (self.endsWith("/burrow")) return self;
+    if (self.endsWith("/suite")) return burrowBinaryFor(self);
+  }
   return installed;
 }
 

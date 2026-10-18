@@ -278,6 +278,28 @@ describe("init on a machine where nothing is installed", () => {
     expect(deps.lines.some((l) => l.includes("NOT enabled"))).toBe(true);
   });
 
+  test("the watchdog and restore units init writes invoke burrow, not the suite alias", async () => {
+    const fx = makeFixture();
+    const written = new Map<string, string>();
+    const deps = makeDeps(fx, scriptedPrompter(credentialAnswers()), {
+      platform: "linux",
+      supervisorIo: {
+        mkdirp: () => {},
+        writeFile: (path, contents) => void written.set(path, contents),
+        run: async () => ({ exitCode: 0 }),
+      },
+    });
+
+    await runInit(deps);
+
+    const home = fx.env.HOME as string;
+    const watch = [...written].find(([p]) => p.endsWith("/burrow-watch.service"))?.[1] ?? "";
+    const restore = [...written].find(([p]) => p.endsWith("/burrow-agents.service"))?.[1] ?? "";
+    expect(watch).toContain(`ExecStart=${home}/.local/bin/burrow watch`);
+    expect(restore).toContain(`ExecStart=${home}/.local/bin/burrow restore`);
+    expect(`${watch}${restore}`).not.toContain("/bin/suite");
+  });
+
   test("--no-supervisor declines it, and nothing is written", async () => {
     const fx = makeFixture();
     const calls: string[] = [];
