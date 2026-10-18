@@ -126,7 +126,7 @@ describe("delivering the conventions when CLAUDE.md is someone else's file", () 
       expect(SUITE_CONVENTIONS).toContain(marker);
     }
     expect(missingConventions(SUITE_CONVENTIONS)).toEqual([]);
-    expect(missingConventions("# nothing to do with Suite\n")).toEqual(
+    expect(missingConventions("# nothing to do with Burrow\n")).toEqual(
       CONVENTION_MARKERS.map((c) => c.name),
     );
   });

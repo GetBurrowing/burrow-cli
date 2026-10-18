@@ -1,7 +1,7 @@
 /**
  * The ONE place a `BURROW_*` / `SUITE_*` environment variable is read.
  *
- * The CLI is being renamed from Suite to Burrow. Every variable it reads keeps
+ * The CLI is being renamed from `suite` to `burrow`. Every variable it reads keeps
  * its suffix and swaps its prefix: `SUITE_X` becomes `BURROW_X`. During the
  * transition both are honoured, with one precedence rule, stated once:
  *

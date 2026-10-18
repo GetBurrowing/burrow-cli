@@ -1,7 +1,7 @@
 /**
- * Stamping: make an agent root Suite-ready for one harness, idempotently.
+ * Stamping: make an agent root Burrow-ready for one harness, idempotently.
  *
- * suite-cli is the single owner of stamping the OpenClaw and Hermes channels.
+ * This CLI is the single owner of stamping the OpenClaw and Hermes channels.
  * This module is the part that does not depend on which harness: it owns the
  * identity file, the stamp record, the order of operations and the contract
  * result. Each harness plugs in as a {@link HarnessWriter}.

@@ -224,7 +224,7 @@ describe("arguments", () => {
 describe("discovery is transcript-first", () => {
   /**
    * The host where this failure is most frequent runs its agent OUTSIDE any
-   * suite-cli tmux session — a tmux-first sweep saw nothing there while its
+   * tmux session of ours — a tmux-first sweep saw nothing there while its
    * transcripts showed 9 of 12 sessions halted. Observation must not depend on
    * owning the session; only the recovery keystrokes do.
    */

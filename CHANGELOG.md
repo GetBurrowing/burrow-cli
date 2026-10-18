@@ -72,6 +72,17 @@ orphaned or duplicated by any of it.
   cloned by their own names: `burrow-channel-claude-code`,
   `burrow-channel-openclaw`, `burrow-channel-hermes`. The units'
   `Documentation=` and the README install line point at `burrow-cli`.
+- **The product is Burrow in the code, the README and the docs.** Comments,
+  messages, test names and the bundled dsh plugin's tool description say
+  Burrow. The old name stays only on the lines `test/product_name.test.ts`
+  lists, each with its reason: changelog entries before this one, the license
+  holder, the GitHub org literal, and a verbatim pre-0.9 unit file. The test
+  fails on an unlisted line, on a listed line that is gone, and on the product
+  called by both names. In the shipped files the old repo name stays where
+  the fallback fetches it, in the README's compatibility note, and in the
+  OpenClaw plugin's on-disk deps marker, which existing checkouts carry. The README's
+  Compatibility section now describes the one-shot move and its breadcrumbs
+  in place of the config-dir existence rule.
 
 ## 0.8.1
 

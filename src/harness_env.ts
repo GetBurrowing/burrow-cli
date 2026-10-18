@@ -17,7 +17,7 @@
  * excludes them — stated so a later widening of the allowlist cannot quietly
  * reintroduce them:
  *
- *   BURROW_*    the operator's own Suite session, token included (new name)
+ *   BURROW_*    the operator's own Burrow session, token included (new name)
  *   SUITE_*     the same, under the legacy name
  *   HERMES_*    another Hermes install's home and profile
  *   OPENCLAW_*  another OpenClaw's state dir and config path — hive's live
@@ -52,7 +52,7 @@ export const ALLOWED_ENV = [
 /** Prefixes never inherited from the parent. */
 export const STRIPPED_PREFIXES = ["BURROW_", "SUITE_", "HERMES_", "OPENCLAW_"] as const;
 
-/** The two generations of the operator's own Suite/Burrow variables. */
+/** The two generations of the operator's own SUITE_* and BURROW_* variables. */
 const SESSION_PREFIXES = ["BURROW_", "SUITE_"] as const;
 
 const isAllowed = (name: string): boolean =>

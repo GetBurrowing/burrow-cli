@@ -1,5 +1,5 @@
 /**
- * Claude Code's WIRING to a Suite install — everything `suite claude` needs
+ * Claude Code's WIRING to a Burrow install — everything `suite claude` needs
  * that no other harness does:
  *
  *   plugin        the channel plugin checkout (cloned once, bun-installed)

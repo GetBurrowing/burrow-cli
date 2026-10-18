@@ -133,8 +133,8 @@ describe("argv delivered to Claude", () => {
   });
 });
 
-describe("the Suite participation flags", () => {
-  // These exist because a Suite runtime is unattended. Without
+describe("the Burrow participation flags", () => {
+  // These exist because a Burrow runtime is unattended. Without
   // --dangerously-skip-permissions it stops on the first tool-call prompt
   // waiting for a human who is not there; without --continue every launch is
   // a cold session. One assertion per side throughout: a rule that fired

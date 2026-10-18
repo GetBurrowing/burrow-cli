@@ -330,7 +330,7 @@ describe("suite codex: login and launch", () => {
     expect(t.ran.length).toBe(1);
     expect(t.ran[0]!.argv).toEqual(["/usr/bin/codex", "login", "--device-auth"]);
     expect(t.ran[0]!.env.CODEX_HOME).toBe(join(t.home, "agent", ".codex"));
-    // Codex's login child gets no Suite credential.
+    // Codex's login child gets no Burrow credential.
     expect(Object.values(t.ran[0]!.env)).not.toContain("tok-123");
   });
 

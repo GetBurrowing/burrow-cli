@@ -3,7 +3,7 @@
  * serializer, heartbeats, and reconnect with backoff.
  *
  * WHY NOT THE `phoenix` PACKAGE. The dsh federation plugin uses it, with `ws`
- * underneath, and installs both into the harness directory. suite-cli itself
+ * underneath, and installs both into the harness directory. This CLI itself
  * ships with no runtime dependencies beyond bun, and bun has a WebSocket. The
  * part of Phoenix this needs is small and fixed: the wire format is
  * `[join_ref, ref, topic, event, payload]`, a heartbeat is a push on the

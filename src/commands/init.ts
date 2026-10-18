@@ -1,5 +1,5 @@
 /**
- * `suite init` — connect this machine to a Suite install. Harness-neutral.
+ * `suite init` — connect this machine to a Burrow install. Harness-neutral.
  *
  * An INSTALL is the server: a URL, a runtime id and a token. `suite init`
  * records those (plus bun, tmux and the watchdog, which every harness needs)
@@ -22,7 +22,7 @@
  *     `~/.claude.json` under the directory's key, never in the directory
  *     itself. It used to be `-s user`, which is ONE entry for every Claude on
  *     the machine, so installing a second agent re-pointed the first one at the
- *     second one's Suite and runtime. See {@link registerServers}.
+ *     second one's Burrow and runtime. See {@link registerServers}.
  *  2. WRITTEN IS NOT CONNECTED. After writing, the wiring health-checks. An
  *     entry that was written perfectly and cannot connect is the exact failure
  *     this tool exists to stop someone debugging by hand, so a green result
@@ -192,7 +192,7 @@ export const TOOLS_SERVER = "startup-suite";
  *   - It needs no approval, unlike a project-scope `.mcp.json`.
  *
  * WHY NOT `user`: user scope is one entry per machine. Installing a second
- * agent replaced the first agent's entries with the second one's Suite and
+ * agent replaced the first agent's entries with the second one's Burrow install and
  * runtime, so the first agent's next restart would have federated as the
  * wrong runtime into the wrong install (found on a real host, 2026-09-26).
  *
@@ -486,14 +486,14 @@ export function packageCount(bunInstallOutput: string): string {
  * Whether the pasted URL is secure, whichever family it was written in.
  *
  * The operator may paste either the browser URL or the runtime WebSocket URL —
- * both name the same Suite — so both derivations have to work from either, and
+ * both name the same Burrow install — so both derivations have to work from either, and
  * neither may inherit the scheme it was handed.
  *
  * THIS IS WHAT WENT WRONG. `toolsHttpUrl` used to leave the protocol alone.
  * Given the runtime URL (`wss://…/runtime/ws`) it emitted `wss://…/mcp` into
  * the HTTP MCP slot, and the client refused it with
  * `ERR_INVALID_ARG_VALUE: protocol must be http:, https: or s3:` — an error
- * naming neither Suite nor the URL that produced it. Observed on a real setup.
+ * naming neither Burrow nor the URL that produced it. Observed on a real setup.
  *
  * The second bug was quieter and in the other function: `channelWsUrl` mapped
  * `http:` to `ws:` and EVERYTHING ELSE to `wss:`, so a deliberate local
@@ -624,7 +624,7 @@ export function toolsAddArgs(
  * `⏸ Pending approval` in `claude mcp list` is a PROJECT-APPROVAL state, not a
  * connectivity verdict: it says this project has not yet approved a user-scope
  * server, and says NOTHING about whether that server works. Measured on a real
- * box, BOTH Suite servers reported pending while the channel was demonstrably
+ * box, BOTH Burrow servers reported pending while the channel was demonstrably
  * delivering messages.
  *
  * It used to fall into the `not-connected` alternation below, which made
@@ -764,7 +764,7 @@ export function userScopeChannelRuntime(text: string): { present: boolean; runti
  *
  * LEFT ALONE, NEVER REMOVED OR MIGRATED. Another agent directory on this
  * machine may have no entry of its own and be running on that one right now;
- * removing it would take that agent off Suite at its next restart, and nothing
+ * removing it would take that agent off Burrow at its next restart, and nothing
  * in the file says which directory it belongs to, so it cannot be moved there.
  * This directory's local entry takes precedence here regardless.
  */
@@ -1152,7 +1152,7 @@ export interface InitResult {
 }
 
 /**
- * `suite init`: connect this machine to a Suite install. HARNESS-NEUTRAL.
+ * `suite init`: connect this machine to a Burrow install. HARNESS-NEUTRAL.
  *
  * Every step here is one that any harness on this machine needs:
  *

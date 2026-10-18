@@ -119,7 +119,7 @@ export async function resolveRefToSha(
     })());
     const headers: Record<string, string> = { Accept: "application/vnd.github.v3+json" };
     if (token) headers.Authorization = `token ${token}`;
-    // burrow-cli first, suite-cli on a 404 only (see repo_source.ts).
+    // burrow-cli first, the legacy name on a 404 only (see repo_source.ts).
     for (const repo of cliRepoNames(env)) {
       const res = await fetchImpl(apiCommitUrl(repo, ref, env), { headers });
       if (res.status === 404) continue;

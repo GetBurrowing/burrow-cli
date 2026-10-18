@@ -1,5 +1,5 @@
 /**
- * `suite openclaw` — stamp an OpenClaw agent root Suite-ready through
+ * `suite openclaw` — stamp an OpenClaw agent root Burrow-ready through
  * OpenClaw's own non-interactive path, then run its gateway in a persistent
  * tmux session.
  *
@@ -11,7 +11,7 @@
  *
  * `--stamp-only` is the stage-1 machine contract (src/stamp_result.ts): one
  * JSON document on stdout, exit 0/1/2/3, and no session started. It is THE
- * implementation of "provision the OpenClaw channel for a Suite agent": other
+ * implementation of "provision the OpenClaw channel for a Burrow agent": other
  * tools (core's installer `setup channel` step) call it rather than cloning
  * openclaw-suite-channel and running its install.sh.
  *
@@ -112,7 +112,7 @@ type Env = Record<string, string | undefined>;
 /* ------------------------------------------------------------------------- */
 
 /**
- * DEPLOYER: BUMP THIS BEFORE suite-cli MERGES.
+ * DEPLOYER: BUMP THIS BEFORE burrow-cli MERGES.
  *
  * This is the commit tagged v0.8.0 on burrow-channel-openclaw main (PR #32,
  * BURROW_* names with SUITE_* fallback, task 01a14b9f-b62c; Burrow rename C).
@@ -785,6 +785,12 @@ export function resolveOpenclawBin(opts: OpenclawOptions, deps: Pick<OpenclawDep
   return deps.which("openclaw");
 }
 
+/**
+ * The pin `npm ci` last installed, inside the checkout's node_modules. Keeps its
+ * pre-0.9 name on purpose: existing checkouts carry it, and a new name would
+ * read as "never installed" and re-run `npm ci` under a gateway that may be
+ * loading those modules.
+ */
 const CHECKOUT_MARKER = ".suite-cli-deps-ref";
 
 export function openclawWriter(ctx: { opts: OpenclawOptions | null }, deps: OpenclawDeps): HarnessWriter & { state: WriterState } {

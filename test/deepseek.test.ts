@@ -274,7 +274,7 @@ describe("mcpUrl", () => {
     );
   });
 
-  test("otherwise it is derived from the Suite URL", () => {
+  test("otherwise it is derived from the Burrow URL", () => {
     const config = { ...emptyConfig(), suiteUrl: "https://suite.example.invalid/" };
     expect(mcpUrl(config, {} as NodeJS.ProcessEnv)).toBe("https://suite.example.invalid/mcp");
   });

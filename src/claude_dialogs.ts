@@ -6,7 +6,7 @@
  * Claude Code then shows a full-screen warning on EVERY launch. In a folder it
  * has not seen it first asks whether the folder is trusted, and on a machine
  * that has not accepted bypass-permissions mode it asks about that too. Until
- * someone answers, the process is alive and doing nothing: Suite sees an agent
+ * someone answers, the process is alive and doing nothing: Burrow sees an agent
  * that never replies.
  *
  * THREE RULES CARRY THIS MODULE.

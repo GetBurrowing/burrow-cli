@@ -460,7 +460,7 @@ describe("each check fires on a broken input", () => {
     expect(check.status).not.toBe("pass");
 
     // AND THE OTHER HALF. `⏸ Pending approval` is a project-approval state, not
-    // a connectivity verdict — measured on a real box, both Suite servers
+    // a connectivity verdict — measured on a real box, both Burrow servers
     // reported pending while the channel was demonstrably delivering messages.
     // Printing `✘` there is a failure reported for something that works.
     expect(check.status).toBe("skip");
@@ -1047,7 +1047,7 @@ describe("the tools api check", () => {
     // The consequence names the invisible symptom, not the status code.
     expect(text).toContain("exposes no Burrow tools");
     expect(text).toContain("nothing anywhere prints an error");
-    // It reached the application, so nothing in front of Suite is implicated.
+    // It reached the application, so nothing in front of Burrow is implicated.
     expect(text).toContain("The request reached Burrow");
     // Expired and never-valid look identical from here: re-enter, do not mint.
     expect(text).toContain("rather than minting a new one");
@@ -1060,7 +1060,7 @@ describe("the tools api check", () => {
 
   /**
    * THE TEXT DIFFERENCE IS THE TICKET. `rejected` and `unreachable` need
-   * OPPOSITE fixes — one is a wrong credential Suite refused, the other is
+   * OPPOSITE fixes — one is a wrong credential Burrow refused, the other is
    * nothing answering at all — so a test asserting only "it failed" would pass
    * on a doctor that printed the same paragraph for both.
    */
@@ -1260,7 +1260,7 @@ describe("the token match check", () => {
   });
 
   /**
-   * DIFFERENT HOSTS IS A SKIP, DELIBERATELY. Two Suite deployments on one box
+   * DIFFERENT HOSTS IS A SKIP, DELIBERATELY. Two Burrow deployments on one box
    * is a legitimate configuration and two credentials is then correct, so this
    * check says nothing rather than inventing a verdict. Note the tokens here
    * ALSO differ — the same input that fails above — so what is being tested is
@@ -1324,7 +1324,7 @@ describe("the token match check", () => {
 describe("a server that is PENDING APPROVAL and WORKING", () => {
   /**
    * THE ANTI-VACUITY FIXTURE FOR THE WHOLE TIER, and the state a real box was
-   * measured in: `claude mcp list` reports `⏸ Pending approval` for BOTH Suite
+   * measured in: `claude mcp list` reports `⏸ Pending approval` for BOTH Burrow
    * servers while the tools endpoint answers a real `tools/list` and the channel
    * delivers messages. A doctor that reads pending as a failure prints red for a
    * machine that works, which is the misdiagnosis this tier exists to end.

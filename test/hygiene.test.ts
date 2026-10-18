@@ -5,7 +5,7 @@ import { resolve } from "node:path";
  * No deployment-specific access-proxy header may be named anywhere in this
  * repository — not as a default, not as a hint string, not as an example.
  *
- * Our own Suite instance happens to sit behind a particular access proxy and
+ * Our own Burrow instance happens to sit behind a particular access proxy and
  * needs a particular header pair. Another operator fronts theirs differently,
  * or not at all. Hardcoding ours would turn an accident of our infrastructure
  * into a property of the tool, and would quietly teach every reader that those

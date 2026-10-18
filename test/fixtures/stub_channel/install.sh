@@ -92,7 +92,7 @@ env_set SUITE_RUNTIME_ID "$RID"
 env_set SUITE_RUNTIME_TOKEN_FILE "$TP"
 [ -z "$ALLOW" ] || env_set SUITE_ALLOW_ALL_USERS "$ALLOW"
 [ -z "$USERS" ] || env_set SUITE_ALLOWED_USERS "$USERS"
-[ "$ENV_CHANGED" = 0 ] || log "wrote Suite settings to $ENV_FILE (mode 0600)"
+[ "$ENV_CHANGED" = 0 ] || log "wrote Burrow settings to $ENV_FILE (mode 0600)"
 
 SHA="$(git -C "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)" rev-parse HEAD)"
 PD="$HH/plugins/startup-suite-platform"

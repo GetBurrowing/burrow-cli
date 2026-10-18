@@ -758,7 +758,7 @@ describe("parseServerStatus", () => {
    *
    * `⏸ Pending approval` says this project has not approved a user-scope
    * server; it says nothing about whether that server works, and on a real box
-   * both Suite servers reported pending while the channel was delivering
+   * both Burrow servers reported pending while the channel was delivering
    * messages. It used to fall into the not-connected alternation, which made
    * `suite doctor` print a failure for a working channel.
    */
@@ -930,11 +930,11 @@ describe("url derivation", () => {
   /**
    * THE FAILURE THIS EXISTS FOR, from a real setup.
    *
-   * The operator pasted the runtime URL — a reasonable reading of "the Suite
-   * URL", and the value Suite itself shows you. `toolsHttpUrl` left the scheme
+   * The operator pasted the runtime URL — a reasonable reading of "the Burrow
+   * URL", and the value Burrow itself shows you. `toolsHttpUrl` left the scheme
    * alone, so `wss://` went into the HTTP MCP slot and the client refused it
    * with `ERR_INVALID_ARG_VALUE: protocol must be http:, https: or s3:`, an
-   * error naming neither Suite nor the URL behind it.
+   * error naming neither Burrow nor the URL behind it.
    */
   test("a pasted wss:// runtime URL still yields an http(s) tools entry", () => {
     expect(toolsHttpUrl("wss://suite.example.invalid/runtime/ws")).toBe(

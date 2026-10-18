@@ -350,7 +350,7 @@ describe("a first stamp", () => {
       expect(c.env.OPENCLAW_STATE_DIR).toBe(stateDirFor(root));
       expect(c.env.OPENCLAW_CONFIG_PATH).toBe(configPathFor(root));
       expect(c.env.OPENCLAW_HOME).toBe(root);
-      // Nothing inherited: not the operator's OpenClaw, not Suite, not systemd's hints.
+      // Nothing inherited: not the operator's OpenClaw, not Burrow, not systemd's hints.
       expect(Object.keys(c.env).filter((k) => /^OPENCLAW_/.test(k)).sort()).toEqual(["OPENCLAW_CONFIG_PATH", "OPENCLAW_HOME", "OPENCLAW_STATE_DIR"]);
       expect(Object.keys(c.env).filter((k) => k.startsWith("SUITE_") || k === "INVOCATION_ID" || k === "JOURNAL_STREAM")).toEqual([]);
       expect(scanEnv("child", c.env, parentCanary)).toEqual([]);
@@ -987,7 +987,7 @@ describe("--stamp-only as a subprocess: the machine contract", () => {
 describe("pins", () => {
   test("the channel is pinned to the commit tagged v0.8.0 on burrow-channel-openclaw main (PR #32)", () => {
     expect(OPENCLAW_CHANNEL_REF).toBe("ad307416839aaf266ce6fd941dbcc25446e0445c");
-    expect(readFileSync(resolve(import.meta.dir, "..", "src", "commands", "openclaw.ts"), "utf8")).toContain("DEPLOYER: BUMP THIS BEFORE suite-cli MERGES");
+    expect(readFileSync(resolve(import.meta.dir, "..", "src", "commands", "openclaw.ts"), "utf8")).toContain("DEPLOYER: BUMP THIS BEFORE burrow-cli MERGES");
   });
   test("the OpenClaw pin", () => {
     expect(OPENCLAW_PACKAGE).toBe("openclaw@2026.9.4");

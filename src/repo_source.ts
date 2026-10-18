@@ -100,7 +100,7 @@ export function rawUrl(repo: string, ref: string, path: string, env: Env = proce
 /**
  * The codeload paths to try for `ref`, in order, with install.sh's own rule.
  *
- * MEASURED 2026-10-18 against suite-cli: `/tar.gz/v0.8.0` 200,
+ * MEASURED 2026-10-18 against the pre-rename repo: `/tar.gz/v0.8.0` 200,
  * `/tar.gz/refs/tags/v0.8.0` 200, `/tar.gz/refs/heads/v0.8.0` 404. So:
  *   - a 40-hex SHA, or a full `refs/heads/*` / `refs/tags/*` ref: verbatim, one path;
  *   - a bare name: `refs/heads/<name>`, then `refs/tags/<name>` on a 404. A
@@ -125,12 +125,13 @@ export function codeloadUrl(repo: string, ref: string, env: Env = process.env): 
  * This CLI's repo, and the name it had before 0.9.0.
  *
  * THE CODE WORKS UNDER BOTH until the rename happens, and after it. Measured
- * 2026-10-18: github.com/Startup-Suite/burrow-cli 404s and suite-cli is public.
- * After `gh repo rename` GitHub redirects suite-cli to burrow-cli, but nothing
- * here relies on that redirect: every fetch of this CLI's own files tries
- * {@link CLI_REPO_NAME} first and falls back to {@link LEGACY_CLI_REPO_NAME}
- * on a 404 only, so before the rename burrow-cli 404s and suite-cli answers,
- * and after it burrow-cli answers and suite-cli is never asked.
+ * 2026-10-18: github.com/Startup-Suite/burrow-cli 404s and the legacy name is
+ * public. After `gh repo rename` GitHub redirects the legacy name to
+ * burrow-cli, but nothing here relies on that redirect: every fetch of this
+ * CLI's own files tries {@link CLI_REPO_NAME} first and falls back to
+ * {@link LEGACY_CLI_REPO_NAME} on a 404 only, so before the rename burrow-cli
+ * 404s and the legacy name answers, and after it burrow-cli answers and the
+ * legacy name is never asked.
  */
 export const CLI_REPO_NAME = "burrow-cli";
 export const LEGACY_CLI_REPO_NAME = "suite-cli";
@@ -164,7 +165,7 @@ export class InvalidRepoName extends Error {
 
 /**
  * The repos to fetch this CLI from, in order: `[BURROW_CLI_REPO]` when it is
- * set, else `[burrow-cli, suite-cli]`. Unset and empty both mean the default
+ * set, else `[CLI_REPO_NAME, LEGACY_CLI_REPO_NAME]`. Unset and empty both mean the default
  * pair. An invalid override throws, before any URL exists.
  */
 export function cliRepoNames(env: Env = process.env): string[] {

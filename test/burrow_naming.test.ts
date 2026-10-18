@@ -15,6 +15,7 @@ import { usage } from "../src/cli.ts";
 import { parseHermesOptions } from "../src/commands/hermes.ts";
 import { parseOpenclawOptions } from "../src/commands/openclaw.ts";
 import { FALLBACK_SUFFIXES } from "../src/env_names.ts";
+import { BESIDE_BREADCRUMB_SUFFIX, BREADCRUMB_FILENAME, LOCK_DIRNAME, STATE_FILENAME } from "../src/migrate.ts";
 import { CLI_NAME, VERSION } from "../src/version.ts";
 
 /**
@@ -198,7 +199,7 @@ describe("README", () => {
     expect(readme).toContain("burrow init && burrow claude");
   });
 
-  test("Compatibility lists every SUITE_* fallback pair, the alias, the config dir and what did not move", () => {
+  test("Compatibility lists every SUITE_* fallback pair, the alias, the one-shot move and its breadcrumbs, and the repo rename", () => {
     const start = readme.indexOf("## Compatibility");
     expect(start).toBeGreaterThan(0);
     const section = readme.slice(start, readme.indexOf("\n## ", start + 1));
@@ -207,8 +208,49 @@ describe("README", () => {
       expect(section).toContain(`| \`BURROW_${s}\` | \`SUITE_${s}\` |`);
     }
     expect(section).toContain("suite: this command is now burrow; suite keeps working as an alias");
-    expect(section).toContain("`<config>/burrow`");
     expect(section).toContain("`startup-suite` and `suite-channel`");
-    expect(section).toContain("~/.local/share/suite/");
+    // The one-shot migration, named by the files it leaves (from the code, not retyped).
+    expect(section).toContain("State moves once, on the first 0.9 run.");
+    expect(section).toContain(`\`${BREADCRUMB_FILENAME}\``);
+    expect(section).toContain(`\`<old>${BESIDE_BREADCRUMB_SUFFIX}\``);
+    expect(section).toContain(`\`<state>/burrow/${STATE_FILENAME}\``);
+    expect(section).toContain(`\`${LOCK_DIRNAME}\``);
+    // 0.8's rules are gone: the config dir no longer depends on what exists, and nothing claims the old dirs stay.
+    expect(section).not.toContain("chosen once, by what exists");
+    expect(section).not.toContain("are unchanged: `~/.local/share/suite/`");
+    expect(section).toContain("The repo is `burrow-cli`; it was");
+  });
+});
+
+describe("the old repo name survives only where the fallback needs it", () => {
+  // 0.9.0 renamed the repo to burrow-cli. The old name is still spelled where
+  // a fetch falls back to it and where the README explains that fallback.
+  // Tests and the changelog are out of scope: tests have to exercise the
+  // fallback by name, and past changelog entries are records.
+  const OLD_REPO = ["suite", "cli"].join("-");
+  const SCOPE = ["src", "assets", "install.sh", "README.md", "package.json", "bun.lock"];
+  const KEPT: { file: string; text: string; why: string }[] = [
+    { file: "src/repo_source.ts", text: `export const LEGACY_CLI_REPO_NAME = "${OLD_REPO}";`, why: "the constant; update.ts re-exports it as LEGACY_REPO_NAME" },
+    { file: "install.sh", text: `REPO_NAMES="burrow-cli ${OLD_REPO}"`, why: "the POSIX installer's copy of the constant; it cannot import TypeScript" },
+    { file: "README.md", text: `it was \`${OLD_REPO}\` before 0.9.0.`, why: "the compatibility note" },
+    { file: "README.md", text: `and \`${OLD_REPO}\` only when that answers 404`, why: "the compatibility note" },
+    { file: "src/commands/openclaw.ts", text: `const CHECKOUT_MARKER = ".${OLD_REPO}-deps-ref";`, why: "an on-disk marker existing plugin checkouts carry; renaming it re-runs npm ci" },
+  ];
+
+  test("every occurrence is a kept line, and every kept line is still there exactly once", () => {
+    const g = gitGrep(["-n", "-I", "-F", OLD_REPO, "--", ...SCOPE]);
+    expect(g.code).toBe(0); // positive control: the kept lines are found at all
+    const hits = g.out
+      .split("\n")
+      .filter((l) => l !== "")
+      .map((l) => {
+        const [file, , ...rest] = l.split(":");
+        return { file: file as string, text: rest.join(":") };
+      });
+    const unlisted = hits.filter((h) => !KEPT.some((k) => k.file === h.file && h.text.includes(k.text)));
+    expect(unlisted).toEqual([]);
+    for (const k of KEPT) {
+      expect({ kept: k.text, lines: hits.filter((h) => h.file === k.file && h.text.includes(k.text)).length }).toEqual({ kept: k.text, lines: 1 });
+    }
   });
 });

@@ -76,10 +76,10 @@ esac
 [ "${#OWNER}" -le 39 ] ||
 	die "$OWNER_VAR=\"$OWNER\" is longer than a GitHub owner name can be (39 characters)"
 
-# The repo the tarball comes from. burrow-cli first, then suite-cli, its name
-# before 0.9.0, tried ONLY when burrow-cli answers 404. That is right before
-# `gh repo rename` (burrow-cli 404s) and after it (burrow-cli answers, and
-# suite-cli is never asked), without relying on GitHub's rename redirect.
+# The repo the tarball comes from. burrow-cli first, then its name before
+# 0.9.0, tried ONLY when burrow-cli answers 404. That is right before
+# `gh repo rename` (burrow-cli 404s) and after it (burrow-cli answers, and the
+# old name is never asked), without relying on GitHub's rename redirect.
 # BURROW_CLI_REPO names one repo instead, with no fallback; it is new in 0.9.0,
 # so it has no SUITE_* twin. Validated like the owner, before any fetch.
 _repo_chars="${_owner_chars}._"
@@ -129,10 +129,10 @@ detect_platform() {
 	Darwin) echo "macOS" ;;
 	Linux) echo "Linux" ;;
 	MINGW* | MSYS* | CYGWIN* | Windows_NT)
-		die "Windows is not supported. suite-cli supports macOS and Linux only."
+		die "Windows is not supported. burrow supports macOS and Linux only."
 		;;
 	*)
-		die "unsupported platform \"$uname_s\". suite-cli supports macOS and Linux only."
+		die "unsupported platform \"$uname_s\". burrow supports macOS and Linux only."
 		;;
 	esac
 }
@@ -181,7 +181,7 @@ on_path() {
 }
 
 # ------------------------------------------------------------------ fetch ----
-# The suite-cli repo is private, so unauthenticated fetches against
+# The repo may be private, in which case unauthenticated fetches against
 # codeload.github.com return 404. A GH_TOKEN may already be exported by
 # `suite update`; if not, resolve one from `gh` when available. When no
 # token is found the fetch falls back to unauthenticated, which still works
@@ -233,7 +233,7 @@ fetch() {
 		FETCH_CODE="$(sed -n 's/^ *HTTP\/[0-9.]* \([0-9][0-9][0-9]\).*/\1/p' "$_hdrs" | sed -n '$p')"
 		return 1
 	else
-		die "neither curl nor wget is available to download suite-cli"
+		die "neither curl nor wget is available to download burrow-cli"
 	fi
 }
 
@@ -266,13 +266,13 @@ alias_dest="$bin_dir/suite"
 TMPDIR_SUITE="$(mktemp -d "${TMPDIR:-/tmp}/suite-install.XXXXXX")" ||
 	die "could not create a temporary directory"
 
-tarball="$TMPDIR_SUITE/suite-cli.tar.gz"
+tarball="$TMPDIR_SUITE/burrow-cli.tar.gz"
 # Every URL tried, with what it answered, so a failure names all of them.
 tried=""
 TARBALL_URL=""
 if [ -n "$TARBALL_OVERRIDE" ]; then
 	fetch "$TARBALL_OVERRIDE" "$tarball" ||
-		die "could not download suite-cli from $TARBALL_OVERRIDE"
+		die "could not download burrow-cli from $TARBALL_OVERRIDE"
 	TARBALL_URL="$TARBALL_OVERRIDE"
 else
 	for _repo in $REPO_NAMES; do
@@ -286,10 +286,10 @@ else
 			# Only a 404 means "not here, try the next name". Anything else
 			# (a 5xx, no network, a refused token) stops now, rather than
 			# installing from a place the operator did not ask for.
-			[ "$FETCH_CODE" = "404" ] || die "could not download suite-cli from $tried"
+			[ "$FETCH_CODE" = "404" ] || die "could not download burrow-cli from $tried"
 		done
 	done
-	[ -n "$TARBALL_URL" ] || die "could not download suite-cli from $tried"
+	[ -n "$TARBALL_URL" ] || die "could not download burrow-cli from $tried"
 fi
 [ -s "$tarball" ] || die "downloaded an empty archive from $TARBALL_URL"
 
@@ -298,8 +298,8 @@ mkdir -p "$extract_dir"
 tar -xzf "$tarball" -C "$extract_dir" ||
 	die "could not extract the downloaded archive"
 
-# The archive has a single top-level directory: suite-cli-<ref> or, from the
-# renamed repo, burrow-cli-<ref>. Its name is not checked; package.json is.
+# The archive has a single top-level directory, `<repo>-<ref>`, from
+# whichever repo name answered. Its name is not checked; package.json is.
 src_root=""
 for candidate in "$extract_dir"/*; do
 	if [ -d "$candidate" ] && [ -f "$candidate/package.json" ]; then
@@ -307,7 +307,7 @@ for candidate in "$extract_dir"/*; do
 		break
 	fi
 done
-[ -n "$src_root" ] || die "the downloaded archive does not look like suite-cli"
+[ -n "$src_root" ] || die "the downloaded archive does not look like burrow-cli"
 [ -f "$src_root/bin/burrow.template" ] ||
 	die "the downloaded archive is missing bin/burrow.template"
 
@@ -354,7 +354,7 @@ fi
 # --- stage everything, then move into place ---------------------------------
 staged_lib="$TMPDIR_SUITE/lib"
 mkdir -p "$staged_lib"
-cp -R "$src_root/src" "$staged_lib/src" || die "could not stage the suite-cli sources"
+cp -R "$src_root/src" "$staged_lib/src" || die "could not stage the burrow-cli sources"
 cp "$src_root/package.json" "$staged_lib/package.json" ||
 	die "could not stage package.json"
 if [ -f "$src_root/bun.lock" ]; then
@@ -396,7 +396,7 @@ render_launcher burrow "$staged_bin"
 render_launcher suite "$staged_alias"
 
 mkdir -p "$bin_dir" || die "could not create the install directory $bin_dir"
-[ -w "$bin_dir" ] || die "$bin_dir is not writable. suite-cli never uses sudo; set XDG_BIN_HOME to a directory you own."
+[ -w "$bin_dir" ] || die "$bin_dir is not writable. burrow never uses sudo; set XDG_BIN_HOME to a directory you own."
 mkdir -p "$(dirname "$lib_dir")" || die "could not create $(dirname "$lib_dir")"
 
 rm -rf "$lib_dir.incoming"
@@ -405,7 +405,7 @@ rm -rf "$lib_dir.previous"
 if [ -d "$lib_dir" ]; then
 	mv "$lib_dir" "$lib_dir.previous" || die "could not move the previous install aside"
 fi
-mv "$lib_dir.incoming" "$lib_dir" || die "could not install the suite-cli library"
+mv "$lib_dir.incoming" "$lib_dir" || die "could not install the burrow-cli library"
 rm -rf "$lib_dir.previous"
 
 mv "$staged_bin" "$dest" || die "could not install the burrow entrypoint to $dest"

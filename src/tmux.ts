@@ -3,7 +3,7 @@
  * composition. `suite claude` (stage 5) is the verb on top of this module.
  *
  * WHY THIS EXISTS. A Claude Code process that dies with its terminal is an
- * agent that stops mid-task, and from Suite's side that is indistinguishable
+ * agent that stops mid-task, and from Burrow's side that is indistinguishable
  * from an agent that is merely slow — the router keeps waiting on a runtime
  * that no longer exists. Running the agent inside tmux decouples the process
  * from the terminal that started it.
@@ -308,7 +308,7 @@ export function composeNewSession(input: NewSessionInput, store: CredentialStore
  * the process it was created for: the agent exits, the pane's shell stays, and
  * `tmux has-session` keeps answering yes forever. Attaching to that corpse is
  * WORSE than starting fresh, because it presents as a live agent and is not —
- * the user sees a prompt, Suite sees nothing, and nobody is told why.
+ * the user sees a prompt, Burrow sees nothing, and nobody is told why.
  */
 export type SessionState = "live" | "stale" | "none";
 
@@ -572,7 +572,7 @@ export function nestingPlan(
  *
  * A SILENT FALLBACK IS FORBIDDEN. Running the agent directly reproduces the
  * failure this whole feature exists to prevent — the agent dies with the
- * terminal, mid-task, and Suite cannot tell that from slowness. The fallback is
+ * terminal, mid-task, and Burrow cannot tell that from slowness. The fallback is
  * still offered, because refusing to run at all on a box without tmux is worse
  * for the user than running without persistence; but it is never quiet, and the
  * warning names both the consequence and the remedy.

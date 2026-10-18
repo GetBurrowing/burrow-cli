@@ -292,7 +292,7 @@ describe("install.sh", () => {
     // 404 and the installer stops there rather than trying suite-cli.
     const url = "https://codeload.github.com/GetBurrowing/burrow-cli/tar.gz/refs/heads/main";
     expect(r.fetched).toContain(url);
-    expect(r.stderr).toContain(`could not download suite-cli from ${url}`);
+    expect(r.stderr).toContain(`could not download burrow-cli from ${url}`);
     expect(r.status).not.toBe(0);
     expect(existsSync(r.dest)).toBe(false);
   });

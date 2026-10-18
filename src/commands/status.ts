@@ -9,7 +9,7 @@
  *     the inventory (src/agent_inventory.ts — the rows `status --json` emits):
  *     folder, runtime id, suite URL, and a marker for a folder with no record
  *     (src/agent_connections.ts) — NEVER the token. A 0.7.0 machine-level connection is reported as
- *     `legacy`, assigned to no folder, because it identifies none. The id is what Suite shows in its own UI, so it is the
+ *     `legacy`, assigned to no folder, because it identifies none. The id is what Burrow shows in its own UI, so it is the
  *     value that lets a human match this machine to a row on a screen; the
  *     token identifies nothing to a human and printing it puts a credential in
  *     a terminal scrollback, a screenshot and a pasted bug report.

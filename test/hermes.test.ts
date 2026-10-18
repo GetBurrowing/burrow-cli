@@ -1080,6 +1080,6 @@ describe("pins", () => {
   test("the pin's DEPLOYER comment is present, so the bump is not forgotten at merge", () => {
     const src = readFileSync(resolve(import.meta.dir, "..", "src", "commands", "hermes.ts"), "utf8");
     const at = src.indexOf("export const HERMES_CHANNEL_REF");
-    expect(src.slice(Math.max(0, at - 1200), at)).toContain("DEPLOYER: BUMP THIS BEFORE suite-cli MERGES.");
+    expect(src.slice(Math.max(0, at - 1200), at)).toContain("DEPLOYER: BUMP THIS BEFORE burrow-cli MERGES.");
   });
 });

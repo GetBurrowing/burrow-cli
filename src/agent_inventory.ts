@@ -24,7 +24,7 @@
  * the rows (as `legacy`) and never inside one.
  *
  * `claude mcp get` / `claude mcp list` ARE NEVER RUN for this. They health-check
- * a stdio server by STARTING it, and starting the channel joins Suite as that
+ * a stdio server by STARTING it, and starting the channel joins Burrow as that
  * runtime a second time.
  */
 import { join } from "node:path";
@@ -75,7 +75,7 @@ export function lastVerdict(text: string | null): string {
 /* What a Claude config file says, minus every secret                         */
 /* ------------------------------------------------------------------------- */
 
-/** One folder's Suite entries, as identity only. Never a token. */
+/** One folder's Burrow entries, as identity only. Never a token. */
 export interface EntryIdentity {
   /** suite-channel env BURROW_RUNTIME_ID, else SUITE_RUNTIME_ID, or null. */
   runtimeId: string | null;
@@ -87,15 +87,15 @@ export interface EntryIdentity {
 
 /** ~/.claude.json reduced to what the inventory may know. */
 export interface ClaudeJsonView {
-  /** Local-scope Suite entries, by the project key Claude Code stores them under. */
+  /** Local-scope Burrow entries, by the project key Claude Code stores them under. */
   projects: Record<string, EntryIdentity>;
-  /** User-scope (top-level `mcpServers`) Suite entries: these apply to EVERY folder without local ones. */
+  /** User-scope (top-level `mcpServers`) Burrow entries: these apply to EVERY folder without local ones. */
   userScope: Array<{ name: string; runtimeId: string | null }>;
 }
 
 const str = (v: unknown): string | null => (typeof v === "string" && v.trim() !== "" ? v.trim() : null);
 
-/** The identity half of a `mcpServers` map, or null when it has no Suite entry. Drops every token. */
+/** The identity half of a `mcpServers` map, or null when it has no Burrow entry. Drops every token. */
 function identityOf(servers: unknown): EntryIdentity | null {
   if (typeof servers !== "object" || servers === null) return null;
   const map = servers as Record<string, unknown>;
@@ -168,7 +168,7 @@ export function hostOf(url: string | null | undefined): string | null {
 
 export type Wiring = "match" | "cross_wired" | "unrecorded" | "unknown";
 
-/** One source's claim about a folder: the runtime it names and the Suite hosts it points at. */
+/** One source's claim about a folder: the runtime it names and the Burrow hosts it points at. */
 export interface WiringClaim {
   source: "record" | "entry" | ".mcp.json";
   runtimeId: string | null;
@@ -187,7 +187,7 @@ function claimOf(source: WiringClaim["source"], id: EntryIdentity): WiringClaim 
 
 /**
  * Compare what the record, the folder's local Claude entry and its `.mcp.json`
- * each say. Any two that name different runtimes, or different Suite hosts, is
+ * each say. Any two that name different runtimes, or different Burrow hosts, is
  * `cross_wired`. Pure.
  *
  *  - `entry` null means ~/.claude.json could not be read: `unknown` unless the
@@ -312,7 +312,7 @@ async function firstPresent(
 
 /**
  * Every agent: one row per roster entry, then one per folder that has a record
- * or Suite entries in ~/.claude.json and no roster entry. Rows are ordered by
+ * or Burrow entries in ~/.claude.json and no roster entry. Rows are ordered by
  * root, then session. `session` is always a string.
  */
 export async function inventoryRows(src: InventorySource, detect: DetectState): Promise<InventoryRow[]> {
@@ -324,7 +324,7 @@ export async function inventoryRows(src: InventorySource, detect: DetectState): 
   for (const c of src.records) recordFor.set(canon(c.record.dir), c.record);
 
   // The folders: roster cwds and records first, then any project key holding
-  // Suite entries that is not already some folder's entry key.
+  // Burrow entries that is not already some folder's entry key.
   const folders = new Set<string>();
   for (const e of src.roster) folders.add(canon(e.cwd));
   for (const dir of recordFor.keys()) folders.add(dir);

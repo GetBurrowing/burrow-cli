@@ -1,5 +1,5 @@
 /**
- * The INSTALL CONNECTION: which Suite this machine talks to, and as whom.
+ * The INSTALL CONNECTION: which Burrow install this machine talks to, and as whom.
  *
  * An install is a server — a URL, a runtime id and a token. Connecting a
  * machine to one is harness-neutral: it is the same three values whether the

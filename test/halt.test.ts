@@ -209,7 +209,7 @@ describe("reorientation prompt", () => {
     expect(built.toLowerCase()).not.toContain("remember");
   });
 
-  test("omits the Suite section entirely when no facts were supplied", () => {
+  test("omits the Burrow section entirely when no facts were supplied", () => {
     const bare = buildReorientation({
       cwd: "/x", sessionId: "a", haltKind: "context_window", contextTokens: null, recentAsks: [],
     });

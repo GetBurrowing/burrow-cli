@@ -91,7 +91,7 @@ function record(bx: Box, dir: string, agent: Agent): void {
   });
 }
 
-/** The two Suite entries `suite claude` writes, naming `agent`. Carries its token, as the real file does. */
+/** The two Burrow entries `suite claude` writes, naming `agent`. Carries its token, as the real file does. */
 function servers(agent: Agent): Record<string, unknown> {
   return {
     [CHANNEL_SERVER]: {

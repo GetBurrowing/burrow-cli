@@ -1,5 +1,5 @@
 /**
- * `suite deepseek` — run a DeepSeek Harness agent federated into Startup Suite.
+ * `suite deepseek` — run a DeepSeek Harness agent federated into Burrow.
  *
  * Sibling to `suite claude`, and deliberately a different SHAPE. `suite claude`
  * wraps a binary the user already installed and passes everything through.
@@ -167,7 +167,7 @@ export function parseDeepseekOptions(args: string[]): DeepseekOptions {
 }
 
 /**
- * The websocket URL for a Suite base URL.
+ * The websocket URL for a Burrow base URL.
  *
  * `/runtime/ws` is the endpoint `PlatformWeb.RuntimeChannel` serves; `/socket`
  * is the LiveView endpoint and answers a redirect, which surfaces as an opaque
@@ -290,7 +290,7 @@ export interface DeepseekDeps {
   /** Injected in tests; defaults to the live tmux. */
   tmux?: TmuxDeps;
   /**
-   * Asks for the Suite connection when this machine has none saved — the same
+   * Asks for the Burrow connection when this machine has none saved — the same
    * prompts `suite init` asks — instead of refusing with "run suite init
    * first". Only used from a terminal; absent, the verb refuses as before.
    */
@@ -616,8 +616,8 @@ export interface AgentEnv {
  * The `env` block of an agent root's .suite-state.json.
  *
  * This is where a root declares its MODEL credential, which is a different
- * thing from its Suite one: the runtime token authenticates the agent to
- * Suite; OPENROUTER_API_KEY authenticates it to whoever serves the model.
+ * thing from its Burrow one: the runtime token authenticates the agent to
+ * Burrow; OPENROUTER_API_KEY authenticates it to whoever serves the model.
  * Reading only `token` and `headers` produced an agent that connected,
  * joined, took a dispatch and failed every turn with MISSING_CREDENTIAL.
  *

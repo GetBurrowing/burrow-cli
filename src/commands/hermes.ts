@@ -1,5 +1,5 @@
 /**
- * `suite hermes` — stamp a Hermes Agent root Suite-ready, then run its gateway
+ * `suite hermes` — stamp a Hermes Agent root Burrow-ready, then run its gateway
  * in a persistent tmux session.
  *
  * A sibling of `suite deepseek` in shape: an agent owns a ROOT, the harness
@@ -10,7 +10,7 @@
  * `--stamp-only` is the stage-1 machine contract (src/stamp_result.ts): one
  * JSON document on stdout, exit 0/1/2/3, and no session started.
  *
- * WHAT THIS VERB OWNS, AND WHAT IT DOES NOT. The Startup Suite channel for
+ * WHAT THIS VERB OWNS, AND WHAT IT DOES NOT. The Burrow channel for
  * Hermes is installed by THAT plugin's own `install.sh`, pinned at
  * {@link HERMES_CHANNEL_REF}. The installer owns the 0600 token file, the
  * `.env` keys, the plugin install/enable and the stdio `mcp_servers` bridge;
@@ -124,7 +124,7 @@ type Env = Record<string, string | undefined>;
 /* ------------------------------------------------------------------------- */
 
 /**
- * DEPLOYER: BUMP THIS BEFORE suite-cli MERGES.
+ * DEPLOYER: BUMP THIS BEFORE burrow-cli MERGES.
  *
  * This is the commit tagged v0.3.1 on burrow-channel-hermes main (PR #8,
  * product-name copy to Burrow, Burrow rename F). It replaced f1399d77 (v0.3.0,
@@ -183,7 +183,7 @@ export const HERMES_AGENT_COMM = "hermes";
 export const MODEL_KEY_ENV = "CUSTOM_MODEL_API_KEY";
 
 /**
- * The Suite channel platform's toolset key. `startup_suite` is the platform
+ * The Burrow channel platform's toolset key. `startup_suite` is the platform
  * name hermes-suite-channel registers (`PLATFORM_NAME`, adapter.py:74 at
  * {@link HERMES_CHANNEL_REF}); the gateway reads `platform_toolsets.<name>`
  * per turn (`_get_platform_tools`, hermes_cli/tools_config.py at fdec926e).
@@ -1319,7 +1319,7 @@ export function relaunchArgv(self: string[], opts: HermesOptions, bin: string): 
   ];
 }
 
-/** The gateway's environment: the allowlist plus HERMES_HOME. No Suite credential, by construction. */
+/** The gateway's environment: the allowlist plus HERMES_HOME. No Burrow credential, by construction. */
 export function gatewayEnv(deps: Pick<HermesDeps, "env">, opts: HermesOptions): Record<string, string> {
   return harnessChildEnv(deps.env, { HERMES_HOME: opts.hermesHome });
 }

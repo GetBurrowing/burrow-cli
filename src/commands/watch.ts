@@ -149,7 +149,7 @@ export function recentAsks(tail: string, limit = 5): string[] {
  *
  * Discovery is TRANSCRIPT-FIRST, not tmux-first, and that is deliberate. The
  * host where this failure is most frequent turned out to run its agent outside
- * any suite-cli tmux session — a tmux-only sweep saw nothing there at all,
+ * any tmux session of ours — a tmux-only sweep saw nothing there at all,
  * while its transcripts showed 9 of 12 sessions halted. Observation must not
  * depend on us owning the session; only the recovery keystrokes do.
  */

@@ -2,7 +2,7 @@
  * Credentials: how they are collected, how they are confirmed, and the single
  * sanctioned way to hand one to a child process.
  *
- * COLLECTION IS PASTE-IN. The user clicks Federate in the Suite UI and pastes
+ * COLLECTION IS PASTE-IN. The user clicks Federate in the Burrow UI and pastes
  * the values here. There is deliberately no device-code or OAuth flow: a later
  * `suite login` becomes one more Provider implementation and every consumer of
  * `CredentialStore.get`/`.set` keeps working unchanged.
@@ -20,7 +20,7 @@
 export const TOKEN_KEY = "token";
 
 export interface Credentials {
-  /** Bearer token pasted from the Suite Federate UI. */
+  /** Bearer token pasted from the Burrow Federate UI. */
   token: string;
   /** Operator-specific extra headers, name → value. Values are secret. */
   headers: Record<string, string>;

@@ -110,7 +110,7 @@ export const MISSING_AGENT_EXIT = 4;
 /** The session was created and did not survive. Distinct so scripts can tell. */
 export const SESSION_DIED_EXIT = 5;
 
-/** Claude Code's Suite wiring (plugin, MCP entries, CLAUDE.md) could not be set up. */
+/** Claude Code's Burrow wiring (plugin, MCP entries, CLAUDE.md) could not be set up. */
 export const WIRING_FAILED_EXIT = 6;
 
 /**
@@ -198,9 +198,9 @@ export async function ensureAgent(deps: ClaudeDeps): Promise<number | null> {
 export const DEV_CHANNEL_ARGS = ["--dangerously-load-development-channels", "server:suite-channel"] as const;
 
 /**
- * The Suite participation flags.
+ * The Burrow participation flags.
  *
- * WHY. A Suite runtime is an agent nobody is sitting in front of. Without
+ * WHY. A Burrow runtime is an agent nobody is sitting in front of. Without
  * `--dangerously-skip-permissions` it stops on the first tool-call prompt and
  * waits for a human who is not there — the task looks hung when it is only
  * asking. Without `--continue` every launch is a cold session, so re-attaching
@@ -225,7 +225,7 @@ export const SKIP_PERMISSIONS_ARG = "--dangerously-skip-permissions";
 const SESSION_SELECTORS = new Set([CONTINUE_ARG, "-c", "--resume", "-r", "--from-pr", "--teleport"]);
 
 /**
- * Which Suite flags still need injecting, given what the user already passed.
+ * Which Burrow flags still need injecting, given what the user already passed.
  *
  * Exported so the decision is asserted directly rather than through a launch:
  * a test can pin "user said --resume ⇒ no --continue" without composing tmux.
@@ -434,7 +434,7 @@ export async function writeState(path: string, state: ClaudeState): Promise<void
  *
  * DECISION: stale sessions are RECYCLED — killed by name and recreated — and
  * the recycle is announced. Attaching to the corpse would present a dead agent
- * as a healthy one (the user sees a shell prompt, Suite sees nothing). Leaving
+ * as a healthy one (the user sees a shell prompt, Burrow sees nothing). Leaving
  * it alone and creating a second session under a derived name would break the
  * one property the naming rule exists to give: one context, one session.
  * `tmux kill-session -t <name>` is scoped to that single name — never
@@ -588,13 +588,13 @@ export interface ClaudeDeps {
   /** `process.platform`, so {@link claudeInstallPlan} is decided not sniffed. */
   platform: string;
   /**
-   * Used by the install offer, and — on a machine with no saved Suite
+   * Used by the install offer, and — on a machine with no saved Burrow
    * connection — by the same URL / runtime id / token prompts `suite init`
    * asks. Claude Code's own login is never prompted here.
    */
   prompter: Prompter;
   /**
-   * How Claude Code's Suite wiring runs its children (git, bun, `claude mcp`).
+   * How Claude Code's Burrow wiring runs its children (git, bun, `claude mcp`).
    *
    * Optional for the same reason `restore` is: a caller that supplies nothing
    * wires nothing, which keeps the launch tests from cloning, prompting or
@@ -875,7 +875,7 @@ export interface WiringIo {
  *
  *   (a) the folder has a record: plan against it; register what is missing or
  *       stale, from it.
- *   (b) no record, but the folder already has Suite entries (or ~/.claude.json
+ *   (b) no record, but the folder already has Burrow entries (or ~/.claude.json
  *       cannot be read): register NOTHING. Those entries may be the only
  *       correct statement of who this agent is; launch with them as they are.
  *   (c) no record, no entries, a person to ask: prompt inline, save this

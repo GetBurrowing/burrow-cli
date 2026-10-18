@@ -2,7 +2,7 @@
  * ONE CONNECTION PER AGENT FOLDER.
  *
  * A machine hosts more than one agent, and each agent folder is federated as
- * its own runtime — often on different Suite installs. Through 0.7.0 the CLI
+ * its own runtime — often on different Burrow installs. Through 0.7.0 the CLI
  * kept ONE connection per machine (`config.json` + `credentials.json`), so
  * `suite init` in a second folder silently re-pointed the first: the next
  * `suite claude` there saw its own MCP entries as "stale" against the machine
