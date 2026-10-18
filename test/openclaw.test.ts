@@ -985,8 +985,8 @@ describe("--stamp-only as a subprocess: the machine contract", () => {
 });
 
 describe("pins", () => {
-  test("the channel is pinned to the squash sha of openclaw-suite-channel v0.7.0 (PR #31) on main", () => {
-    expect(OPENCLAW_CHANNEL_REF).toBe("b220c8b1240dc337f48fe2f92967816f84344582");
+  test("the channel is pinned to the commit tagged v0.8.0 on burrow-channel-openclaw main (PR #32)", () => {
+    expect(OPENCLAW_CHANNEL_REF).toBe("ad307416839aaf266ce6fd941dbcc25446e0445c");
     expect(readFileSync(resolve(import.meta.dir, "..", "src", "commands", "openclaw.ts"), "utf8")).toContain("DEPLOYER: BUMP THIS BEFORE suite-cli MERGES");
   });
   test("the OpenClaw pin", () => {

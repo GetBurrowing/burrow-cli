@@ -126,14 +126,15 @@ type Env = Record<string, string | undefined>;
 /**
  * DEPLOYER: BUMP THIS BEFORE suite-cli MERGES.
  *
- * This is the SQUASH sha on hermes-suite-channel main of PR #6, v0.2.0
- * (overridable install repo, no hard-coded org in hints, task 01a14a7d-58f6;
- * Burrow migration). It replaced d9918533 (PR #3, the #!/bin/sh launcher fix
- * and `--python`). This verb always passes `--python`, which installers before
+ * This is the commit tagged v0.3.0 on burrow-channel-hermes main (PR #7,
+ * BURROW_* names with SUITE_* fallback, task 01a14b9f-b62c; Burrow rename C).
+ * The repo was renamed from hermes-suite-channel, whose URL redirects. It
+ * replaced 71041456 (v0.2.0, PR #6), which replaced d9918533 (PR #3, the
+ * #!/bin/sh launcher fix and `--python`). This verb always passes `--python`, which installers before
  * d9918533 refuse, so the pin cannot move to an older commit than that. Pin a commit on main, never a branch tip: a squash
  * merge deletes the branch and the tip would dangle.
  */
-export const HERMES_CHANNEL_REF = "71041456d605e2d3341a214e5c09e924148f3558";
+export const HERMES_CHANNEL_REF = "f1399d77eba86f898d0d32de8c8baa0a783a72ec";
 /** The channel repo's name. Its owner comes from repo_source.ts (SUITE_GITHUB_OWNER). */
 // Not renamed to burrow in 0.8.0: the channel repo rename is task C's; the old name redirects on GitHub.
 export const HERMES_CHANNEL_REPO_NAME = "hermes-suite-channel";

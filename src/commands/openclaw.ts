@@ -114,13 +114,14 @@ type Env = Record<string, string | undefined>;
 /**
  * DEPLOYER: BUMP THIS BEFORE suite-cli MERGES.
  *
- * This is the SQUASH sha on openclaw-suite-channel main of PR #31, v0.7.0
- * (underscore tool names first with a dotted fallback, task 01a14a7d-58f6;
- * Burrow migration). It replaced f6d8a726 (PR #29, the token-ref resolver).
+ * This is the commit tagged v0.8.0 on burrow-channel-openclaw main (PR #32,
+ * BURROW_* names with SUITE_* fallback, task 01a14b9f-b62c; Burrow rename C).
+ * The repo was renamed from openclaw-suite-channel, whose URL redirects. It
+ * replaced b220c8b1 (v0.7.0, PR #31).
  * Pin a commit on main, never a branch tip: a squash merge deletes the branch
  * and the tip would dangle.
  */
-export const OPENCLAW_CHANNEL_REF = "b220c8b1240dc337f48fe2f92967816f84344582";
+export const OPENCLAW_CHANNEL_REF = "ad307416839aaf266ce6fd941dbcc25446e0445c";
 /** The channel repo's name. Its owner comes from repo_source.ts (SUITE_GITHUB_OWNER). */
 // Not renamed to burrow in 0.8.0: the channel repo rename is task C's; the old name redirects on GitHub.
 export const OPENCLAW_CHANNEL_REPO_NAME = "openclaw-suite-channel";

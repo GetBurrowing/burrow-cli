@@ -1073,8 +1073,8 @@ describe("--stamp-only as a subprocess: the machine contract", () => {
 });
 
 describe("pins", () => {
-  test("the channel is pinned to the squash sha of hermes-suite-channel v0.2.0 (PR #6) on main", () => {
-    expect(HERMES_CHANNEL_REF).toBe("71041456d605e2d3341a214e5c09e924148f3558");
+  test("the channel is pinned to the commit tagged v0.3.0 on burrow-channel-hermes main (PR #7)", () => {
+    expect(HERMES_CHANNEL_REF).toBe("f1399d77eba86f898d0d32de8c8baa0a783a72ec");
   });
 
   test("the pin's DEPLOYER comment is present, so the bump is not forgotten at merge", () => {
