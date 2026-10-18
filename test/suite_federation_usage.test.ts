@@ -41,6 +41,9 @@ mock.module("phoenix", () => ({ Socket: FakeSocket }));
 mock.module("@deepseek-ai/schemastery", () => ({ default: chain }));
 mock.module("@deepseek-ai/dsh-llm", () => ({ createUserMessage: (m: any) => m }));
 mock.module("@deepseek-ai/dsh-session", () => ({ SessionId: (s: string) => s }));
+// The plugin now imports dsh-tools for the `suite_reply` tool; the usage test
+// exercises only dispatch attribution, so the tool runtime is a stub.
+mock.module("@deepseek-ai/dsh-tools", () => ({ defineTool: (def: any) => def }));
 
 // @ts-expect-error -- untyped JS asset; it runs inside dsh, not this package
 const plugin: any = await import("../assets/dsh-plugins/suite-federation/index.js");
