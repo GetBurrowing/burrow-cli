@@ -56,8 +56,51 @@ export function nameDigest(input: string): string {
   return createHash("sha256").update(input).digest("hex").slice(0, 8);
 }
 
-// Not renamed to burrow in 0.8.0: restore, status and watch find live sessions by this prefix.
-export const SESSION_PREFIX = "suite";
+/** The prefix every session this CLI creates carries from 0.9. */
+export const SESSION_PREFIX = "burrow";
+
+/**
+ * The 0.8 prefix. Sessions started before 0.9 keep it until they next restart:
+ * renaming a session under a running agent would break every external
+ * reference to it (keepalive scripts, a hand-written watchdog, an operator's
+ * `tmux attach -t`), so 0.9 FINDS them under this name instead.
+ */
+export const LEGACY_SESSION_PREFIX = "suite";
+
+/** Both prefixes, current first. Every finder (status, watch, restore, doctor) accepts either. */
+export const SESSION_PREFIXES: readonly string[] = [SESSION_PREFIX, LEGACY_SESSION_PREFIX];
+
+/**
+ * The watcher's own no-GUI tmux session under each prefix (supervisor.ts
+ * SERVICE_NAME, and migrate.ts LEGACY_SERVICE_NAME). It carries an own prefix
+ * but runs no agent, so the agent finders never return it.
+ */
+export const WATCH_SESSION_NAMES: readonly string[] = [`${SESSION_PREFIX}-watch`, `${LEGACY_SESSION_PREFIX}-watch`];
+
+/** Does this name carry one of this CLI's prefixes? */
+export function hasOwnPrefix(name: string): boolean {
+  return SESSION_PREFIXES.some((p) => name.startsWith(`${p}-`));
+}
+
+/** Is this the watcher's own session rather than an agent's? */
+export function isWatcherSession(name: string): boolean {
+  return WATCH_SESSION_NAMES.includes(name);
+}
+
+/** `suite-X` → `burrow-X`; any other name is returned unchanged. */
+export function currentPrefixName(name: string): string {
+  const legacy = `${LEGACY_SESSION_PREFIX}-`;
+  return name.startsWith(legacy) ? `${SESSION_PREFIX}-${name.slice(legacy.length)}` : name;
+}
+
+/** `burrow-X` ↔ `suite-X`; null for a name with neither prefix. */
+export function prefixTwin(name: string): string | null {
+  const cur = `${SESSION_PREFIX}-`;
+  const legacy = `${LEGACY_SESSION_PREFIX}-`;
+  if (name.startsWith(cur)) return `${legacy}${name.slice(cur.length)}`;
+  if (name.startsWith(legacy)) return `${cur}${name.slice(legacy.length)}`;
+  return null;
+}
 
 export interface SessionNameInput {
   /** Persisted preference from the stage-2 config. */
@@ -109,6 +152,23 @@ export function sessionNameFor(input: SessionNameInput): string {
 }
 
 /**
+ * The names a launch looks under, in order: the burrow name, then its 0.8
+ * `suite-` twin. Only a DERIVED name has a twin. An explicit `--session` names
+ * exactly one session, so it is returned alone.
+ */
+export function sessionNameCandidates(input: SessionNameInput): string[] {
+  const name = sessionNameFor(input);
+  if (input.explicit !== undefined && input.explicit.trim() !== "") return [name];
+  return derivedCandidates(name);
+}
+
+/** [name, its legacy twin] for a derived `burrow-` name; [name] for anything else. */
+export function derivedCandidates(name: string): string[] {
+  const twin = prefixTwin(name);
+  return name.startsWith(`${SESSION_PREFIX}-`) && twin !== null ? [name, twin] : [name];
+}
+
+/**
  * The naming rule as the persisted config expresses it.
  *
  * The preference lives in `config.json` (stage 2) rather than being decided
@@ -124,6 +184,11 @@ export function sessionNameFromConfig(config: SuiteConfig, cwd: string, explicit
     runtimeId: config.runtimeId,
     explicit,
   });
+}
+
+/** {@link sessionNameCandidates} for the persisted config, as {@link sessionNameFromConfig}. */
+export function sessionCandidatesFromConfig(config: SuiteConfig, cwd: string, explicit?: string): string[] {
+  return sessionNameCandidates({ naming: config.sessionNaming, cwd, runtimeId: config.runtimeId, explicit });
 }
 
 /* ------------------------------------------------------------------------- */
@@ -422,6 +487,37 @@ export async function detectState(
   if (!rows.some((r) => r.session === session)) return "none";
   const ps = await deps.run(["ps", "-Ao", "pid=,ppid=,comm=,args="]);
   return classify(rows, ps.exitCode === 0 ? parseProcesses(ps.stdout) : [], session, agentName);
+}
+
+/**
+ * Which of the candidate names a launch should use, and in what state.
+ *
+ * NEVER ORPHAN A RUNNING AGENT. A host upgraded to 0.9 still runs agents in
+ * `suite-` sessions; a launch that looked only for `burrow-X` would find
+ * nothing and start a second agent beside the live one. So:
+ *
+ *  - the burrow name, when it exists in any state, is the answer;
+ *  - otherwise a LIVE legacy twin is the answer, and the caller attaches to it
+ *    exactly as it would to its own live session;
+ *  - otherwise a STALE legacy twin is named in `recycle` (the agent in it is
+ *    already gone; the caller kills that shell) and the burrow name is created;
+ *  - otherwise the burrow name, `none`.
+ */
+export async function resolveLaunchSession(
+  candidates: string[],
+  deps: TmuxDeps,
+  agentName: string = AGENT_NAME,
+): Promise<{ session: string; state: SessionState; recycle?: string }> {
+  const [primary, ...legacy] = candidates;
+  if (primary === undefined) throw new Error("resolveLaunchSession requires a candidate");
+  const state = await detectState(primary, deps, agentName);
+  if (state !== "none") return { session: primary, state };
+  for (const name of legacy) {
+    const s = await detectState(name, deps, agentName);
+    if (s === "live") return { session: name, state: "live" };
+    if (s === "stale") return { session: primary, state: "none", recycle: name };
+  }
+  return { session: primary, state: "none" };
 }
 
 /* ------------------------------------------------------------------------- */

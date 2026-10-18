@@ -515,6 +515,33 @@ describe("inventory primitives", () => {
     expect(rows.map((r) => [r.root, r.wiring])).toEqual([["/repo/sub", "match"]]);
   });
 
+  test("a live 0.8 suite- session is found for both a never-launched folder and a roster entry", async () => {
+    const src: InventorySource = {
+      records: [{ record: { dir: "/w/fresh", suiteUrl: "https://one.example.invalid", runtimeId: "rt-a", headerNames: [] }, path: "/p" }],
+      roster: [{ session: "suite-old-11111111", command: ["tmux"], cwd: "/w/old", kind: "claude", recordedAt: "" }],
+      claudeJson: null,
+      sessionNaming: "cwd",
+      readFile: () => null,
+    };
+    const derived = sessionNameFor({ naming: "cwd", cwd: "/w/fresh" });
+    const legacy = derived.replace(/^burrow-/, "suite-");
+    // Live: the fresh folder's agent under its suite- name, the roster entry relaunched as burrow-.
+    const live = new Set([legacy, "burrow-old-11111111"]);
+    const asked: string[] = [];
+    const rows = await inventoryRows(src, async (s) => {
+      asked.push(s);
+      return live.has(s) ? "live" : "none";
+    });
+    expect(rows.map((r) => [r.root, r.session, r.state])).toEqual([
+      ["/w/fresh", legacy, "live"],
+      ["/w/old", "burrow-old-11111111", "live"],
+    ]);
+    expect(asked).toEqual([derived, legacy, "suite-old-11111111", "burrow-old-11111111"]);
+    // Positive control: nothing live reports the burrow name and the recorded name, not running.
+    const none = await inventoryRows(src, async () => "none");
+    expect(none.map((r) => r.session)).toEqual([derived, "suite-old-11111111"]);
+  });
+
   test("ROOT_CONFIG_FILE is deepseek's AGENT_CONFIG_FILE", () => {
     expect(ROOT_CONFIG_FILE).toBe(AGENT_CONFIG_FILE);
   });

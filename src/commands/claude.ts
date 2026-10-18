@@ -51,6 +51,8 @@ import {
   planLaunch,
   quoteArgv,
   sessionOptionsArgv,
+  resolveLaunchSession,
+  sessionCandidatesFromConfig,
   sessionNameFromConfig,
   TMUX,
   type NestingPlan,
@@ -668,10 +670,26 @@ export async function runClaude(deps: ClaudeDeps, options: ClaudeOptions): Promi
     return deps.exec(agentArgv(options.userArgs));
   }
 
-  const base = sessionNameFromConfig(config, deps.cwd, options.explicitSession);
-  const session = options.force ? uniqueSessionName(base, await listSessionNames(deps.tmux)) : base;
-
-  const sessionState = options.force ? "none" : await detectState(session, deps.tmux);
+  // Not forced: the burrow name, or a live 0.8 `suite-` twin of it, which is
+  // attached to rather than duplicated (resolveLaunchSession).
+  let session: string;
+  let sessionState: SessionState;
+  if (options.force) {
+    const base = sessionNameFromConfig(config, deps.cwd, options.explicitSession);
+    session = uniqueSessionName(base, await listSessionNames(deps.tmux));
+    sessionState = "none";
+  } else {
+    const found = await resolveLaunchSession(
+      sessionCandidatesFromConfig(config, deps.cwd, options.explicitSession),
+      deps.tmux,
+    );
+    session = found.session;
+    sessionState = found.state;
+    if (found.recycle !== undefined) {
+      deps.out(staleNotice(found.recycle));
+      await deps.tmux.run(killSessionArgv(found.recycle));
+    }
+  }
 
   const plan = decide(
     {

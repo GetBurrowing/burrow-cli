@@ -15,6 +15,7 @@
  */
 
 import { stateEntry, type Env } from "./paths.ts";
+import { SESSION_PREFIXES, isWatcherSession, prefixTwin } from "./tmux.ts";
 
 export interface RosterEntry {
   /** tmux session name — the identity, and the dedupe key. */
@@ -110,14 +111,19 @@ export interface RestoreDecision {
  * they overwrite each other's edits, and the damage surfaces later as a compile
  * error nobody can attribute. Restore must be a no-op on a healthy box, which
  * also makes it safe to run by hand at any time.
+ *
+ * An entry is also skipped when its PREFIX TWIN is live: a `suite-X` entry
+ * whose agent now runs as `burrow-X`, or the reverse. Either way the agent is
+ * up, and starting the other name would put a second one beside it.
  */
 export function restorePlan(entries: RosterEntry[], liveSessions: string[]): RestoreDecision[] {
   const live = new Set(liveSessions);
-  return entries.map((entry) =>
-    live.has(entry.session)
-      ? { entry, action: "skip" as const, reason: "already running" }
-      : { entry, action: "start" as const, reason: "not running" },
-  );
+  return entries.map((entry) => {
+    if (live.has(entry.session)) return { entry, action: "skip" as const, reason: "already running" };
+    const twin = prefixTwin(entry.session);
+    if (twin !== null && live.has(twin)) return { entry, action: "skip" as const, reason: `already running as ${twin}` };
+    return { entry, action: "start" as const, reason: "not running" };
+  });
 }
 
 /* ------------------------------------------------------------------------- */
@@ -150,13 +156,15 @@ export function adoptEntries(
   running: RunningSession[],
   existing: RosterEntry[],
   now: string,
-  // Not renamed in 0.8.0: live tmux sessions on upgraded hosts carry this prefix.
-  prefix = "suite-",
+  // Both: `burrow-` from 0.9, and `suite-` for a live session that predates it.
+  prefixes: readonly string[] = SESSION_PREFIXES,
 ): RosterEntry[] {
   const known = new Set(existing.map((e) => e.session));
   const out: RosterEntry[] = [];
   for (const r of running) {
-    if (!r.session.startsWith(prefix)) continue;
+    if (!prefixes.some((p) => r.session.startsWith(`${p}-`))) continue;
+    // The watcher's own fallback session carries the prefix and runs no agent.
+    if (isWatcherSession(r.session)) continue;
     if (known.has(r.session)) continue;
     if (r.argv.length === 0 || r.cwd === "") continue;
     out.push({

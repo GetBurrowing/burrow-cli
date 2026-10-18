@@ -210,6 +210,16 @@ describe("session listing primitives", () => {
     expect(rows).toEqual([{ name: "suite-a-1", created: 1_700_000_000 }]);
   });
 
+  test("status lists both prefixes: burrow- and a live 0.8 suite- session", () => {
+    const rows = [
+      { name: "burrow-a-1", created: 1 },
+      { name: "suite-dalton-67ad924d", created: 1 },
+      { name: "suite-oddjob", created: 1 },
+      { name: "burrowed", created: 1 },
+    ];
+    expect(ownSessions(rows).map((r) => r.name)).toEqual(["burrow-a-1", "suite-dalton-67ad924d", "suite-oddjob"]);
+  });
+
   test("only our own prefix is ours", () => {
     const rows = [
       { name: `${SESSION_PREFIX}-x-1`, created: 1 },

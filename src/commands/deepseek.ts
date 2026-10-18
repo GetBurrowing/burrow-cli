@@ -39,8 +39,9 @@ import { bothNames, envValue } from "../env_names.ts";
 import {
   attachArgv,
   composeNewSession,
-  detectState,
+  derivedCandidates,
   liveTmuxDeps,
+  resolveLaunchSession,
   nestingPlan,
   SESSION_PREFIX,
   TMUX,
@@ -658,7 +659,7 @@ export interface SessionOptions {
 }
 
 export async function runInSession(
-  session: string,
+  requested: string,
   argv: string[],
   cwd: string,
   env: Record<string, string>,
@@ -678,7 +679,15 @@ export async function runInSession(
     return await deps.exec(argv, { cwd, env });
   }
 
-  const state = await detectState(session, tmux, options.agentName ?? "dsh");
+  // NEVER ORPHAN A RUNNING AGENT: a live 0.8 `suite-` twin of a derived
+  // `burrow-` name is attached to, never duplicated (resolveLaunchSession).
+  const found = await resolveLaunchSession(derivedCandidates(requested), tmux, options.agentName ?? "dsh");
+  const session = found.session;
+  const state = found.state;
+  if (found.recycle !== undefined) {
+    deps.stderr.write(`${CLI_NAME}: recycling stale session ${found.recycle}; starting ${session}\n`);
+    await tmux.run([TMUX, "kill-session", "-t", found.recycle]);
+  }
 
   if (state === "stale") {
     deps.stderr.write(`${CLI_NAME}: recycling stale session ${session}\n`);

@@ -376,7 +376,7 @@ none works unchanged.
 
 Stamps a [Hermes Agent](https://github.com/NousResearch/hermes-agent) root
 Suite-ready, then runs its gateway (`hermes gateway run`) in the tmux session
-`suite-<root dir name>`. Hermes state lives under the root
+`burrow-<root dir name>`. Hermes state lives under the root
 (`HERMES_HOME=<root>/.hermes` unless `--hermes-home` says otherwise), never in
 `~/.hermes`.
 
@@ -471,7 +471,7 @@ is preserved and reported in the stamp warnings.
 
 Stamps an [OpenClaw](https://www.npmjs.com/package/openclaw) root Suite-ready
 through OpenClaw's own non-interactive path, then runs `openclaw gateway run` in
-the tmux session `suite-<root dir name>`. State lives under the root
+the tmux session `burrow-<root dir name>`. State lives under the root
 (`OPENCLAW_STATE_DIR=<root>/.openclaw`, `OPENCLAW_CONFIG_PATH=<root>/.openclaw/openclaw.json`,
 `OPENCLAW_HOME=<root>`), never in `~/.openclaw`. The config is written by
 upstream: `openclaw onboard --non-interactive --accept-risk` for the base, then
@@ -534,7 +534,7 @@ burrow codex --root ~/agents/oddjob --approvals decline --sandbox workspace-writ
 ```
 
 ```
-burrow codex                    connection, Codex login, then tmux session suite-<agent>
+burrow codex                    connection, Codex login, then tmux session burrow-<agent>
   └ burrow codex --no-session   the bridge: Burrow runtime socket ⇄ app-server
       └ codex app-server       Burrow MCP servers passed as -c overrides
           └ burrow codex --reply-mcp   the suite-channel MCP server (suite_reply …)
@@ -574,7 +574,7 @@ burrow codex                    connection, Codex login, then tmux session suite
   or permission request is refused. Forms meant for a human (MCP elicitations,
   requests for user input) are declined under both settings. Every decision is
   logged in the pane.
-- **Supervision.** The same as `burrow claude`: tmux session `suite-<agent>`,
+- **Supervision.** The same as `burrow claude`: tmux session `burrow-<agent>`,
   recorded for `burrow restore`, and the watchdog ensured on create.
   `--no-session` runs the bridge in the foreground for a service manager. If
   the app-server exits, the bridge exits non-zero rather than idling.
@@ -829,7 +829,7 @@ under the data dir.
 **Also still named `suite`, for the same reason (renaming would create a second
 copy beside the live one):** the watchdog and restore units (`suite-watch`,
 `suite-agents`, and their launchd labels), the binary path those units run
-(`~/.local/bin/suite`), tmux session names (`suite-<agent>`), the
+(`~/.local/bin/suite`), the
 `--suite-url` flag (`--burrow-url` is accepted too, and wins), the
 `SUITE_CONVENTIONS.md` file in folders that have it, and the GitHub repo
 `Startup-Suite/suite-cli` and the channel plugin repo names.
@@ -897,8 +897,8 @@ interface, and one implementation behind one is just indirection.
 
 ### Session naming — per working directory
 
-The session name is `suite-<directory name>-<8 hex of sha256 of the absolute
-path>`, e.g. `suite-ledger-3f2a91c0`. Two requirements decide this:
+The session name is `burrow-<directory name>-<8 hex of sha256 of the absolute
+path>`, e.g. `burrow-ledger-3f2a91c0`. Two requirements decide this:
 
 * **`burrow claude` twice from the same place must find the same session.** The
   name is a pure function of the resolved absolute path, so nothing has to be
@@ -906,6 +906,18 @@ path>`, e.g. `suite-ledger-3f2a91c0`. Two requirements decide this:
 * **Two projects must not collide.** The digest is of the absolute path, so
   `~/a/ledger` and `~/b/ledger` share the readable half and differ in the half
   that identifies them.
+
+**A session started before 0.9 keeps its `suite-` name until it next
+restarts.** Every launch verb looks for that `suite-` twin when no `burrow-`
+session exists and attaches to it rather than starting a second agent beside
+it, and `burrow status`, `burrow watch` and `burrow restore` list both
+prefixes. Renaming a live session would break every outside reference to it
+(keepalive scripts, a hand-written watchdog, `tmux attach -t`), so 0.9 never
+does. When a recorded `suite-` agent is dead, `burrow restore` relaunches it as
+`burrow-` and rewrites its roster entry in the same write. The one exception is
+an entry that runs a dev checkout's `cli.ts`, which keeps its recorded name.
+The watcher's own fallback session (`burrow-watch`, or `suite-watch` on a host
+not yet swapped) is never treated as an agent.
 
 The two alternatives were rejected on that second requirement.
 **Per runtime id** gives one box one session, so the second project silently

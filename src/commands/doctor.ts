@@ -75,9 +75,9 @@ import {
 } from "../ui.ts";
 import {
   TMUX,
-  detectState,
   liveTmuxDeps,
-  sessionNameFromConfig,
+  resolveLaunchSession,
+  sessionCandidatesFromConfig,
   type RunResult,
   type SessionState,
   type TmuxDeps,
@@ -1509,8 +1509,10 @@ async function sessionCheck(deps: DoctorDeps, tmuxPath: string | null): Promise<
     return { id: "session", label: "session", status: "skip", reason: "needs tmux" };
   }
   const config = deps.config ?? emptyConfig();
-  const name = sessionNameFromConfig(config, deps.cwd);
-  const state: SessionState = await detectState(name, deps.tmux);
+  // The burrow name, or a 0.8 `suite-` twin still running (or stale) under its old name.
+  const found = await resolveLaunchSession(sessionCandidatesFromConfig(config, deps.cwd), deps.tmux);
+  const name = found.recycle ?? found.session;
+  const state: SessionState = found.recycle !== undefined ? "stale" : found.state;
   if (state === "live") {
     return { id: "session", label: "session", status: "pass", value: "agent running", detail: name };
   }

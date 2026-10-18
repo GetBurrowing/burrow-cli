@@ -32,7 +32,7 @@ import type { AgentConnection } from "./agent_connections.ts";
 import { parseConfig } from "./config.ts";
 import type { RosterEntry } from "./roster.ts";
 import { STAMP_FILE } from "./stamp.ts";
-import { sessionNameFor, type SessionState } from "./tmux.ts";
+import { prefixTwin, sessionNameCandidates, type SessionState } from "./tmux.ts";
 import { CHANNEL_SERVER, TOOLS_SERVER } from "./commands/init.ts";
 import { entryValue } from "./env_names.ts";
 
@@ -283,13 +283,31 @@ function rootConfig(src: InventorySource, dir: string): { runtimeId: string; sui
   }
 }
 
-function neverLaunchedSession(src: InventorySource, dir: string, runtimeId: string | null): string {
+/** The names a never-launched folder's session could have: the burrow name, then its 0.8 `suite-` twin. */
+function neverLaunchedCandidates(src: InventorySource, dir: string, runtimeId: string | null): string[] {
   try {
-    return sessionNameFor({ naming: src.sessionNaming, cwd: dir, runtimeId: runtimeId ?? undefined });
+    return sessionNameCandidates({ naming: src.sessionNaming, cwd: dir, runtimeId: runtimeId ?? undefined });
   } catch {
     // `runtime` naming with no runtime id: the per-folder rule still names it.
-    return sessionNameFor({ naming: "cwd", cwd: dir });
+    return sessionNameCandidates({ naming: "cwd", cwd: dir });
   }
+}
+
+/**
+ * The first candidate that exists in any state, with that state; else the
+ * first candidate, `none`. A live 0.8 `suite-` session is reported under its
+ * own name rather than as a missing `burrow-` one.
+ */
+async function firstPresent(
+  names: string[],
+  kind: RosterEntry["kind"] | null,
+  detect: DetectState,
+): Promise<{ session: string; state: SessionState }> {
+  for (const session of names) {
+    const state = await detect(session, kind);
+    if (state !== "none") return { session, state };
+  }
+  return { session: names[0] as string, state: "none" };
 }
 
 /**
@@ -345,16 +363,20 @@ export async function inventoryRows(src: InventorySource, detect: DetectState): 
 
     const launched = rosterByDir.get(dir) ?? [];
     if (launched.length === 0) {
-      const session = neverLaunchedSession(src, dir, runtimeId);
-      rows.push({ ...base, session, kind: null, state: await detect(session, null), verdict: null });
+      const { session, state } = await firstPresent(neverLaunchedCandidates(src, dir, runtimeId), null, detect);
+      rows.push({ ...base, session, kind: null, state, verdict: null });
       continue;
     }
     for (const e of [...launched].sort((x, y) => (x.session < y.session ? -1 : x.session > y.session ? 1 : 0))) {
+      // The recorded name, then its prefix twin: an entry recorded as `suite-X`
+      // whose agent was relaunched as `burrow-X` (or the reverse) is running.
+      const twin = prefixTwin(e.session);
+      const found = await firstPresent(twin === null ? [e.session] : [e.session, twin], e.kind, detect);
       rows.push({
         ...base,
-        session: e.session,
+        session: found.state === "none" ? e.session : found.session,
         kind: e.kind,
-        state: recordedState(await detect(e.session, e.kind)),
+        state: recordedState(found.state),
         verdict: STAMPED_KINDS.includes(e.kind) ? lastVerdict(src.readFile(join(e.cwd, STAMP_FILE))) : null,
       });
     }

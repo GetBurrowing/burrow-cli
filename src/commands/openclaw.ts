@@ -7,7 +7,7 @@
  * state lives under it (`OPENCLAW_STATE_DIR=<root>/.openclaw`,
  * `OPENCLAW_CONFIG_PATH=<root>/.openclaw/openclaw.json`,
  * `OPENCLAW_HOME=<root>`), NEVER `~/.openclaw`; the gateway runs in tmux
- * `suite-<name>` through a `--no-session` relaunch of this CLI.
+ * `burrow-<name>` through a `--no-session` relaunch of this CLI.
  *
  * `--stamp-only` is the stage-1 machine contract (src/stamp_result.ts): one
  * JSON document on stdout, exit 0/1/2/3, and no session started. It is THE
@@ -1274,7 +1274,7 @@ export async function stampOpenclaw(args: string[], deps: OpenclawDeps, io: Stam
  * `--stamp-only`: the machine contract, nothing else.
  * `--gateway-only` (the relaunch inside tmux): exec `openclaw gateway run`.
  * Otherwise: stamp (human lines on stderr), then start or attach to the
- * `suite-<name>` session — or, with `--no-session`, run the gateway in the
+ * `burrow-<name>` session — or, with `--no-session`, run the gateway in the
  * foreground.
  */
 export async function runOpenclaw(args: string[], deps: OpenclawDeps): Promise<number> {

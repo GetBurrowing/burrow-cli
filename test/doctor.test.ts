@@ -101,6 +101,8 @@ interface FakeOptions {
   env?: Record<string, string | undefined>;
   exists?: (path: string) => boolean;
   sessionState?: "live" | "stale" | "none";
+  /** The name the pane listing reports the session under. Default: the derived burrow name. */
+  paneSession?: string;
   config?: SuiteConfig | null;
   color?: boolean;
   utf8?: boolean;
@@ -233,7 +235,7 @@ function fakeDeps(options: FakeOptions = {}): DoctorDeps & { lines: string[]; ar
     // Stage 4's detector: a pane listing, then a process snapshot.
     if (name === "tmux" && args[0] === "list-panes") {
       if (sessionState === "none") return ok;
-      return { ...ok, stdout: `${SESSION_NAME}\t4242\t-sh\n` };
+      return { ...ok, stdout: `${options.paneSession ?? SESSION_NAME}\t4242\t-sh\n` };
     }
     if (name === "ps") {
       if (sessionState === "live") return { ...ok, stdout: "  4243  4242 claude claude\n" };
@@ -488,6 +490,25 @@ describe("each check fires on a broken input", () => {
     // is being detected — not merely "a session exists".
     const live = await report({ sessionState: "live" });
     expect(byId(live.checks, "session").status).toBe("pass");
+  });
+});
+
+describe("doctor finds a 0.8 suite- session under its old name", () => {
+  const legacy = SESSION_NAME.replace(/^burrow-/, "suite-");
+  test("the derived name is burrow-; a live suite- twin passes as running, named as itself", async () => {
+    expect(SESSION_NAME).toMatch(/^burrow-/);
+    const { checks } = await report({ sessionState: "live", paneSession: legacy });
+    expect(byId(checks, "session")).toMatchObject({ status: "pass", value: "agent running", detail: legacy });
+  });
+
+  test("a stale suite- twin is a failure named as itself, never 'none for this directory'", async () => {
+    const { checks } = await report({ sessionState: "stale", paneSession: legacy });
+    expect(byId(checks, "session")).toMatchObject({ status: "fail", value: "stale", detail: legacy });
+  });
+
+  test("positive control: a session under neither name is none, under the burrow name", async () => {
+    const { checks } = await report({ sessionState: "live", paneSession: "someone-else" });
+    expect(byId(checks, "session")).toMatchObject({ status: "pass", value: "none for this directory", detail: SESSION_NAME });
   });
 });
 

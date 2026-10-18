@@ -60,6 +60,16 @@ describe("target selection", () => {
   test("rows missing a path are skipped rather than defaulted", () => {
     expect(parseTargets("suite-x\n")).toEqual([]);
   });
+
+  test("both prefixes are ours: burrow- from 0.9, suite- for a session that predates it", () => {
+    const rows = ["burrow-app-1a2b\t/home/a", "suite-dalton-67ad924d\t/home/d", "burrowed\t/home/x"].join("\n");
+    expect(parseTargets(rows).map((t) => t.session)).toEqual(["burrow-app-1a2b", "suite-dalton-67ad924d"]);
+  });
+
+  test("the watcher's own session is never a target, under either prefix", () => {
+    const rows = ["burrow-watch\t/home/w", "suite-watch\t/home/w", "burrow-a\t/home/a"].join("\n");
+    expect(parseTargets(rows).map((t) => t.session)).toEqual(["burrow-a"]);
+  });
 });
 
 describe("reconstructing the recent asks", () => {

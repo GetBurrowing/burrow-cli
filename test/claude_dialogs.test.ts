@@ -295,7 +295,7 @@ function fakeTmux(screens: Record<string, string>) {
 
 describe("suite restore answers the dialogs of the Claude sessions it starts", () => {
   test("claude entries are polled, a hermes entry is not, and both start", async () => {
-    const t = fakeTmux({ "suite-c": fixture("ready.120"), "suite-h": fixture("trust-folder.80") });
+    const t = fakeTmux({ "burrow-c": fixture("ready.120"), "burrow-h": fixture("trust-folder.80") });
     const polled: string[] = [];
     const dialogs: DialogIo = {
       tmux: t.tmux,
@@ -304,8 +304,8 @@ describe("suite restore answers the dialogs of the Claude sessions it starts", (
       log: (s, l) => polled.push(`${s} ${l}`),
     };
     const roster = serializeRoster([
-      { session: "suite-c", command: ["tmux", "new-session", "-d", "-s", "suite-c"], cwd: "/srv/agents/work", kind: "claude", recordedAt: "" },
-      { session: "suite-h", command: ["tmux", "new-session", "-d", "-s", "suite-h"], cwd: "/srv/agents/work", kind: "hermes", recordedAt: "" },
+      { session: "burrow-c", command: ["tmux", "new-session", "-d", "-s", "burrow-c"], cwd: "/srv/agents/work", kind: "claude", recordedAt: "" },
+      { session: "burrow-h", command: ["tmux", "new-session", "-d", "-s", "burrow-h"], cwd: "/srv/agents/work", kind: "hermes", recordedAt: "" },
     ]);
     const deps: RestoreDeps = {
       tmux: t.tmux,
@@ -316,9 +316,9 @@ describe("suite restore answers the dialogs of the Claude sessions it starts", (
       dialogs,
     };
     const r = await runRestore(deps, "/home/agent", { apply: true });
-    expect(r.started).toEqual(["suite-c", "suite-h"]);
+    expect(r.started).toEqual(["burrow-c", "burrow-h"]);
     const captured = t.calls.filter((a) => a[1] === "capture-pane").map((a) => a[4]);
-    expect(captured).toEqual(["=suite-c:"]);
+    expect(captured).toEqual(["=burrow-c:"]);
     // The hermes pane showed a dialog-shaped screen and still got nothing.
     expect(t.calls.filter((a) => a[1] === "send-keys")).toEqual([]);
   });

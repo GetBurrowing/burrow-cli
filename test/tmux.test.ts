@@ -23,6 +23,17 @@ import {
   quoteArgv,
   nestingPlan,
   sanitizeSessionName,
+  LEGACY_SESSION_PREFIX,
+  SESSION_PREFIX,
+  WATCH_SESSION_NAMES,
+  currentPrefixName,
+  derivedCandidates,
+  hasOwnPrefix,
+  hasSessionArgv,
+  isWatcherSession,
+  prefixTwin,
+  resolveLaunchSession,
+  sessionNameCandidates,
   sessionNameFor,
   sessionNameFromConfig,
   sessionOptionsArgv,
@@ -80,7 +91,7 @@ describe("session naming", () => {
       cwd: "/projects/ledger",
       runtimeId: "runtime_00000000-0000-0000-0000-000000000000",
     });
-    expect(rt).toBe("suite-runtime_00000000-0000-0000-0000-000000000000");
+    expect(rt).toBe("burrow-runtime_00000000-0000-0000-0000-000000000000");
     // Same runtime, different directory, SAME session — the collision that
     // makes this rule non-default, asserted rather than asserted away.
     expect(
@@ -95,7 +106,7 @@ describe("session naming", () => {
     expect(sessionNameFromConfig({ ...base, sessionNaming: "cwd" }, "/projects/ledger")).toBe(
       sessionNameFor({ naming: "cwd", cwd: "/projects/ledger" }),
     );
-    expect(sessionNameFromConfig({ ...base, sessionNaming: "runtime" }, "/projects/ledger")).toBe("suite-runtime_1");
+    expect(sessionNameFromConfig({ ...base, sessionNaming: "runtime" }, "/projects/ledger")).toBe("burrow-runtime_1");
     // A per-invocation override, which is a different request from changing
     // the rule and therefore is not persisted here.
     expect(sessionNameFromConfig({ ...base, sessionNaming: "cwd" }, "/projects/ledger", "scratch")).toBe("scratch");
@@ -419,6 +430,29 @@ test("the real-tmux tests below are not silently skipped", () => {
 
 describe.if(HAVE_TMUX)("against a real tmux", () => {
   test(
+    "a live 0.8 suite- session is found under its old name, and no burrow- twin is created",
+    async () => {
+      const rest = `b2-legacy-${Math.random().toString(36).slice(2, 10)}`;
+      const legacy = `${LEGACY_SESSION_PREFIX}-${rest}`;
+      const current = `${SESSION_PREFIX}-${rest}`;
+      created.add(legacy);
+      created.add(current);
+      const start = await deps.run(newSessionArgv({ session: legacy, command: [agentStub(), "900"] }));
+      expect(start.exitCode).toBe(0);
+      expect(await until(() => detectState(legacy, deps), (s) => s === "live")).toBe("live");
+
+      expect(await resolveLaunchSession(derivedCandidates(current), deps)).toEqual({ session: legacy, state: "live" });
+      expect((await deps.run(hasSessionArgv(current))).exitCode).not.toBe(0);
+
+      // Positive control: with the legacy session gone, the burrow name is the answer.
+      await deps.run(killSessionArgv(legacy));
+      expect(await until(() => detectState(legacy, deps), (s) => s === "none")).toBe("none");
+      expect(await resolveLaunchSession(derivedCandidates(current), deps)).toEqual({ session: current, state: "none" });
+    },
+    30_000,
+  );
+
+  test(
     "arguments reach the process inside the pane byte for byte",
     async () => {
       const out = resolve(STUB_DIR, "argv.bin");
@@ -525,5 +559,80 @@ describe("session options", () => {
       expect(argv).not.toContain("-g");
       expect(argv[2]).toBe("-t");
     }
+  });
+});
+
+/* ------------------------------------------------------------------------- */
+/* The burrow- prefix and its 0.8 suite- twin                                 */
+/* ------------------------------------------------------------------------- */
+
+describe("session prefixes", () => {
+  test("new sessions are named burrow-*; suite- is the legacy prefix", () => {
+    expect(SESSION_PREFIX).toBe("burrow");
+    expect(LEGACY_SESSION_PREFIX).toBe("suite");
+    expect(sessionNameFor({ naming: "cwd", cwd: "/projects/ledger" })).toMatch(/^burrow-ledger-[0-9a-f]{8}$/);
+  });
+
+  test("a derived name has a suite- twin; an explicit --session has none", () => {
+    const [cur, old] = sessionNameCandidates({ naming: "cwd", cwd: "/projects/ledger" });
+    expect(cur).toMatch(/^burrow-ledger-/);
+    expect(old).toBe(cur?.replace(/^burrow-/, "suite-"));
+    expect(sessionNameCandidates({ naming: "runtime", cwd: "/x", runtimeId: "rt" })).toEqual(["burrow-rt", "suite-rt"]);
+    expect(sessionNameCandidates({ naming: "cwd", cwd: "/x", explicit: "mine" })).toEqual(["mine"]);
+    expect(derivedCandidates("burrow-oddjob")).toEqual(["burrow-oddjob", "suite-oddjob"]);
+    expect(derivedCandidates("mine")).toEqual(["mine"]);
+  });
+
+  test("twins, current names, own prefixes and the watcher sessions", () => {
+    expect(prefixTwin("burrow-a")).toBe("suite-a");
+    expect(prefixTwin("suite-a")).toBe("burrow-a");
+    expect(prefixTwin("other")).toBeNull();
+    expect(currentPrefixName("suite-dalton-67ad924d")).toBe("burrow-dalton-67ad924d");
+    expect(currentPrefixName("burrow-x")).toBe("burrow-x");
+    expect(hasOwnPrefix("suite-x") && hasOwnPrefix("burrow-x")).toBe(true);
+    expect(hasOwnPrefix("suitex") || hasOwnPrefix("my-work")).toBe(false);
+    expect(WATCH_SESSION_NAMES).toEqual(["burrow-watch", "suite-watch"]);
+    expect(isWatcherSession("suite-watch") && isWatcherSession("burrow-watch")).toBe(true);
+    expect(isWatcherSession("suite-watchdog")).toBe(false);
+  });
+});
+
+describe("resolveLaunchSession", () => {
+  /** A fake server: `panes` rows plus a ps snapshot. */
+  function server(panes: string, ps: string) {
+    const calls: string[][] = [];
+    const d = {
+      env: {},
+      which: () => "/usr/bin/tmux",
+      run: async (argv: string[]) => {
+        calls.push(argv);
+        if (argv[1] === "list-panes") return { exitCode: 0, stdout: panes, stderr: "" };
+        if (argv[0] === "ps") return { exitCode: 0, stdout: ps, stderr: "" };
+        return { exitCode: 0, stdout: "", stderr: "" };
+      },
+    };
+    return { d, calls };
+  }
+  const LIVE_PS = "  10     1 zsh -zsh\n  11    10 claude claude\n";
+  const DEAD_PS = "  10     1 zsh -zsh\n";
+
+  test("a live suite- twin is the answer when burrow- does not exist", async () => {
+    const { d } = server("suite-x\t10\tzsh\n", LIVE_PS);
+    expect(await resolveLaunchSession(["burrow-x", "suite-x"], d)).toEqual({ session: "suite-x", state: "live" });
+  });
+
+  test("positive control: no twin gives the burrow name, none", async () => {
+    const { d } = server("", "");
+    expect(await resolveLaunchSession(["burrow-x", "suite-x"], d)).toEqual({ session: "burrow-x", state: "none" });
+  });
+
+  test("a stale suite- twin is named for recycling and the burrow name is created", async () => {
+    const { d } = server("suite-x\t10\tzsh\n", DEAD_PS);
+    expect(await resolveLaunchSession(["burrow-x", "suite-x"], d)).toEqual({ session: "burrow-x", state: "none", recycle: "suite-x" });
+  });
+
+  test("burrow- wins whenever it exists, even beside a live suite- twin", async () => {
+    const { d } = server("burrow-x\t10\tzsh\nsuite-x\t10\tzsh\n", LIVE_PS);
+    expect(await resolveLaunchSession(["burrow-x", "suite-x"], d)).toEqual({ session: "burrow-x", state: "live" });
   });
 });

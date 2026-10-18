@@ -348,7 +348,7 @@ describe("suite codex: login and launch", () => {
     expect(t.bridges[0]!.config.runtimeId).toBe("oddjob-codex");
   });
 
-  test("without --no-session: a tmux session suite-<agent> running this CLI again, recorded for restore", async () => {
+  test("without --no-session: a tmux session burrow-<agent> running this CLI again, recorded for restore", async () => {
     const tmuxCalls: string[][] = [];
     const roster: string[] = [];
     const t = await deps({
@@ -370,10 +370,10 @@ describe("suite codex: login and launch", () => {
     };
     expect(await runCodex(["--approvals", "decline"], t.d)).toBe(0);
     const create = tmuxCalls.find((a) => a.includes("new-session"))!;
-    expect(create).toContain("suite-oddjob");
+    expect(create).toContain("burrow-oddjob");
     const tail = create.slice(create.indexOf("codex"));
     expect(tail).toEqual(["codex", "--root", join(t.home, "agent"), "--no-session", "--approvals", "decline", "--sandbox", "danger-full-access"]);
     expect(create.join(" ")).not.toContain("tok-123");
-    expect(JSON.parse(roster[0]!).agents[0]).toMatchObject({ session: "suite-oddjob", kind: "codex" });
+    expect(JSON.parse(roster[0]!).agents[0]).toMatchObject({ session: "burrow-oddjob", kind: "codex" });
   });
 });

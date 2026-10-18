@@ -4,7 +4,7 @@
  *
  * A sibling of `suite deepseek` in shape: an agent owns a ROOT, the harness
  * state lives under it (`HERMES_HOME` defaults to `<root>/.hermes`, NEVER
- * `~/.hermes`), and the long-lived process runs in tmux `suite-<name>` through
+ * `~/.hermes`), and the long-lived process runs in tmux `burrow-<name>` through
  * a `--no-session` relaunch of this CLI.
  *
  * `--stamp-only` is the stage-1 machine contract (src/stamp_result.ts): one
@@ -1345,7 +1345,7 @@ async function runGateway(opts: HermesOptions, deps: HermesDeps): Promise<number
  * `--stamp-only`: the machine contract, nothing else.
  * `--gateway-only` (the relaunch inside tmux): exec `hermes gateway run`.
  * Otherwise: stamp (human lines on stderr), then start or attach to the
- * `suite-<name>` session — or, with `--no-session`, run the gateway in the
+ * `burrow-<name>` session — or, with `--no-session`, run the gateway in the
  * foreground.
  */
 function stampParts(args: string[], deps: HermesDeps) {

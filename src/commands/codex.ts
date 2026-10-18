@@ -28,7 +28,7 @@
  *     reaches Codex only as the environment variable its
  *     `bearer_token_env_var` names — Codex's one route for an MCP bearer token —
  *     and never in an argv (asserted).
- *  4. THE SAME SESSION MACHINERY. tmux session `suite-<agent>`, recorded for
+ *  4. THE SAME SESSION MACHINERY. tmux session `burrow-<agent>`, recorded for
  *     `suite restore`, watchdog ensured on create; `--no-session` is what the
  *     pane and a service manager run.
  */

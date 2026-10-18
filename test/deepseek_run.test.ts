@@ -252,5 +252,23 @@ describe("C: from the agent folder, a live session is attached and a stale one r
     const created = c.tmuxCalls.find((a) => a[1] === "new-session") ?? [];
     expect(created.join(" ")).toContain(`deepseek --root ${root} --no-session`);
     for (const s of SECRETS) expect(created.join(" ")).not.toContain(s);
+    // The agent in the 0.8 session was gone: it comes back under the burrow name.
+    expect(created.slice(0, 5)).toEqual(["tmux", "new-session", "-d", "-s", "burrow-oddjob"]);
+  });
+
+  test("the fake tmux above holds only the 0.8 name: LIVE attached to suite-oddjob with no burrow-oddjob created", async () => {
+    const { d, c } = deps({ cwd: root, tty: false, tmux: "live" });
+    expect(await runDeepseek([], d)).toBe(0);
+    expect(c.tmuxCalls.filter((a) => a.includes("burrow-oddjob") && a[1] !== "list-panes")).toEqual([]);
+    expect(c.stderr).toContain("suite-oddjob is running detached");
+  });
+
+  test("positive control: with no session at all, the launch creates burrow-oddjob", async () => {
+    const { d, c } = deps({ cwd: root, tty: false, tmux: "none" });
+    expect(await runDeepseek([], d)).toBe(0);
+    const created = c.tmuxCalls.filter((a) => a[1] === "new-session");
+    expect(created).toHaveLength(1);
+    expect(created[0]?.slice(0, 5)).toEqual(["tmux", "new-session", "-d", "-s", "burrow-oddjob"]);
+    expect(c.stderr).toContain("started burrow-oddjob");
   });
 });
