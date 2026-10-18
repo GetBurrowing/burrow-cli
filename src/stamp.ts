@@ -69,6 +69,7 @@ import {
   type StdinState,
   type TokenRef,
 } from "./token_ref.ts";
+import { CLI_NAME } from "./version.ts";
 
 export const IDENTITY_FILE = "suite.json";
 export const STAMP_FILE = ".suite-stamp.json";
@@ -314,7 +315,7 @@ async function runStampInner(
 
   const suiteUrl = req.suiteUrl ?? existing?.suiteUrl ?? "";
   const runtimeId = req.runtimeId ?? existing?.runtimeId ?? "";
-  if (suiteUrl === "") throw refused("suite_url_required", "--suite-url is required (none given and none recorded)");
+  if (suiteUrl === "") throw refused("suite_url_required", "--burrow-url (or --suite-url) is required (none given and none recorded)");
   if (runtimeId === "") throw refused("runtime_id_required", "--runtime-id is required (none given and none recorded)");
   result.agent.runtime_id = runtimeId;
 
@@ -337,7 +338,7 @@ async function runStampInner(
   if (!writer.measuredHarnessVersions.includes(harnessVersion)) {
     const w = unverifiedWarning(writer.harness, harnessVersion);
     result.warnings.push(w);
-    io.stderr(`suite: warning: ${w}\n`);
+    io.stderr(`${CLI_NAME}: warning: ${w}\n`);
   }
 
   const inputs: StampInputs = {
@@ -376,18 +377,18 @@ async function runStampInner(
     identityAction.applied = true;
   }
   await writer.apply(inputs, actions);
-  for (const a of reportedActions(progress, null)) io.stderr(`suite: ${a.kind} ${a.target}: ${a.outcome}${a.applied ? "" : " (not applied)"}\n`);
+  for (const a of reportedActions(progress, null)) io.stderr(`${CLI_NAME}: ${a.kind} ${a.target}: ${a.outcome}${a.applied ? "" : " (not applied)"}\n`);
   for (const w of writer.warnings?.(inputs) ?? []) {
     const line = redact(w, progress.secrets);
     result.warnings.push(line);
-    io.stderr(`suite: warning: ${line}\n`);
+    io.stderr(`${CLI_NAME}: warning: ${line}\n`);
   }
 
   const verdict = await writer.validate(inputs);
   const aggregated: ValidationVerdict = { verdict: aggregateVerdict(verdict.checks), checks: verdict.checks };
   result.validation = aggregated;
   for (const c of aggregated.checks) {
-    if (c.verdict !== "pass") io.stderr(`suite: check ${c.command}: ${c.verdict}${c.raw ? `: ${c.raw}` : ""}\n`);
+    if (c.verdict !== "pass") io.stderr(`${CLI_NAME}: check ${c.command}: ${c.verdict}${c.raw ? `: ${c.raw}` : ""}\n`);
   }
 
   const recordAction = await writeRecord(stampPath, progress.draft, aggregated.verdict);
@@ -444,13 +445,13 @@ export async function runStamp(
       try {
         record = await writeRecord(join(result.agent.root, STAMP_FILE), progress.draft, "fail");
       } catch (e) {
-        io.stderr(`suite: could not record the failed stamp: ${e instanceof Error ? e.message : String(e)}\n`);
+        io.stderr(`${CLI_NAME}: could not record the failed stamp: ${e instanceof Error ? e.message : String(e)}\n`);
       }
     }
     result.actions = reportedActions(progress, record);
     result.changed = result.actions.some(changedTheDisk);
-    for (const a of result.actions) if (!a.applied) io.stderr(`suite: ${a.kind} ${a.target}: ${a.outcome} (not applied)\n`);
-    io.stderr(`suite: ${redact(failure.message, progress.secrets)}\n`);
+    for (const a of result.actions) if (!a.applied) io.stderr(`${CLI_NAME}: ${a.kind} ${a.target}: ${a.outcome} (not applied)\n`);
+    io.stderr(`${CLI_NAME}: ${redact(failure.message, progress.secrets)}\n`);
   }
   return { result, exitCode: exitCodeFor(result, failure), secrets: progress.secrets };
 }

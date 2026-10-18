@@ -143,6 +143,7 @@ export function adoptEntries(
   running: RunningSession[],
   existing: RosterEntry[],
   now: string,
+  // Not renamed in 0.8.0: live tmux sessions on upgraded hosts carry this prefix.
   prefix = "suite-",
 ): RosterEntry[] {
   const known = new Set(existing.map((e) => e.session));

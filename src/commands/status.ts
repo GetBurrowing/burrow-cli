@@ -50,7 +50,7 @@ import {
   type InventoryRow,
   type InventorySource,
 } from "../agent_inventory.ts";
-import { VERSION } from "../version.ts";
+import { VERSION, CLI_NAME } from "../version.ts";
 import { parseRoster, rosterPath, type RosterEntry } from "../roster.ts";
 import { STAMP_FILE } from "../stamp.ts";
 import { HERMES_AGENT_COMM } from "./hermes.ts";
@@ -111,8 +111,8 @@ export function connectionsOf(env: Record<string, string | undefined>): StatusCo
  */
 export function agentIdentityLine(r: InventoryRow): string {
   const marks: string[] = [];
-  if (!r.recorded) marks.push("(unrecorded — run suite init)");
-  if (r.wiring === "cross_wired") marks.push("(cross-wired — run suite doctor)");
+  if (!r.recorded) marks.push(`(unrecorded — run ${CLI_NAME} init)`);
+  if (r.wiring === "cross_wired") marks.push(`(cross-wired — run ${CLI_NAME} doctor)`);
   const detail = [r.runtime_id ?? "no runtime id", r.suite_url ?? "", ...marks].filter((p) => p !== "").join("  ");
   return row("", r.root, detail);
 }
@@ -148,7 +148,7 @@ export async function statusInventory(
 
 /** The 0.7.0 machine connection, said to belong to no folder. */
 export function legacyLine(legacy: { runtimeId: string; suiteUrl: string }): string {
-  return row("legacy", legacy.runtimeId, `not assigned to any folder; run suite init in each agent folder (${legacy.suiteUrl})`);
+  return row("legacy", legacy.runtimeId, `not assigned to any folder; run ${CLI_NAME} init in each agent folder (${legacy.suiteUrl})`);
 }
 
 /**
@@ -308,7 +308,7 @@ export async function runStatus(deps: StatusDeps, now: number = Math.floor(Date.
   if (agents.length === 0 && legacy === null) {
     say(row("agents", "not federated", "no agent folder has a saved connection"));
     say("");
-    say("suite init");
+    say(`${CLI_NAME} init`);
     await sayAgents(deps, roster, options);
     return 1;
   }
@@ -325,7 +325,7 @@ export async function runStatus(deps: StatusDeps, now: number = Math.floor(Date.
     // even on a box that `suite init` never federated.
     say(row("", "not federated", "no agent folder has a saved connection"));
     say("");
-    say("suite init");
+    say(`${CLI_NAME} init`);
     await sayAgents(deps, roster, options);
     return 1;
   }
@@ -360,7 +360,7 @@ export async function runStatus(deps: StatusDeps, now: number = Math.floor(Date.
       (s) => !stamped.has(s.name),
     );
     if (sessions.length === 0) {
-      say(row("sessions", "none", "suite claude starts one"));
+      say(row("sessions", "none", `${CLI_NAME} claude starts one`));
     } else {
       say(row("sessions", String(sessions.length)));
       for (const session of sessions) {

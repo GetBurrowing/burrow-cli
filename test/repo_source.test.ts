@@ -23,6 +23,7 @@ import {
   DEFAULT_GITHUB_OWNER,
   InvalidGithubOwner,
   OWNER_ENV,
+  OWNER_ENV_BURROW,
   apiCommitUrl,
   codeloadUrl,
   httpsCloneUrl,
@@ -74,6 +75,30 @@ describe("ownerFrom", () => {
   test("the refusal names the variable", () => {
     expect(() => ownerFrom({ [OWNER_ENV]: "../x" })).toThrow(OWNER_ENV);
   });
+
+  test("BURROW_GITHUB_OWNER is honoured, and wins over SUITE_GITHUB_OWNER", () => {
+    expect(OWNER_ENV_BURROW).toBe("BURROW_GITHUB_OWNER");
+    expect(ownerFrom({ [OWNER_ENV_BURROW]: "GetBurrowing" })).toBe("GetBurrowing");
+    expect(ownerFrom({ [OWNER_ENV_BURROW]: "GetBurrowing", [OWNER_ENV]: "Startup-Suite" })).toBe("GetBurrowing");
+  });
+
+  test("an empty BURROW_GITHUB_OWNER falls back to SUITE_GITHUB_OWNER", () => {
+    expect(ownerFrom({ [OWNER_ENV_BURROW]: "", [OWNER_ENV]: "GetBurrowing" })).toBe("GetBurrowing");
+  });
+
+  test("the refusal names the variable that SUPPLIED the bad value, not a fixed one", () => {
+    const fromBurrow = (() => {
+      try {
+        ownerFrom({ [OWNER_ENV_BURROW]: "../x", [OWNER_ENV]: "Startup-Suite" });
+      } catch (e) {
+        return e as InvalidGithubOwner;
+      }
+    })();
+    expect(fromBurrow).toBeInstanceOf(InvalidGithubOwner);
+    expect(fromBurrow?.variable).toBe("BURROW_GITHUB_OWNER");
+    expect(fromBurrow?.message.startsWith('BURROW_GITHUB_OWNER="../x"')).toBe(true);
+    expect(() => ownerFrom({ [OWNER_ENV]: "../x" })).toThrow('SUITE_GITHUB_OWNER="../x"');
+  });
 });
 
 describe("URL helpers", () => {
@@ -98,7 +123,7 @@ describe("URL helpers", () => {
 const ROOT = resolve(import.meta.dir, "..");
 const LITERAL = "Startup-Suite";
 /** The one line in install.sh allowed to name the org: its default. */
-const INSTALL_DEFAULT_LINE = 'SUITE_GITHUB_OWNER="${SUITE_GITHUB_OWNER:-Startup-Suite}"';
+const INSTALL_DEFAULT_LINE = 'OWNER="Startup-Suite"';
 
 function walk(dir: string): string[] {
   return readdirSync(dir).flatMap((name) => {
@@ -191,6 +216,12 @@ describe("update.ts: the owner reaches BOTH halves", () => {
       expect(script).not.toContain(DEFAULT_GITHUB_OWNER);
     });
   }
+
+  test("a BURROW_GITHUB_OWNER reaches the installer under the name install.sh reads today", () => {
+    const script = updateArgv(SHA, "curl", { [OWNER_ENV_BURROW]: "GetBurrowing" })[2] ?? "";
+    expect(script).toContain(`https://raw.githubusercontent.com/GetBurrowing/suite-cli/${SHA}/install.sh`);
+    expect(script).toContain(`${OWNER_ENV}='GetBurrowing' SUITE_CLI_REF='${SHA}' sh `);
+  });
 
   test("default: both halves say Startup-Suite", () => {
     const script = updateArgv(SHA, "curl", {})[2] ?? "";

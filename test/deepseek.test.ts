@@ -18,10 +18,13 @@
 import { describe, expect, test } from "bun:test";
 import { parse } from "yaml";
 import {
+  burrowEnvNameForHeader,
   agentNameFromRuntimeId,
   sessionNameForAgent,
   envNameForHeader,
+  libDirCandidates,
   mcpUrl,
+  selfArgv,
   parseDeepseekOptions,
   renderPatch,
   publicEnv,
@@ -148,7 +151,9 @@ describe("renderPatch", () => {
   });
 
   test("carries each operator header through the environment, by name", () => {
-    expect(patch).toContain("X-Example-Id: !!js process.env[\"SUITE_HEADER_X_EXAMPLE_ID\"]");
+    expect(patch).toContain(
+      "X-Example-Id: !!js process.env[\"BURROW_HEADER_X_EXAMPLE_ID\"] || process.env[\"SUITE_HEADER_X_EXAMPLE_ID\"] || ''",
+    );
   });
 
   test("a deployment with no extra headers still renders a valid block", () => {
@@ -185,7 +190,7 @@ describe("renderPatch", () => {
 
   test("no secret value can reach the patch — only variable names", () => {
     expect(patch).not.toContain("Bearer sk-");
-    expect(patch).toContain("${process.env.SUITE_RUNTIME_TOKEN}");
+    expect(patch).toContain("${process.env.BURROW_RUNTIME_TOKEN || process.env.SUITE_RUNTIME_TOKEN}");
   });
 });
 
@@ -209,6 +214,55 @@ describe("environment split", () => {
   test("a header named in config but absent from the store is omitted, not blank", () => {
     const store = createStore({ token: "s3cret", headers: {} });
     expect(secretEnv(config, store)).not.toHaveProperty("SUITE_HEADER_X_EXAMPLE_ID");
+    expect(secretEnv(config, store)).not.toHaveProperty("BURROW_HEADER_X_EXAMPLE_ID");
+  });
+
+  test("the child env carries BOTH generations of every name, one value per pair", () => {
+    const store = createStore({ token: "s3cret", headers: { "X-Example-Id": "hv" } });
+    const env = { ...publicEnv(config, "/home/u/agents/oddjob", {} as NodeJS.ProcessEnv), ...secretEnv(config, store) };
+    for (const suffix of ["WS_URL", "MCP_URL", "RUNTIME_ID", "RUNTIME_TOKEN", "HEADER_X_EXAMPLE_ID"]) {
+      expect(env[`BURROW_${suffix}`]).toBeDefined();
+      expect(env[`BURROW_${suffix}`]).toBe(env[`SUITE_${suffix}`] as string);
+    }
+    expect(env.BURROW_RUNTIME_ID).toBe("oddjob-dsh");
+    expect(burrowEnvNameForHeader("X-Example-Id")).toBe("BURROW_HEADER_X_EXAMPLE_ID");
+  });
+
+  test("a stale BURROW_* inherited from the parent is overwritten in the child, as runDeepseek composes it", () => {
+    // runDeepseek spreads process.env first, then publicEnv and secretEnv.
+    const store = createStore({ token: "s3cret", headers: {} });
+    const parent = { BURROW_RUNTIME_ID: "someone-else", BURROW_RUNTIME_TOKEN: "stale", BURROW_WS_URL: "wss://old.example.invalid" };
+    const child = { ...parent, ...publicEnv(config, "/r", {} as NodeJS.ProcessEnv), ...secretEnv(config, store) };
+    expect(child.BURROW_RUNTIME_ID).toBe("oddjob-dsh");
+    expect(child.BURROW_RUNTIME_TOKEN).toBe("s3cret");
+    expect(child.BURROW_WS_URL).not.toContain("old.example.invalid");
+  });
+});
+
+describe("the rendered patch reads BURROW_* first, SUITE_* as the fallback", () => {
+  const patch = renderPatch("/opt/p/index.js", ["X-Example-Id"]);
+  /** The `!!js` expression on the line for `key:` under the federation/mcp blocks, evaluated against `env`. */
+  function evalLine(key: string, env: Record<string, string>): unknown {
+    const line = patch.split("\n").find((l) => l.trim().startsWith(`${key}: !!js `) && l.includes("process.env")) ?? "";
+    expect(line).not.toBe("");
+    let expr = line.slice(line.indexOf("!!js ") + 5).trim();
+    if (expr.startsWith("'") && expr.endsWith("'")) expr = expr.slice(1, -1);
+    return new Function("process", `return ${expr};`)({ env });
+  }
+  const cases: Array<[string, string]> = [
+    ["runtimeId", "RUNTIME_ID"],
+    ["token", "RUNTIME_TOKEN"],
+    ["X-Example-Id", "HEADER_X_EXAMPLE_ID"],
+  ];
+  for (const [key, suffix] of cases) {
+    test(`${key}: BURROW wins, SUITE alone still works`, () => {
+      expect(evalLine(key, { [`BURROW_${suffix}`]: "new", [`SUITE_${suffix}`]: "old" })).toBe("new");
+      expect(evalLine(key, { [`SUITE_${suffix}`]: "old" })).toBe("old");
+    });
+  }
+  test("Authorization: the bearer is BURROW_RUNTIME_TOKEN first", () => {
+    expect(evalLine("Authorization", { BURROW_RUNTIME_TOKEN: "new", SUITE_RUNTIME_TOKEN: "old" })).toBe("Bearer new");
+    expect(evalLine("Authorization", { SUITE_RUNTIME_TOKEN: "old" })).toBe("Bearer old");
   });
 });
 
@@ -223,5 +277,19 @@ describe("mcpUrl", () => {
   test("otherwise it is derived from the Suite URL", () => {
     const config = { ...emptyConfig(), suiteUrl: "https://suite.example.invalid/" };
     expect(mcpUrl(config, {} as NodeJS.ProcessEnv)).toBe("https://suite.example.invalid/mcp");
+  });
+
+  test("BURROW_MCP_URL is read first and wins over SUITE_MCP_URL", () => {
+    const config = { ...emptyConfig(), suiteUrl: "https://suite.example.invalid" };
+    const env = { BURROW_MCP_URL: "https://new.example.invalid/mcp", SUITE_MCP_URL: "https://old.example.invalid/mcp" };
+    expect(mcpUrl(config, env as NodeJS.ProcessEnv)).toBe("https://new.example.invalid/mcp");
+  });
+});
+
+describe("the lib dir", () => {
+  test("BURROW_LIB_DIR is read first, SUITE_LIB_DIR is the fallback", () => {
+    expect(libDirCandidates({ BURROW_LIB_DIR: "/opt/new", SUITE_LIB_DIR: "/opt/old" } as NodeJS.ProcessEnv)[0]).toBe("/opt/new");
+    expect(libDirCandidates({ SUITE_LIB_DIR: "/opt/old" } as NodeJS.ProcessEnv)[0]).toBe("/opt/old");
+    expect(selfArgv({ BURROW_LIB_DIR: "/opt/new" } as NodeJS.ProcessEnv)[1]).toBe("/opt/new/src/cli.ts");
   });
 });

@@ -414,7 +414,7 @@ export function buildReorientation(input: ReorientInput): string {
   }
   if (input.suiteFacts?.length) {
     lines.push("");
-    lines.push("Open work (from Suite, authoritative):");
+    lines.push("Open work (from Burrow, authoritative):");
     for (const f of input.suiteFacts) lines.push(`- ${f}`);
   }
   if (input.recentAsks.length) {

@@ -38,6 +38,7 @@ import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { emptyConfig } from "../../src/config.ts";
 import { detectState, killSessionArgv, liveTmuxDeps, sessionNameFromConfig, TMUX } from "../../src/tmux.ts";
+import { envValue } from "../../src/env_names.ts";
 
 const CLI = resolve(import.meta.dir, "..", "..", "src", "cli.ts");
 const SOCKET_DIR = mkdtempSync(resolve(tmpdir(), "suite-persist-sock-"));
@@ -173,7 +174,7 @@ afterAll(async () => {
  * installs a real tmux precisely so it never has to.
  */
 test("the persistence tests below are not silently skipped", () => {
-  expect(HAVE_TMUX || process.env.SUITE_CLI_ALLOW_NO_TMUX === "1").toBe(true);
+  expect(HAVE_TMUX || envValue(process.env, "CLI_ALLOW_NO_TMUX") === "1").toBe(true);
 });
 
 describe.if(HAVE_TMUX)("the agent outlives the shell that started it", () => {

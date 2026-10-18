@@ -124,7 +124,7 @@ describe("A: the cwd is the agent root when it carries suite.json", () => {
   test("run from the agent folder with no --root and no machine config, it starts as that agent", async () => {
     const { d, c } = deps({ cwd: root });
     const code = await runDeepseek(["--no-session"], d);
-    expect(c.stderr).not.toContain("suite init");
+    expect(c.stderr).not.toContain("burrow init");
     expect(code).toBe(0);
     expect(c.execs).toHaveLength(1);
     expect(c.execs[0]?.cwd).toBe(root);
@@ -143,12 +143,12 @@ describe("A: the cwd is the agent root when it carries suite.json", () => {
   test("an ancestor of an agent root is not that agent: machine-config fallback, named", async () => {
     const { d, c } = deps({ cwd: join(base, "home", "agents") });
     expect(await runDeepseek(["--no-session"], d)).toBe(1);
-    expect(c.stderr).toContain("suite init");
+    expect(c.stderr).toContain("burrow init");
     expect(c.execs).toHaveLength(0);
   });
 });
 
-describe("D: no saved connection — the init prompts run inline, never 'run suite init first'", () => {
+describe("D: no saved connection — the init prompts run inline, never 'run burrow init first'", () => {
   function scripted(answers: string[], asked: string[]): Prompter {
     const q = [...answers];
     return {
@@ -165,7 +165,7 @@ describe("D: no saved connection — the init prompts run inline, never 'run sui
 
     const code = await runDeepseek(["--no-session"], d);
 
-    expect(asked.some((q) => q.startsWith("suite url"))).toBe(true);
+    expect(asked.some((q) => q.startsWith("burrow url"))).toBe(true);
     expect(asked.some((q) => q.startsWith("runtime id"))).toBe(true);
     expect(asked.some((q) => q.startsWith("token"))).toBe(true);
     expect(code).toBe(0);
@@ -186,11 +186,11 @@ describe("D: no saved connection — the init prompts run inline, never 'run sui
     d.prompter = scripted(["https://suite.example.invalid", "inline-dsh", FAKE_TOKEN, ""], asked);
     expect(await runDeepseek(["--no-session"], d)).toBe(1);
     expect(asked).toEqual([]);
-    expect(c.stderr).toContain("suite init");
+    expect(c.stderr).toContain("burrow init");
     // Names the folder that is not connected, not "this machine": the
     // connection is per agent folder.
-    expect(c.stderr).toContain(`${join(base, "home", "agents")} is not connected to Suite yet`);
-    expect(c.stderr).toContain(`suite init --dir ${join(base, "home", "agents")}`);
+    expect(c.stderr).toContain(`${join(base, "home", "agents")} is not connected to Burrow yet`);
+    expect(c.stderr).toContain(`burrow init --dir ${join(base, "home", "agents")}`);
     expect(c.stderr).not.toContain("this machine");
     expect(c.execs).toHaveLength(0);
   });

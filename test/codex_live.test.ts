@@ -29,6 +29,7 @@ import { CodexBridge } from "../src/codex/bridge.ts";
 import type { Payload } from "../src/codex/phoenix.ts";
 import { listenBridgeSocket } from "../src/codex/reply_mcp.ts";
 import { appServerArgv, codexEnv } from "../src/commands/codex.ts";
+import { envValue } from "../src/env_names.ts";
 
 const CODEX = Bun.which("codex");
 const ROOT = mkdtempSync(join(tmpdir(), "suite-codex-live-"));
@@ -38,7 +39,7 @@ afterAll(() => rmSync(ROOT, { recursive: true, force: true }));
 
 test("the live codex smoke test below is not silently skipped", () => {
   if (CODEX === null) console.warn("codex is not on PATH: the live app-server smoke test is skipped");
-  expect(CODEX !== null || process.env.SUITE_CLI_ALLOW_NO_CODEX === "1" || process.env.CI === "true").toBe(true);
+  expect(CODEX !== null || envValue(process.env, "CLI_ALLOW_NO_CODEX") === "1" || process.env.CI === "true").toBe(true);
 });
 
 describe.if(CODEX !== null)("real codex app-server, no login", () => {

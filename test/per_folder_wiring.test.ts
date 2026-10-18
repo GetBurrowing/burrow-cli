@@ -8,7 +8,7 @@
  * where and in which encoding, never the value.
  */
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import {
   agentConfigFor,
@@ -19,7 +19,7 @@ import {
   readAgentSecrets,
   writeAgentConnection,
 } from "../src/agent_connections.ts";
-import { restoreWirer, runClaude, type ClaudeDeps } from "../src/commands/claude.ts";
+import { restoreWirer, runClaude, WIRING_FAILED_EXIT, type ClaudeDeps } from "../src/commands/claude.ts";
 import {
   CHANNEL_SERVER,
   MCP_JSON,
@@ -228,7 +228,7 @@ describe("init is per folder", () => {
     await initIn(bx, bx.a, A);
     const text = bx.output.join("\n");
     expect(text).toContain(`agent ${bx.a} connected as ${A.runtime} (${A.url})`);
-    expect(text).toContain(`cd ${bx.a} && suite claude`);
+    expect(text).toContain(`cd ${bx.a} && burrow claude`);
     expect(text).not.toContain("home folder");
   });
 
@@ -338,6 +338,23 @@ describe("init --from-mcp-json", () => {
     expect(existsSync(resolve(configDir(bx.fx.env), "agents"))).toBe(false);
   });
 
+  test("adoptMcpJson reads BURROW_* first: a disagreeing SUITE_RUNTIME_ID loses, and SUITE_* alone still adopts", () => {
+    const tok = canary("adopt");
+    const file = (env: Record<string, string>) =>
+      JSON.stringify({
+        mcpServers: {
+          [CHANNEL_SERVER]: { env },
+          [TOOLS_SERVER]: { url: "https://one.example.invalid/mcp", headers: { Authorization: `Bearer ${tok}` } },
+        },
+      });
+    const both = adoptMcpJson(file({ BURROW_RUNTIME_ID: "rt-new", SUITE_RUNTIME_ID: "rt-old", BURROW_TOKEN: tok, SUITE_TOKEN: canary("stale") }));
+    expect(both.ok && both.connection.runtimeId).toBe("rt-new");
+    // BURROW_TOKEN agrees with the bearer, so the stale SUITE_TOKEN is not what was compared.
+    expect(both.ok).toBe(true);
+    const old = adoptMcpJson(file({ SUITE_RUNTIME_ID: "rt-old", SUITE_TOKEN: tok }));
+    expect(old.ok && old.connection.runtimeId).toBe("rt-old");
+  });
+
   test("adoptMcpJson names fields, never values", () => {
     const secret = canary("val");
     const r = adoptMcpJson(
@@ -441,10 +458,15 @@ function rosterFor(bx: Box, dirs: string[]): RosterEntry[] {
   });
 }
 
-async function restoreOnce(bx: Box, roster: RosterEntry[], order: string[]): Promise<{ failed: string[] }> {
+async function restoreOnce(
+  bx: Box,
+  roster: RosterEntry[],
+  order: string[],
+  run?: Parameters<typeof restoreWirer>[2],
+): Promise<{ failed: string[] }> {
   const ft = fakeTmux();
   const log: string[] = [];
-  const wire = restoreWirer(bx.fx.env, (l) => void log.push(l));
+  const wire = restoreWirer(bx.fx.env, (l) => void log.push(l), run);
   const deps: RestoreDeps = {
     tmux: {
       ...ft.tmux,
@@ -583,7 +605,7 @@ describe("status lists every agent folder", () => {
     const legacy = lines.filter((l) => l.includes(L.runtime));
     expect(legacy).toHaveLength(1);
     expect(legacy[0]).toContain("legacy");
-    expect(legacy[0]).toContain("not assigned to any folder; run suite init in each agent folder");
+    expect(legacy[0]).toContain("not assigned to any folder; run burrow init in each agent folder");
     expect(text).not.toContain("not federated");
     for (const t of [A.token, B.token, L.token]) expect(scanTexts({ text }, t)).toEqual([]);
   });
@@ -632,7 +654,7 @@ describe("status lists every agent folder", () => {
       const line = lines.find((l) => l.includes(r.root)) ?? "";
       expect(line).toContain(r.runtime_id ?? "no runtime id");
       if (r.recorded) expect(line).not.toContain("unrecorded");
-      else expect(line).toContain("(unrecorded — run suite init)");
+      else expect(line).toContain("(unrecorded — run burrow init)");
     }
     // Neither view gives the legacy runtime to a folder, and no token is printed.
     expect(doc.agents.some((r) => r.runtime_id === L.runtime)).toBe(false);
@@ -748,6 +770,187 @@ describe("session naming", () => {
 });
 
 /* ------------------------------------------------------------------------- */
+
+describe("registration converges on one startup-suite and one suite-channel (01a14b9f stage 3)", () => {
+  const OLD = "https://old.example.invalid";
+
+  test("KELLY e2e: a user-scope `suite` naming the old host is removed at the next wiring, printed, and stays gone", async () => {
+    const { A } = agents();
+    const bx = box();
+    await initIn(bx, bx.a, A);
+    await restoreOnce(bx, rosterFor(bx, [bx.a]), []);
+    expectNames(bx, bx.a, A);
+    // Kelly's Mac: a 0.4.x-era user-scope alias naming an install the host has left.
+    const raw = JSON.parse(readFileSync(claudeJson(bx), "utf8")) as { mcpServers?: Record<string, unknown> };
+    raw.mcpServers = { suite: { type: "http", url: `${OLD}/mcp`, headers: { Authorization: `Bearer ${canary("old")}` } } };
+    writeFileSync(claudeJson(bx), JSON.stringify(raw), { mode: 0o600 });
+
+    const before = adds(bx).length;
+    bx.output.length = 0;
+    const r = await restoreOnce(bx, rosterFor(bx, [bx.a]), []);
+    expect(r.failed).toEqual([]);
+    // Both entries were current: nothing re-added, only the alias removed.
+    expect(adds(bx).length).toBe(before);
+    const after = JSON.parse(readFileSync(claudeJson(bx), "utf8")) as { mcpServers?: Record<string, unknown> };
+    expect(after.mcpServers ?? {}).toEqual({});
+    expectNames(bx, bx.a, A);
+    const removal = bx.output.find((l) => l.includes("removed"));
+    expect(removal).toContain("suite");
+    expect(removal).toContain("user scope");
+    expect(removal).toContain("old.example.invalid");
+
+    // A third pass does nothing at all.
+    bx.output.length = 0;
+    await restoreOnce(bx, rosterFor(bx, [bx.a]), []);
+    expect(adds(bx).length).toBe(before);
+    expect(bx.output.some((l) => l.includes("removed"))).toBe(false);
+    expectNoLeaks(bx, [A.token]);
+  });
+
+  test("KITE e2e: a local startup-suite naming the OLD host is replaced by one naming the new host", async () => {
+    const { A } = agents();
+    const bx = box();
+    await initIn(bx, bx.a, A);
+    await restoreOnce(bx, rosterFor(bx, [bx.a]), []);
+    const raw = JSON.parse(readFileSync(claudeJson(bx), "utf8")) as {
+      projects: Record<string, { mcpServers: Record<string, unknown> }>;
+    };
+    (raw.projects[bx.a] as { mcpServers: Record<string, unknown> }).mcpServers[TOOLS_SERVER] = {
+      type: "http",
+      url: `${OLD}/mcp`,
+      headers: { Authorization: `Bearer ${A.token}` },
+    };
+    writeFileSync(claudeJson(bx), JSON.stringify(raw), { mode: 0o600 });
+
+    const r = await restoreOnce(bx, rosterFor(bx, [bx.a]), []);
+    expect(r.failed).toEqual([]);
+    expectNames(bx, bx.a, A);
+    expect(bx.output.some((l) => l.includes(TOOLS_SERVER) && l.includes("replaced"))).toBe(true);
+    expectNoLeaks(bx, [A.token]);
+  });
+
+  test("UPGRADE: a 0.7.3 entry pair carrying only SUITE_* reads CURRENT, so the upgrade rewrites nothing", async () => {
+    const { A } = agents();
+    const bx = box();
+    await initIn(bx, bx.a, A);
+    await restoreOnce(bx, rosterFor(bx, [bx.a]), []);
+    // Strip every BURROW_* name: exactly what 0.7.3 wrote.
+    const raw = JSON.parse(readFileSync(claudeJson(bx), "utf8")) as {
+      projects: Record<string, { mcpServers: Record<string, { env?: Record<string, string> }> }>;
+    };
+    const ch = raw.projects[bx.a]?.mcpServers[CHANNEL_SERVER] as { env: Record<string, string> };
+    for (const k of Object.keys(ch.env)) if (k.startsWith("BURROW_")) delete ch.env[k];
+    writeFileSync(claudeJson(bx), JSON.stringify(raw), { mode: 0o600 });
+    const bytes = readFileSync(claudeJson(bx));
+    const before = adds(bx).length;
+    await restoreOnce(bx, rosterFor(bx, [bx.a]), []);
+    expect(adds(bx).length).toBe(before);
+    expect(readFileSync(claudeJson(bx)).equals(bytes)).toBe(true);
+  });
+});
+
+describe("a failed convergence step warns and launches; it never stops the agent (B release fix)", () => {
+  type Run = NonNullable<Parameters<typeof restoreWirer>[2]>;
+
+  /** The real stub claude, except the calls `refuse` matches exit 1 with `why`. */
+  function failing(bx: Box, store: ReturnType<typeof createStore>, refuse: (argv: string[]) => boolean, why: string): Run {
+    return async (argv, opts) =>
+      refuse(argv) ? { exitCode: 1, stdout: "", stderr: why } : spawnWithSecrets(argv, store, { ...opts, env: bx.fx.env });
+  }
+  const userAliasRemove = (argv: string[]): boolean => argv[1] === "mcp" && argv[2] === "remove" && argv[3] === "suite" && argv.includes("user");
+
+  /** A wired a/ that ALSO sees a user-scope `suite` alias (Kelly's shape). */
+  async function wiredWithAlias(): Promise<{ bx: Box; A: Agent }> {
+    const { A } = agents();
+    const bx = box();
+    await initIn(bx, bx.a, A);
+    await restoreOnce(bx, rosterFor(bx, [bx.a]), []);
+    expectNames(bx, bx.a, A);
+    const raw = JSON.parse(readFileSync(claudeJson(bx), "utf8")) as { mcpServers?: Record<string, unknown> };
+    raw.mcpServers = { suite: { type: "http", url: "https://old.example.invalid/mcp", headers: { Authorization: `Bearer ${canary("old")}` } } };
+    writeFileSync(claudeJson(bx), JSON.stringify(raw), { mode: 0o600 });
+    bx.output.length = 0;
+    return { bx, A };
+  }
+
+  async function claudeP(bx: Box, run: Run, store: ReturnType<typeof createStore>): Promise<{ code: number; execs: string[][] }> {
+    const execs: string[][] = [];
+    const deps: ClaudeDeps = {
+      tmux: fakeTmux().tmux,
+      env: bx.fx.env,
+      cwd: bx.a,
+      store,
+      config: emptyConfig(),
+      statePath: resolve(bx.fx.root, "state.json"),
+      color: false,
+      platform: "linux",
+      prompter: mute(),
+      sleep: async () => {},
+      out: (l) => void bx.output.push(l),
+      err: (l) => void bx.output.push(l),
+      exec: async (argv) => (execs.push(argv), 0),
+      wiring: { run, isTTY: false, canPrompt: false },
+    };
+    const code = await runClaude(deps, { userArgs: ["-p", "hi"], force: false });
+    return { code, execs };
+  }
+
+  test("burrow claude: a user-scope alias removal that fails prints the warning and Claude Code is still launched", async () => {
+    const { bx, A } = await wiredWithAlias();
+    const store = createStore();
+    const { code, execs } = await claudeP(bx, failing(bx, store, userAliasRemove, "EACCES"), store);
+    expect(code).toBe(0);
+    expect(execs).toHaveLength(1);
+    const said = bx.output.join("\n");
+    expect(said).toContain("burrow: WARNING: MCP convergence failed");
+    expect(said).toContain("launching anyway");
+    expect(said).toContain("suite: user scope, old.example.invalid");
+    expect(said).not.toContain("could not set up Claude Code");
+    // The alias is still there (the removal really failed) and a/'s own entries are untouched.
+    const after = JSON.parse(readFileSync(claudeJson(bx), "utf8")) as { mcpServers?: Record<string, unknown> };
+    expect(Object.keys(after.mcpServers ?? {})).toEqual(["suite"]);
+    expectNames(bx, bx.a, A);
+    expectNoLeaks(bx, [A.token]);
+  });
+
+  test("burrow restore: the same failure warns in the restore log and the session is still started", async () => {
+    const { bx, A } = await wiredWithAlias();
+    const order: string[] = [];
+    const r = await restoreOnce(bx, rosterFor(bx, [bx.a]), order, failing(bx, createStore(), userAliasRemove, "EACCES"));
+    expect(r.failed).toEqual([]);
+    expect(order).toEqual([`wire ${bx.a}`, `start ${bx.a}`]);
+    expect(bx.output.some((l) => l.includes("WARNING: MCP convergence failed") && l.includes("launching anyway"))).toBe(true);
+    expect(bx.output.some((l) => l.includes("not started"))).toBe(false);
+    expectNoLeaks(bx, [A.token]);
+  });
+
+  test("burrow claude: a plugin install (`bun install`) that fails prints the warning and Claude Code is still launched", async () => {
+    const { A } = agents();
+    const bx = box();
+    await initIn(bx, bx.a, A);
+    rmSync(resolve(defaultCheckout(bx.fx.env), "node_modules"), { recursive: true, force: true });
+    const store = createStore();
+    const bunInstall = (argv: string[]): boolean => argv[0] === "bun" && argv[1] === "install";
+    const { code, execs } = await claudeP(bx, failing(bx, store, bunInstall, "network down"), store);
+    expect(code).toBe(0);
+    expect(execs).toHaveLength(1);
+    expect(bx.output.join("\n")).toContain("burrow: WARNING: the channel plugin install failed");
+    // Registration still happened from the record.
+    expectNames(bx, bx.a, A);
+    expectNoLeaks(bx, [A.token]);
+  });
+
+  test("BOUNDARY: a refused `claude mcp add` is not a convergence step; it still stops the launch", async () => {
+    const { A } = agents();
+    const bx = box();
+    await initIn(bx, bx.a, A);
+    const store = createStore();
+    const add = (argv: string[]): boolean => argv[0] === "claude" && argv[1] === "mcp" && argv[2] === "add";
+    const { code, execs } = await claudeP(bx, failing(bx, store, add, "refused"), store);
+    expect(code).toBe(WIRING_FAILED_EXIT);
+    expect(execs).toHaveLength(0);
+  });
+});
 
 test("the local-scope stub really writes and reads back (positive control for the cycle tests)", async () => {
   const { A } = agents();

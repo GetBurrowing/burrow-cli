@@ -11,7 +11,8 @@
  * hit reports where and in which encoding, never the value.
  */
 import { afterEach, describe, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { createHash } from "node:crypto";
 import { resolve } from "node:path";
 import {
@@ -23,6 +24,7 @@ import {
   legacyConnection,
   listAgentConnections,
   readAgentConnection,
+  readAgentRecordExact,
   readAgentSecrets,
   serializeAgentRecord,
   writeAgentConnection,
@@ -33,7 +35,7 @@ import { emptyConfig, serializeConfig } from "../src/config.ts";
 import { configDir, WriteRefused, type GitProbe } from "../src/paths.ts";
 import { createStore, spawnWithSecrets, type Prompter } from "../src/secrets.ts";
 import type { RunResult, TmuxDeps } from "../src/tmux.ts";
-import { cleanupCleanEnvs, createCleanEnv, stubsFor, type CleanEnv } from "./clean-env/fixture.ts";
+import { cleanupCleanEnvs, createCleanEnv, stubsFor, useWritingClaude, type CleanEnv } from "./clean-env/fixture.ts";
 import { canary, scanText, scanTexts, scanTree } from "./leak-scan.ts";
 
 afterEach(cleanupCleanEnvs);
@@ -226,6 +228,8 @@ describe("the named regression", () => {
   test("two agents: claude in the first folder keeps the first runtime", async () => {
     const { A, B } = agents();
     const bx = box();
+    // A claude that really writes: registration reads back what it wrote.
+    useWritingClaude(bx.fx);
     await initIn(bx, bx.a, A);
     await initIn(bx, bx.b, B);
     // As 0.7.0 left a real box: the machine connection names the LAST init, B.
@@ -249,7 +253,8 @@ describe("the named regression", () => {
     const r = await claudeIn(bx, bx.a, mute(), false);
     expect(r.code).toBe(0);
     const added = adds(bx);
-    expect(added.map((p) => p[3]).sort()).toEqual([CHANNEL_SERVER, TOOLS_SERVER].sort());
+    // Each stale entry: an add refused as "already exists", a local remove, the add again.
+    expect([...new Set(added.map((p) => p[3]))].sort()).toEqual([CHANNEL_SERVER, TOOLS_SERVER].sort());
     const channel = added.find((p) => p[3] === CHANNEL_SERVER) ?? [];
     const tools = added.find((p) => p[3] === TOOLS_SERVER) ?? [];
     const mask = (p: string[]): string[] => p.map((a) => (/TOKEN=|Bearer /.test(a) ? "<token masked>" : a));
@@ -279,17 +284,17 @@ describe("migration from the 0.7.0 single machine connection", () => {
     expect(inA.code).toBe(0);
     expect(addsShown(bx)).toEqual([]);
     expect(inA.err.join("\n")).toContain(`no saved connection for ${bx.a}`);
-    expect(inA.err.join("\n")).toContain("suite init");
+    expect(inA.err.join("\n")).toContain("burrow init");
 
     const inB = await claudeIn(bx, bx.b, mute(), false);
     expect(inB.code).toBe(0);
     expect(addsShown(bx)).toEqual([]);
-    expect(inB.err.join("\n")).toContain("suite init");
+    expect(inB.err.join("\n")).toContain("burrow init");
     // b/ (no record, no entries, nobody to ask) names ITS folder, as a/ does:
     // on a machine of several agents "this folder" identifies none of them.
     // Both lines: what is wrong, and where to run `suite init`.
-    expect(inB.err.find((l) => l.includes("not connected to a Suite install"))).toContain(bx.b);
-    expect(inB.err.find((l) => l.includes("suite init"))).toContain(`suite init\` in ${bx.b}`);
+    expect(inB.err.find((l) => l.includes("not connected to a Burrow install"))).toContain(bx.b);
+    expect(inB.err.find((l) => l.includes("burrow init"))).toContain(`burrow init\` in ${bx.b}`);
     expect(inB.err.join("\n")).not.toContain("this folder");
 
     // I4: the legacy files are never written or deleted, and ~/.claude.json is untouched.
@@ -321,6 +326,7 @@ describe("migration from the 0.7.0 single machine connection", () => {
     writeClaudeJson(bx, { [bx.a]: A });
     const C: Agent = { url: "https://three.example.invalid", runtime: "rt-c-00000000", token: canary("tokC") };
     const prompter = scripted([C.url, C.runtime, C.token, ""]);
+    useWritingClaude(bx.fx);
 
     const r = await claudeIn(bx, bx.b, prompter, true);
 
@@ -347,7 +353,7 @@ describe("unknown config: entries left alone, nothing stamped", () => {
     for (const canPrompt of [false, true]) {
       const r = await claudeIn(bx, bx.a, mute(), canPrompt);
       expect(r.code).toBe(0);
-      expect(r.err.join("\n")).toContain("suite init");
+      expect(r.err.join("\n")).toContain("burrow init");
     }
     expect(addsShown(bx)).toEqual([]);
     expect(existsSync(agentsDir(bx.fx.env))).toBe(false);
@@ -464,5 +470,67 @@ describe("the store", () => {
     writeFileSync(resolve(bx.a, "planted.txt"), `x ${secret} y`);
     expect(scanTree(bx.a, secret).length).toBeGreaterThan(0);
     expect(scanTexts({ out: `token=${secret}` }, secret).length).toBeGreaterThan(0);
+  });
+});
+
+describe("legacy ~/.config/suite agent records are read per file, never moved", () => {
+  const noRepo: GitProbe = { repoRoot: () => null, isIgnored: () => false };
+  const homes: string[] = [];
+  afterEach(() => {
+    for (const h of homes.splice(0)) rmSync(h, { recursive: true, force: true });
+  });
+  function setup(): { env: Record<string, string>; old: string; fresh: string; suiteAgents: string; burrowAgents: string } {
+    const h = mkdtempSync(resolve(tmpdir(), "suite-legacy-agents-"));
+    homes.push(h);
+    const old = resolve(h, "old-agent");
+    const fresh = resolve(h, "fresh-agent");
+    mkdirSync(old);
+    mkdirSync(fresh);
+    const env = { HOME: h };
+    // An old host: only the suite dir exists, so the record is written THERE.
+    mkdirSync(resolve(h, ".config", "suite"), { recursive: true });
+    writeAgentConnection(env, old, { suiteUrl: "https://old.example.invalid", runtimeId: "rt-old", headerNames: [] }, { token: "tok-old", headers: {} }, { probe: noRepo });
+    return { env, old, fresh, suiteAgents: resolve(h, ".config", "suite", "agents"), burrowAgents: resolve(h, ".config", "burrow", "agents") };
+  }
+
+  test("on an old host the record lands in, and is read from, the suite dir", () => {
+    const { env, old, suiteAgents } = setup();
+    expect(readAgentConnection(env, old).connection?.path).toBe(resolve(suiteAgents, `${agentKey(old)}.json`));
+  });
+
+  test("when burrow also exists, a key it lacks is read from suite: record, secrets, list", () => {
+    const { env, old, suiteAgents, burrowAgents } = setup();
+    const before = readdirSync(suiteAgents).sort().map((f) => [f, sha(resolve(suiteAgents, f))]);
+    mkdirSync(burrowAgents, { recursive: true });
+
+    expect(readAgentConnection(env, old).connection?.record.runtimeId).toBe("rt-old");
+    expect(readAgentRecordExact(env, old)?.path).toBe(resolve(suiteAgents, `${agentKey(old)}.json`));
+    expect(readAgentSecrets(env, old)?.token).toBe("tok-old");
+    expect(listAgentConnections(env).map((c) => c.record.runtimeId)).toEqual(["rt-old"]);
+
+    // Read-only: nothing copied into burrow, nothing in suite changed.
+    expect(readdirSync(burrowAgents)).toEqual([]);
+    expect(readdirSync(suiteAgents).sort().map((f) => [f, sha(resolve(suiteAgents, f))])).toEqual(before);
+  });
+
+  test("burrow's own record for a key wins over suite's, and a new write goes to burrow", () => {
+    const { env, old, fresh, suiteAgents, burrowAgents } = setup();
+    mkdirSync(burrowAgents, { recursive: true });
+    writeAgentConnection(env, old, { suiteUrl: "https://new.example.invalid", runtimeId: "rt-new", headerNames: [] }, { token: "tok-new", headers: {} }, { probe: noRepo });
+    writeAgentConnection(env, fresh, { suiteUrl: "https://new.example.invalid", runtimeId: "rt-fresh", headerNames: [] }, { token: "tok-fresh", headers: {} }, { probe: noRepo });
+
+    expect(agentConfigPath(env, old)).toBe(resolve(burrowAgents, `${agentKey(old)}.json`));
+    expect(readAgentConnection(env, old).connection?.record.runtimeId).toBe("rt-new");
+    expect(readAgentSecrets(env, old)?.token).toBe("tok-new");
+    expect(listAgentConnections(env).map((c) => c.record.runtimeId).sort()).toEqual(["rt-fresh", "rt-new"]);
+    // The legacy pair is still there, untouched.
+    expect(JSON.parse(readFileSync(resolve(suiteAgents, `${agentKey(old)}.json`), "utf8")).runtimeId).toBe("rt-old");
+  });
+
+  test("a key in neither dir is not found", () => {
+    const { env, fresh, burrowAgents } = setup();
+    mkdirSync(burrowAgents, { recursive: true });
+    expect(readAgentConnection(env, fresh).connection).toBeNull();
+    expect(readAgentSecrets(env, fresh)).toBeNull();
   });
 });

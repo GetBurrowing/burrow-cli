@@ -1,14 +1,64 @@
 # Changelog
 
-Notable changes to the `suite` CLI. Newest first.
+Notable changes to the `burrow` CLI (named `suite` before 0.8.0). Newest first.
 
-The version in `package.json` is the single source of truth — `suite --version`,
+The version in `package.json` is the single source of truth — `burrow --version`,
 the POSIX launcher and `install.sh`'s banner all read it. **Bump it in the same
 PR as the change**, so that an installed CLI's version answers the only question
 that matters in the field: is this one newer than what I had?
 
 Minor for a new capability or a changed default; patch for a fix that changes no
 behaviour anyone was relying on.
+
+## 0.8.0
+
+The command is now `burrow`. Everything that worked under `suite` still works;
+README, [Compatibility](README.md#compatibility), lists what kept its old name
+and why.
+
+- **Two launchers.** `install.sh` writes `burrow` and `suite` (two rendered
+  files, no symlink). `suite` prints one stderr line,
+  `suite: this command is now burrow; suite keeps working as an alias`, and
+  otherwise behaves identically: stdout is byte-for-byte the same, because
+  `--version`, `status --json` and `--stamp-only` are machine-read.
+  `BURROW_NO_DEPRECATION=1` silences it. The installer announces an existing
+  `suite 0.7.x` by that name and offers to replace it; its last line is
+  `burrow init`.
+- **`BURROW_*` environment variables, `SUITE_*` still read.** Every variable is
+  resolved by one function (`src/env_names.ts`): `BURROW_X` when set and
+  non-empty, else `SUITE_X` with one deprecation line on stderr per name. Both
+  set: `BURROW_X` wins, silently. Values the CLI writes for other programs (the
+  channel MCP entry, the launcher, the installer environment of `burrow update`)
+  carry both names. `BURROW_*` is stripped from harness children like
+  `SUITE_*`, so a `BURROW_TOKEN` never reaches one.
+- **Config dir.** `~/.config/burrow` on a new host; an existing
+  `~/.config/suite` keeps being used when there is no `~/.config/burrow`.
+  Nothing is migrated, copied or deleted.
+- **MCP registration converges** on the unchanged names `startup-suite` and
+  `suite-channel`. Leftover user- or local-scope alias entries named `suite` or
+  `burrow` are removed, one printed row each, naming the host they pointed at.
+- **Messages, help and docs say `burrow` and Burrow.** Every hint and error
+  prefix comes from one constant, `CLI_NAME` in `src/version.ts`. The package is
+  `burrow-cli`. `--burrow-url` is accepted beside `--suite-url` (and wins).
+- **Conventions.** `src/claude_md.ts` exports `BURROW_CONVENTIONS`;
+  `SUITE_CONVENTIONS` is the same string, kept for core's agent-host, which
+  imports it. A folder with neither conventions file gets
+  `BURROW_CONVENTIONS.md`; an existing `SUITE_CONVENTIONS.md` keeps its name and
+  is still the one refreshed.
+- **A failed convergence step no longer stops a launch.** When the channel
+  plugin checkout (clone, fast-forward, `bun install`) or the MCP alias
+  convergence fails, `burrow claude` and `burrow restore` print a
+  `burrow: WARNING: ... failed for <folder>; launching anyway.` block and start
+  the agent. A missing token or a refused `claude mcp add` still stops it.
+- **Channel pins** move to the tagged Burrow plugin releases:
+  `OPENCLAW_CHANNEL_REF` is `ad307416839aaf266ce6fd941dbcc25446e0445c`
+  (burrow-channel-openclaw v0.8.0) and `HERMES_CHANNEL_REF` is
+  `f1399d77eba86f898d0d32de8c8baa0a783a72ec` (burrow-channel-hermes v0.3.0).
+  The Claude Code plugin is not pinned; a fresh checkout clones its main
+  (burrow-channel-claude-code 0.4.0, a5a981bc, at release time).
+- **Unchanged on purpose:** the lib and data dirs (`~/.local/share/suite/`),
+  the watchdog and restore unit names and launchd labels, the binary path the
+  units run, the tmux session prefix `suite-`, and the repo names.
 
 ## 0.7.3
 

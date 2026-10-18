@@ -26,6 +26,7 @@ import { emptyConfig } from "../src/config.ts";
 import { detectState, killSessionArgv, liveTmuxDeps, sessionNameFromConfig } from "../src/tmux.ts";
 import { runClaude, type ClaudeDeps } from "../src/commands/claude.ts";
 import { liveDialogIo, sessionLogPath } from "../src/claude_dialogs.ts";
+import { envValue } from "../src/env_names.ts";
 
 const ROOT = mkdtempSync(resolve(tmpdir(), "suite-cli-dlg-e2e-"));
 const SOCKET_DIR = resolve(ROOT, "sock");
@@ -130,7 +131,7 @@ function depsFor(cwd: string): ClaudeDeps {
 }
 
 test("the real-tmux dialog test below is not silently skipped", () => {
-  expect(HAVE_TMUX || process.env.SUITE_CLI_ALLOW_NO_TMUX === "1").toBe(true);
+  expect(HAVE_TMUX || envValue(process.env, "CLI_ALLOW_NO_TMUX") === "1").toBe(true);
 });
 
 describe.if(HAVE_TMUX)("suite claude answers the pre-launch dialogs in its own session", () => {

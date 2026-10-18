@@ -115,6 +115,7 @@ import {
   sessionNameForAgent,
   type DeepseekDeps,
 } from "./deepseek.ts";
+import { CLI_NAME } from "../version.ts";
 
 type Env = Record<string, string | undefined>;
 
@@ -125,15 +126,17 @@ type Env = Record<string, string | undefined>;
 /**
  * DEPLOYER: BUMP THIS BEFORE suite-cli MERGES.
  *
- * This is the SQUASH sha on hermes-suite-channel main of PR #6, v0.2.0
- * (overridable install repo, no hard-coded org in hints, task 01a14a7d-58f6;
- * Burrow migration). It replaced d9918533 (PR #3, the #!/bin/sh launcher fix
- * and `--python`). This verb always passes `--python`, which installers before
+ * This is the commit tagged v0.3.0 on burrow-channel-hermes main (PR #7,
+ * BURROW_* names with SUITE_* fallback, task 01a14b9f-b62c; Burrow rename C).
+ * The repo was renamed from hermes-suite-channel, whose URL redirects. It
+ * replaced 71041456 (v0.2.0, PR #6), which replaced d9918533 (PR #3, the
+ * #!/bin/sh launcher fix and `--python`). This verb always passes `--python`, which installers before
  * d9918533 refuse, so the pin cannot move to an older commit than that. Pin a commit on main, never a branch tip: a squash
  * merge deletes the branch and the tip would dangle.
  */
-export const HERMES_CHANNEL_REF = "71041456d605e2d3341a214e5c09e924148f3558";
+export const HERMES_CHANNEL_REF = "f1399d77eba86f898d0d32de8c8baa0a783a72ec";
 /** The channel repo's name. Its owner comes from repo_source.ts (SUITE_GITHUB_OWNER). */
+// Not renamed to burrow in 0.8.0: the channel repo rename is task C's; the old name redirects on GitHub.
 export const HERMES_CHANNEL_REPO_NAME = "hermes-suite-channel";
 
 export function hermesChannelRepo(env: Env = process.env): string {
@@ -274,6 +277,10 @@ export interface HermesOptions {
 
 const VALUE_FLAGS: Record<string, keyof HermesOptions> = {
   "--root": "root",
+  // `--burrow-url` is the 0.8.0 name; `--suite-url` stays accepted (stamped
+  // agents' recorded session commands and core's agent-host pass it). When
+  // both are given, --burrow-url wins, as BURROW_* wins over SUITE_*.
+  "--burrow-url": "suiteUrl",
   "--suite-url": "suiteUrl",
   "--runtime-id": "runtimeId",
   "--model-base-url": "modelBaseUrl",
@@ -336,8 +343,8 @@ export function parseHermesOptions(args: string[], cwd: string = process.cwd()):
     throw refused(
       "unknown_argument",
       arg.startsWith("--")
-        ? `suite hermes: unknown option ${flag}`
-        : "suite hermes: unexpected positional argument (not repeated here, in case it is a value); gateway arguments go after --",
+        ? `${CLI_NAME} hermes: unknown option ${flag}`
+        : `${CLI_NAME} hermes: unexpected positional argument (not repeated here, in case it is a value); gateway arguments go after --`,
     );
   }
   const rootArg = raw["--root"];
@@ -362,7 +369,7 @@ export function parseHermesOptions(args: string[], cwd: string = process.cwd()):
 
   return {
     root,
-    suiteUrl: raw["--suite-url"],
+    suiteUrl: raw["--burrow-url"] ?? raw["--suite-url"],
     runtimeId: raw["--runtime-id"],
     tokenRef,
     keychainService,
@@ -856,8 +863,8 @@ export function hermesWriter(ctx: { opts: HermesOptions | null }, deps: HermesDe
     }
     mkdirSync(home, { recursive: true, mode: 0o700 });
     deps.stderr(
-      `suite: installing Hermes Agent ${HERMES_AGENT_REF.slice(0, 8)} into ${home} with its upstream installer (--non-interactive)\n` +
-        `suite: note: that installer also writes OUTSIDE ${home}: ${OUTSIDE_HOME_WRITES}\n`,
+      `${CLI_NAME}: installing Hermes Agent ${HERMES_AGENT_REF.slice(0, 8)} into ${home} with its upstream installer (--non-interactive)\n` +
+        `${CLI_NAME}: note: that installer also writes OUTSIDE ${home}: ${OUTSIDE_HOME_WRITES}\n`,
     );
     const r = await spawn(["bash", script, "--non-interactive", "--commit", HERMES_AGENT_REF, "--hermes-home", home], {
       cwd: home,
@@ -931,7 +938,7 @@ export function hermesWriter(ctx: { opts: HermesOptions | null }, deps: HermesDe
     for (const line of redact(r.stderr, state.secrets).split("\n")) {
       if (line.trim() === "") continue;
       if (/gateway restart/.test(line)) {
-        deps.stderr("suite: (the gateway is started by `suite hermes` with `hermes gateway run`; never `gateway restart`)\n");
+        deps.stderr(`${CLI_NAME}: (the gateway is started by \`${CLI_NAME} hermes\` with \`hermes gateway run\`; never \`gateway restart\`)\n`);
         continue;
       }
       deps.stderr(`${line}\n`);
@@ -1139,7 +1146,7 @@ export function hermesWriter(ctx: { opts: HermesOptions | null }, deps: HermesDe
       // one Hermes now selects.
       const selected = await askHermesPython(bin);
       if (selected !== null && selected !== state.python) {
-        deps.stderr(`suite: Hermes selected a new dependency environment while installing the plugin; registering the MCP bridge with ${selected}\n`);
+        deps.stderr(`${CLI_NAME}: Hermes selected a new dependency environment while installing the plugin; registering the MCP bridge with ${selected}\n`);
         state.python = selected;
         // The SDK check moves to the new interpreter; the step below installs it if missing.
         const sdkAction = actions.find((a) => a.kind === "mcp_sdk");
@@ -1167,7 +1174,7 @@ export function hermesWriter(ctx: { opts: HermesOptions | null }, deps: HermesDe
         throw fail("token_file_mode", `the channel installer left ${tokenPath} ${mode < 0 ? "absent" : `mode 0${mode.toString(8)}`}; it must be 0600`);
       }
       deps.stderr(
-        `suite: the runtime token is held in ${tokenPath} (mode 0600), the one sanctioned copy; ` +
+        `${CLI_NAME}: the runtime token is held in ${tokenPath} (mode 0600), the one sanctioned copy; ` +
           `the Hermes channel plugin reads it from that file and has no keychain resolver yet\n`,
       );
       if (inputs.tokenRef.kind === "keychain") {
@@ -1251,7 +1258,7 @@ export function hermesWriter(ctx: { opts: HermesOptions | null }, deps: HermesDe
     },
 
     humanSteps(): HumanStep[] {
-      return [{ kind: "start_agent_session", text: shellJoin(["suite", "hermes", ...opts().sessionArgs]) }];
+      return [{ kind: "start_agent_session", text: shellJoin([CLI_NAME, "hermes", ...opts().sessionArgs]) }];
     },
 
     warnings() {
@@ -1319,12 +1326,12 @@ export function gatewayEnv(deps: Pick<HermesDeps, "env">, opts: HermesOptions): 
 async function runGateway(opts: HermesOptions, deps: HermesDeps): Promise<number> {
   const record = await readStampRecord(opts.root);
   if (record === null || record.harness !== "hermes" || record.verdict !== "pass") {
-    deps.stderr(`suite: ${join(opts.root, STAMP_FILE)} records no passing hermes stamp; run suite hermes without --gateway-only first\n`);
+    deps.stderr(`${CLI_NAME}: ${join(opts.root, STAMP_FILE)} records no passing hermes stamp; run ${CLI_NAME} hermes without --gateway-only first\n`);
     return EXIT_REFUSED;
   }
   const bin = resolveHermesBin(opts, deps);
   if (bin === null) {
-    deps.stderr("suite: hermes is not installed; pass --hermes BIN\n");
+    deps.stderr(`${CLI_NAME}: hermes is not installed; pass --hermes BIN\n`);
     return EXIT_REFUSED;
   }
   const argv = gatewayArgv(bin, opts.rest);
@@ -1370,7 +1377,7 @@ export async function runHermes(args: string[], deps: HermesDeps): Promise<numbe
     opts = parseHermesOptions(args);
   } catch (e) {
     if (e instanceof StampFailure) {
-      deps.stderr(`suite: ${e.message}\n`);
+      deps.stderr(`${CLI_NAME}: ${e.message}\n`);
       return e.exitCode;
     }
     throw e;

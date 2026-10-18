@@ -209,7 +209,7 @@ describe("doctor: the agents check", () => {
     expect(text).toContain(`entry ${B.runtime}`);
     expect(text).toContain(`.mcp.json ${A.runtime}`);
     expect(text).toContain(`user-scope ${CHANNEL_SERVER} names ${B.runtime}`);
-    expect(agentsCheck.status === "fail" && agentsCheck.remedy).toBe(`cd ${bx.a} && suite init --from-mcp-json`);
+    expect(agentsCheck.status === "fail" && agentsCheck.remedy).toBe(`cd ${bx.a} && burrow init --from-mcp-json`);
     // b/ is wired as itself and is not reported as cross-wired.
     expect(text).not.toContain(`${bx.b}:`);
 
@@ -465,6 +465,25 @@ describe("inventory primitives", () => {
     expect(scanTexts({ view: text }, B.token)).toEqual([]);
     const mcp = JSON.stringify(parseMcpJson(JSON.stringify({ mcpServers: servers(A) })));
     expect(scanTexts({ mcp }, A.token)).toEqual([]);
+  });
+
+  test("BURROW-first: when BURROW_* and SUITE_* disagree the BURROW value is the identity; SUITE_* alone still reads", () => {
+    const entry = (env: Record<string, string>) => ({ [CHANNEL_SERVER]: { type: "stdio", command: "bun", env } });
+    const view = parseClaudeJson(
+      JSON.stringify({
+        projects: {
+          "/both": { mcpServers: entry({ BURROW_RUNTIME_ID: "rt-new", SUITE_RUNTIME_ID: "rt-old", BURROW_URL: "wss://new.example.invalid/s", SUITE_URL: "wss://old.example.invalid/s" }) },
+          "/old": { mcpServers: entry({ SUITE_RUNTIME_ID: "rt-old", SUITE_URL: "wss://old.example.invalid/s" }) },
+        },
+        mcpServers: entry({ BURROW_RUNTIME_ID: "rt-user-new", SUITE_RUNTIME_ID: "rt-user-old" }),
+      }),
+    );
+    expect(view?.projects["/both"]).toEqual({ runtimeId: "rt-new", channelUrl: "wss://new.example.invalid/s", toolsUrl: null });
+    expect(view?.projects["/old"]?.runtimeId).toBe("rt-old");
+    expect(view?.userScope).toEqual([{ name: CHANNEL_SERVER, runtimeId: "rt-user-new" }]);
+    expect(parseMcpJson(JSON.stringify({ mcpServers: entry({ BURROW_RUNTIME_ID: "rt-new", SUITE_RUNTIME_ID: "rt-old" }) }))?.runtimeId).toBe(
+      "rt-new",
+    );
   });
 
   test("folderWiring: agreement is match, any disagreement is cross_wired, no record is unrecorded", () => {

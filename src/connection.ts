@@ -84,7 +84,7 @@ export function hasConnection(config: SuiteConfig | null): config is SuiteConfig
 }
 
 export const FEDERATE_HINT = [
-  "  Open Suite in a browser, go to Agent Resources, and click Federate on this",
+  "  Open Burrow in a browser, go to Agent Resources, and click Federate on this",
   "  runtime. Copy the URL, the runtime id and the token it shows you.",
 ].join("\n");
 
@@ -121,9 +121,9 @@ export async function promptConnection(
   deps.out("");
   deps.out(FEDERATE_HINT);
   deps.out("");
-  const suiteUrl = (await deps.prompter.ask(`suite url${urlDefault ? ` [${urlDefault}]` : ""}: `)).trim() || urlDefault;
+  const suiteUrl = (await deps.prompter.ask(`burrow url${urlDefault ? ` [${urlDefault}]` : ""}: `)).trim() || urlDefault;
   const runtimeId = (await deps.prompter.ask(`runtime id${idDefault ? ` [${idDefault}]` : ""}: `)).trim() || idDefault;
-  if (suiteUrl === "" || runtimeId === "") throw new Error("suite url and runtime id are both required");
+  if (suiteUrl === "" || runtimeId === "") throw new Error("burrow url and runtime id are both required");
   const { headerNames } = await solicitCredentials(deps.prompter, deps.store);
   // A blank token on a re-run keeps THIS FOLDER's saved token, the way a blank
   // URL keeps the saved URL — rather than overwriting a working token with
@@ -193,7 +193,7 @@ export async function ensureConnection(deps: ConnectionDeps, dir: string): Promi
     loadSavedSecrets(deps.env, found.record.dir, config, deps.store);
     return { config, dir: found.record.dir, prompted: false };
   }
-  deps.out(row("suite", "not connected", `${dir} has no Suite connection yet; connecting it now`));
+  deps.out(row("burrow", "not connected", `${dir} has no Burrow connection yet; connecting it now`));
   const { config, configPath } = await promptConnection(deps, dir);
   deps.out(row("config", configPath));
   return { config, dir: canonicalDir(dir), prompted: true };

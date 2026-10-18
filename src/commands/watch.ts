@@ -30,9 +30,10 @@ import {
   resolveTmux,
 } from "../halt.ts";
 import { SESSION_PREFIX, type TmuxDeps, detectState, liveTmuxDeps } from "../tmux.ts";
-import { RSS_CEILING_BYTES, SUPERVISED_ENV } from "../supervisor.ts";
+import { RSS_CEILING_BYTES, isSupervised } from "../supervisor.ts";
 import { answerOnce, liveDialogIo, type DialogIo } from "../claude_dialogs.ts";
 import { readAgentConnection } from "../agent_connections.ts";
+import { CLI_NAME } from "../version.ts";
 
 export interface WatchDeps {
   tmux: TmuxDeps;
@@ -158,7 +159,7 @@ export function liveListProjectDirs(
     // Absent root: say so rather than sweeping nothing and calling it healthy.
     // An unreadable or relocated state directory looks identical to a box with
     // no halted sessions, and only one of those is good news.
-    console.error(`suite watch: no transcripts under ${root} — nothing to inspect`);
+    console.error(`${CLI_NAME} watch: no transcripts under ${root} — nothing to inspect`);
     return [];
   }
 }
@@ -534,8 +535,8 @@ export function liveWatchDeps(
     realpath: realpathSync,
     listProjectDirs: liveListProjectDirs,
     newestTranscript: liveNewestTranscript,
-    log: (line) => console.log(`suite watch: ${line}`),
-    dialogs: liveDialogIo(tmux ?? liveTmuxDeps(env), env.HOME ?? "", (line) => console.log(`suite watch: ${line}`)),
+    log: (line) => console.log(`${CLI_NAME} watch: ${line}`),
+    dialogs: liveDialogIo(tmux ?? liveTmuxDeps(env), env.HOME ?? "", (line) => console.log(`${CLI_NAME} watch: ${line}`)),
     runtimeIdFor: runtimeIdResolver(env),
     async post(url, body, contentType, auth) {
       try {
@@ -552,7 +553,7 @@ export function liveWatchDeps(
         // Say WHY. A bare 0 cost an hour of blind debugging: the daemon was
         // sweeping correctly and only the POST was failing, and "HTTP 0"
         // looked identical to a collector that was merely down.
-        console.error(`suite watch: telemetry POST failed: ${(err as Error).message}`);
+        console.error(`${CLI_NAME} watch: telemetry POST failed: ${(err as Error).message}`);
         return 0;
       }
     },
@@ -648,7 +649,7 @@ export function shouldSelfInstall(
   env: Record<string, string | undefined>,
 ): boolean {
   if (!args.install) return false;
-  if (env[SUPERVISED_ENV] === "1") return false;
+  if (isSupervised(env)) return false;
   if (args.once) return false;
   if (!args.apply) return false;
   return true;

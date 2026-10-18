@@ -13,17 +13,18 @@
  * XDG variables are on the list because per-root isolation depends on them: a
  * throwaway HOME whose XDG_* point elsewhere would silently reach real state.
  *
- * Three families are NEVER inherited, even though the allowlist already
+ * Four families are NEVER inherited, even though the allowlist already
  * excludes them — stated so a later widening of the allowlist cannot quietly
  * reintroduce them:
  *
- *   SUITE_*     the operator's own Suite session, token included
+ *   BURROW_*    the operator's own Suite session, token included (new name)
+ *   SUITE_*     the same, under the legacy name
  *   HERMES_*    another Hermes install's home and profile
  *   OPENCLAW_*  another OpenClaw's state dir and config path — hive's live
  *               gateway is exactly such an install
  *
  * An override may set a HERMES_* or OPENCLAW_* name (that is its purpose),
- * but never a SUITE_* token variable: a harness that needs the token gets a
+ * but never a BURROW_* or SUITE_* token variable: a harness that needs the token gets a
  * ref it resolves itself, or the value on a stdin pipe.
  */
 import { createStore, spawnWithSecrets, type CredentialStore, type SpawnResult } from "./secrets.ts";
@@ -49,19 +50,23 @@ export const ALLOWED_ENV = [
 ] as const;
 
 /** Prefixes never inherited from the parent. */
-export const STRIPPED_PREFIXES = ["SUITE_", "HERMES_", "OPENCLAW_"] as const;
+export const STRIPPED_PREFIXES = ["BURROW_", "SUITE_", "HERMES_", "OPENCLAW_"] as const;
+
+/** The two generations of the operator's own Suite/Burrow variables. */
+const SESSION_PREFIXES = ["BURROW_", "SUITE_"] as const;
 
 const isAllowed = (name: string): boolean =>
   (ALLOWED_ENV as readonly string[]).includes(name) || name.startsWith("LC_");
 
 const isStripped = (name: string): boolean => STRIPPED_PREFIXES.some((p) => name.startsWith(p));
 
-/** A SUITE_* name that could carry a credential. */
-const isSuiteSecretName = (name: string): boolean => name.startsWith("SUITE_") && /TOKEN|SECRET|KEY|PASS/.test(name);
+/** A BURROW_* or SUITE_* name that could carry a credential. */
+export const isSuiteSecretName = (name: string): boolean =>
+  SESSION_PREFIXES.some((p) => name.startsWith(p)) && /TOKEN|SECRET|KEY|PASS/.test(name);
 
 export class ForbiddenOverride extends Error {
   constructor(name: string) {
-    super(`harnessChildEnv refuses to set ${name}: a harness child never receives a Suite credential in its environment`);
+    super(`harnessChildEnv refuses to set ${name}: a harness child never receives a Burrow credential in its environment`);
     this.name = "ForbiddenOverride";
   }
 }

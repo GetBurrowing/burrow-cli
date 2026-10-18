@@ -24,15 +24,20 @@
  * into the installer's environment, and the installer and the tarball cannot
  * come from two orgs. The resolved `owner/repo` is printed on every update.
  */
-import { VERSION } from "../version.ts";
-import { OWNER_ENV, apiCommitUrl, ownerFrom, rawUrl, repoSlug, type Env } from "../repo_source.ts";
+import { VERSION, CLI_NAME } from "../version.ts";
+import { burrowName, envSource, suiteName } from "../env_names.ts";
+import { OWNER_ENV_BURROW, apiCommitUrl, ownerFrom, rawUrl, repoSlug, type Env } from "../repo_source.ts";
 
 /** This CLI's repo name. Its owner comes from repo_source.ts. */
 export const REPO_NAME = "suite-cli";
 
-/** The env that pins a single, already-resolved owner. */
+/**
+ * The env that pins a single, already-resolved owner. Keyed by the BURROW name
+ * so re-reading it through env_names.ts is not mistaken for an operator still
+ * setting the legacy variable.
+ */
 function ownerEnv(owner: string): Env {
-  return { [OWNER_ENV]: owner };
+  return { [OWNER_ENV_BURROW]: owner };
 }
 
 /** What `install.sh` itself defaults to when SUITE_CLI_REF is unset. */
@@ -99,16 +104,38 @@ export async function resolveRefToSha(ref: string, env: Env = process.env): Prom
 }
 
 /**
+ * `NAME='value'` assignments for the installer's environment, under BOTH the
+ * BURROW_* and SUITE_* names, one value per pair.
+ *
+ * BOTH, because the installer that runs may be OLD: `burrow update` to a ref
+ * pinned before the rename fetches an install.sh that reads only SUITE_*. A
+ * BURROW-only export would silently install `main` from the default org while
+ * looking like it honoured the pin. The new install.sh reads BURROW first, so
+ * the pair can never disagree. Values are already validated as bare slugs and
+ * safe refs, so they are safe inside single quotes.
+ */
+export function installerEnvAssignments(owner: string, ref: string): string {
+  // BURROW names first, then SUITE: the order is cosmetic to sh, and keeps the
+  // legacy pair adjacent exactly as a pre-rename `suite update` wrote it.
+  return [
+    `${burrowName("GITHUB_OWNER")}='${owner}'`,
+    `${burrowName("CLI_REF")}='${ref}'`,
+    `${suiteName("GITHUB_OWNER")}='${owner}'`,
+    `${suiteName("CLI_REF")}='${ref}'`,
+  ].join(" ");
+}
+
+/**
  * The exact argv that performs the update.
  *
- * `SUITE_CLI_REF` is exported into the installer's environment AND used to
- * build its URL, from the same argument — see the module note. Pure and
- * exported so a test can pin both halves without running an install.
+ * The ref is exported into the installer's environment AND used to build its
+ * URL, from the same argument — see the module note. Pure and exported so a
+ * test can pin both halves without running an install.
  *
- * `SUITE_GITHUB_OWNER` is exported the same way: resolved ONCE from `env`,
- * then used for the installer URL and handed to the installer, which builds
- * its tarball URL from it. An invalid owner throws here, before any argv
- * exists.
+ * The owner is exported the same way: resolved ONCE from `env`, then used for
+ * the installer URL and handed to the installer, which builds its tarball URL
+ * from it. An invalid owner throws here, before any argv exists. Both go out
+ * under both generations of name; see {@link installerEnvAssignments}.
  *
  * When the repo is private the raw URL 404s without auth, so we resolve a
  * GitHub token from `gh` and pass it as an Authorization header. The token
@@ -130,8 +157,12 @@ export function updateArgv(ref: string, fetcher: Fetcher = "curl", env: Env = pr
   // (e.g. install.sh's replace prompt is declined), curl fails with exit 23
   // ("Failure writing output to destination"), which -f promotes to a fatal
   // error even though the download itself succeeded.
-  const tmp = '/tmp/suite-install.sh';
-  const installer = `${OWNER_ENV}='${owner}' SUITE_CLI_REF='${ref}' sh ${tmp}`;
+  //
+  // `$$` is the pid of the `sh -c` running this line, so two concurrent
+  // updates (or two users on one box) never share a temp file. It is removed
+  // afterwards and the installer's own exit code is kept.
+  const tmp = "/tmp/burrow-install.sh.$$";
+  const installer = `${installerEnvAssignments(owner, ref)} sh ${tmp}; rc=$?; rm -f ${tmp}; exit $rc`;
   const download =
     fetcher === "curl"
       ? `GH_TOKEN=$(gh auth token 2>/dev/null || true); export GH_TOKEN; curl -fsSL \${GH_TOKEN:+-H "Authorization: token $GH_TOKEN"} -o ${tmp} '${url}' && ${installer}`
@@ -139,10 +170,16 @@ export function updateArgv(ref: string, fetcher: Fetcher = "curl", env: Env = pr
   return ["sh", "-c", download];
 }
 
-/** The ref to install: explicit override, else the published default. */
+/** The ref to install: explicit override (BURROW_CLI_REF, else SUITE_CLI_REF), else the published default. */
 export function resolveRef(env: Record<string, string | undefined>): string {
-  const ref = env.SUITE_CLI_REF;
-  return ref === undefined || ref === "" ? DEFAULT_REF : ref;
+  return resolveRefSource(env).value;
+}
+
+/** The ref plus the variable that supplied it, so a refusal names the one the operator set. */
+export function resolveRefSource(env: Record<string, string | undefined>): { name: string | null; value: string } {
+  const source = envSource(env, "CLI_REF");
+  if (source === null || source.value === "") return { name: null, value: DEFAULT_REF };
+  return source;
 }
 
 export interface UpdateDeps {
@@ -166,17 +203,18 @@ export interface UpdateDeps {
 export function announceLines(ref: string, env: Env = process.env): string[] {
   const suffix = ref === DEFAULT_REF ? "" : ` (ref ${ref})`;
   return [
-    `updating suite ${VERSION}${suffix} — running the installer from ${installerUrl(ref, env)}`,
+    `updating ${CLI_NAME} ${VERSION}${suffix} — running the installer from ${installerUrl(ref, env)}`,
     `repository ${repoSlug(REPO_NAME, env)}`,
     "",
   ];
 }
 
 export async function runUpdate(deps: UpdateDeps): Promise<number> {
-  const ref = resolveRef(deps.env);
+  const refSource = resolveRefSource(deps.env);
+  const ref = refSource.value;
 
   if (!refIsSafe(ref)) {
-    deps.err(`suite: refusing to update from SUITE_CLI_REF="${ref}" — not a plain branch, tag or commit.`);
+    deps.err(`${CLI_NAME}: refusing to update from ${refSource.name ?? "BURROW_CLI_REF"}="${ref}" — not a plain branch, tag or commit.`);
     return UPDATE_REFUSED_EXIT;
   }
 
@@ -187,7 +225,7 @@ export async function runUpdate(deps: UpdateDeps): Promise<number> {
   try {
     owner = ownerFrom(deps.env);
   } catch (e) {
-    deps.err(`suite: refusing to update: ${(e as Error).message}`);
+    deps.err(`${CLI_NAME}: refusing to update: ${(e as Error).message}`);
     return UPDATE_REFUSED_EXIT;
   }
   const env = ownerEnv(owner);
@@ -196,12 +234,12 @@ export async function runUpdate(deps: UpdateDeps): Promise<number> {
   // to do and then not doing it is worse than refusing up front.
   const fetcher = FETCHERS.find((tool) => deps.which(tool) !== null);
   if (fetcher === undefined) {
-    deps.err(`suite: update needs ${FETCHERS.join(" or ")} to download the installer, and neither is on PATH.`);
+    deps.err(`${CLI_NAME}: update needs ${FETCHERS.join(" or ")} to download the installer, and neither is on PATH.`);
     return UPDATE_REFUSED_EXIT;
   }
   const missing = REQUIRED_TOOLS.filter((tool) => deps.which(tool) === null);
   if (missing.length > 0) {
-    deps.err(`suite: update needs ${missing.join(" and ")}, not on PATH.`);
+    deps.err(`${CLI_NAME}: update needs ${missing.join(" and ")}, not on PATH.`);
     return UPDATE_REFUSED_EXIT;
   }
 
@@ -247,14 +285,14 @@ export function failureLines(code: number): string[] {
   const lines: string[] = [];
   if (code === SIGPIPE_EXIT) {
     lines.push(
-      "suite: the installer was cut off because its output had nowhere to go — `suite update` was piped into something that exited first (`| head`, `| grep -q`, a closed pager).",
+      `${CLI_NAME}: the installer was cut off because its output had nowhere to go — \`${CLI_NAME} update\` was piped into something that exited first (\`| head\`, \`| grep -q\`, a closed pager).`,
     );
-    lines.push("suite: NOTHING WAS INSTALLED. Re-run it without the pipe.");
+    lines.push(`${CLI_NAME}: NOTHING WAS INSTALLED. Re-run it without the pipe.`);
   } else {
-    lines.push(`suite: the installer exited ${code} — the update did not complete.`);
+    lines.push(`${CLI_NAME}: the installer exited ${code} — the update did not complete.`);
   }
   lines.push(
-    "suite: your previous version is intact; install.sh stages the new one and swaps only at the end, so a failure here leaves the working install alone.",
+    `${CLI_NAME}: your previous version is intact; install.sh stages the new one and swaps only at the end, so a failure here leaves the working install alone.`,
   );
   return lines;
 }

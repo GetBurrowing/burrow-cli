@@ -1,5 +1,7 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { webUrl, type Env } from "./repo_source.ts";
+import { burrowName, envValue, suiteName } from "./env_names.ts";
+import { CLI_NAME } from "./version.ts";
 
 /**
  * Keeping `suite watch` running without anyone remembering to start it.
@@ -82,6 +84,8 @@ export function tmuxSupervisorArgv(binary: string, intervalSeconds: number): str
       "-s",
       SERVICE_NAME,
       "-e",
+      `${SUPERVISED_ENV_BURROW}=1`,
+      "-e",
       `${SUPERVISED_ENV}=1`,
       "-e",
       `LANG=${serviceLocale(process.env.LANG)}`,
@@ -93,6 +97,7 @@ export function tmuxSupervisorArgv(binary: string, intervalSeconds: number): str
   ];
 }
 
+// Not renamed to burrow in 0.8.0: a new unit name would install a second watchdog beside the live one.
 export const SERVICE_NAME = "suite-watch";
 
 /**
@@ -103,7 +108,18 @@ export const SERVICE_NAME = "suite-watch";
  * every restart, forever. This variable is how the process knows it IS the
  * daemon and should get on with sweeping rather than re-installing itself.
  */
-export const SUPERVISED_ENV = "SUITE_WATCH_SUPERVISED";
+export const SUPERVISED_ENV = suiteName("WATCH_SUPERVISED");
+
+/**
+ * The marker is written under BOTH names: the BURROW one so this CLI's own
+ * read does not report a deprecation for a value it wrote itself, the SUITE one
+ * so an older `suite` binary the unit happens to run still sees it.
+ */
+export const SUPERVISED_ENV_BURROW = burrowName("WATCH_SUPERVISED");
+
+/** Is this process the supervised daemon? Reads BURROW_ then SUITE_WATCH_SUPERVISED. */
+export const isSupervised = (env: Record<string, string | undefined>): boolean =>
+  envValue(env, "WATCH_SUPERVISED") === "1";
 
 /**
  * Self-imposed ceiling, in bytes.
@@ -115,6 +131,7 @@ export const SUPERVISED_ENV = "SUITE_WATCH_SUPERVISED";
  * equally protected by the unit files alone.
  */
 export const RSS_CEILING_BYTES = 512 * 1024 * 1024;
+// Not renamed to burrow in 0.8.0: a new label would load a second launchd job beside the live one.
 export const LAUNCHD_LABEL = "technology.milvenan.suite-watch";
 
 /**
@@ -178,6 +195,7 @@ export function envFilePath(home: string): string {
 }
 
 export function systemdUnit(input: SupervisorInput): string {
+  // Unit text unchanged in 0.8.0 (Description says Suite): new text rewrites every live unit.
   return `[Unit]
 Description=Suite agent session watchdog
 Documentation=${webUrl("suite-cli", input.env)}
@@ -188,6 +206,7 @@ Type=simple
 Environment=PATH=${servicePath(input.home, input.inheritedPath)}
 Environment=HOME=${input.home}
 Environment=LANG=${serviceLocale(input.inheritedLocale)}
+Environment=${SUPERVISED_ENV_BURROW}=1
 Environment=${SUPERVISED_ENV}=1
 EnvironmentFile=-${envFilePath(input.home)}
 ExecStart=${input.binary} watch --interval ${input.intervalSeconds}
@@ -225,6 +244,7 @@ export function launchdPlist(input: SupervisorInput): string {
     <key>PATH</key><string>${servicePath(input.home, input.inheritedPath)}</string>
     <key>HOME</key><string>${input.home}</string>
     <key>LANG</key><string>${serviceLocale(input.inheritedLocale)}</string>
+    <key>${SUPERVISED_ENV_BURROW}</key><string>1</string>
     <key>${SUPERVISED_ENV}</key><string>1</string>
   </dict>
   <key>Nice</key><integer>10</integer>
@@ -292,7 +312,7 @@ export function supervisorPlan(input: SupervisorInput): SupervisorPlan {
     path: "",
     contents: "",
     activate: [],
-    summary: `no supported service manager on ${input.platform}; run "suite watch" yourself`,
+    summary: `no supported service manager on ${input.platform}; run "${CLI_NAME} watch" yourself`,
   };
 }
 
@@ -363,6 +383,7 @@ export function resolveSelfBinary(
   argv: string[],
 ): string {
   const home = env.HOME ?? "";
+  // Still `suite`: this path is baked into installed units' ExecStart/ProgramArguments.
   const installed = `${home}/.local/bin/suite`;
   const self = argv[1];
   if (self && self.startsWith("/") && self.endsWith("/suite")) return self;
@@ -398,11 +419,13 @@ export function readTelemetryAuth(
   env: Record<string, string | undefined>,
   readFile: (p: string) => string | null,
 ): string | null {
-  const direct = env.SUITE_TELEMETRY_AUTH;
+  const direct = envValue(env, "TELEMETRY_AUTH");
   if (direct) return direct;
   const contents = readFile(envFilePath(env.HOME ?? ""));
   if (contents === null) return null;
-  return parseEnvFile(contents).SUITE_TELEMETRY_AUTH ?? null;
+  // The env file is read with the same precedence as the environment: a
+  // BURROW_TELEMETRY_AUTH line wins, a SUITE_ one still works.
+  return envValue(parseEnvFile(contents), "TELEMETRY_AUTH") ?? null;
 }
 
 /** The real filesystem and service manager. */
@@ -421,6 +444,7 @@ export function liveSupervisorIo(): SupervisorIo {
 /* Agent restore on boot — written, never enabled                             */
 /* ------------------------------------------------------------------------- */
 
+// Not renamed to burrow in 0.8.0: a new unit/label would leave a second restore job beside the first.
 export const RESTORE_SERVICE_NAME = "suite-agents";
 export const RESTORE_LAUNCHD_LABEL = "technology.milvenan.suite-agents";
 

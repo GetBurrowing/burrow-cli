@@ -36,7 +36,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { basename, dirname, resolve } from "node:path";
 import { projectKeys } from "./claude_wiring.ts";
 import { DEFAULT_SESSION_NAMING, emptyConfig, parseConfig, type SuiteConfig } from "./config.ts";
-import { assertWritable, configDir, configPath, gitProbe, type GitProbe } from "./paths.ts";
+import { assertWritable, configDir, configPath, gitProbe, legacyConfigDir, type GitProbe } from "./paths.ts";
 import { sanitizeSessionName } from "./tmux.ts";
 
 type Env = Record<string, string | undefined>;
@@ -97,6 +97,43 @@ export function agentConfigPath(env: Env, dir: string): string {
 
 export function agentCredentialsPath(env: Env, dir: string): string {
   return resolve(agentsDir(env), `${agentKey(dir)}.credentials.json`);
+}
+
+/**
+ * The legacy `<config>/suite/agents` directory, but ONLY when it is a second,
+ * distinct directory — i.e. configDir resolved to burrow while a suite one is
+ * also on disk. Null otherwise (one dir in play: nothing to fall back to).
+ */
+function legacyAgentsDir(env: Env): string | null {
+  const legacy = legacyConfigDir(env);
+  if (resolve(configDir(env)) === legacy) return null;
+  return existsSync(legacy) ? resolve(legacy, AGENTS_DIRNAME) : null;
+}
+
+/**
+ * The directory that holds `dir`'s record for READING: the resolved agents dir
+ * when the record is there, else the legacy suite one when only it has the key.
+ * READ-ONLY: a legacy record is never copied, moved or rewritten from here. The
+ * record and its credentials are read from the same directory, so a key's pair
+ * is never split across the two.
+ */
+function agentsDirForRead(env: Env, dir: string): string {
+  const primary = agentsDir(env);
+  const name = `${agentKey(dir)}.json`;
+  if (existsSync(resolve(primary, name))) return primary;
+  const legacy = legacyAgentsDir(env);
+  if (legacy !== null && existsSync(resolve(legacy, name))) return legacy;
+  return primary;
+}
+
+/** Where `dir`'s record is read from (see {@link agentsDirForRead}); writes always use {@link agentConfigPath}. */
+export function agentConfigReadPath(env: Env, dir: string): string {
+  return resolve(agentsDirForRead(env, dir), `${agentKey(dir)}.json`);
+}
+
+/** Where `dir`'s credentials are read from: beside the record that is read. */
+export function agentCredentialsReadPath(env: Env, dir: string): string {
+  return resolve(agentsDirForRead(env, dir), `${agentKey(dir)}.credentials.json`);
 }
 
 /* ------------------------------------------------------------------------- */
@@ -233,7 +270,7 @@ export function writeAgentConnection(
 /** The record stored at `dir`'s own key, if it names `dir`. No ancestor lookup. */
 export function readAgentRecordExact(env: Env, dir: string): AgentConnection | null {
   const canon = canonicalDir(dir);
-  const path = agentConfigPath(env, canon);
+  const path = agentConfigReadPath(env, canon);
   if (!existsSync(path)) return null;
   let text: string;
   try {
@@ -259,7 +296,7 @@ export function readAgentRecordExact(env: Env, dir: string): AgentConnection | n
 export function readAgentConnection(env: Env, cwd: string): AgentLookup {
   const mismatched: string[] = [];
   for (const candidate of projectKeys(canonicalDir(cwd))) {
-    const path = agentConfigPath(env, candidate);
+    const path = agentConfigReadPath(env, candidate);
     if (!existsSync(path)) continue;
     let record: AgentRecord | null = null;
     try {
@@ -279,7 +316,7 @@ export function readAgentConnection(env: Env, cwd: string): AgentLookup {
 
 /** The secrets saved beside `dir`'s record, or null. Never throws. */
 export function readAgentSecrets(env: Env, dir: string): AgentSecrets | null {
-  const path = agentCredentialsPath(env, dir);
+  const path = agentCredentialsReadPath(env, dir);
   if (!existsSync(path)) return null;
   try {
     return parseSecrets(readFileSync(path, "utf8"));
@@ -288,9 +325,25 @@ export function readAgentSecrets(env: Env, dir: string): AgentSecrets | null {
   }
 }
 
-/** Every well-formed record on this machine, sorted by folder. Never throws. */
+/**
+ * Every well-formed record on this machine, sorted by folder. Never throws.
+ * Includes a legacy suite-dir record whose key the resolved dir lacks, by the
+ * same per-file rule as {@link readAgentConnection}.
+ */
 export function listAgentConnections(env: Env = process.env): AgentConnection[] {
-  const dir = agentsDir(env);
+  const primary = listAgentRecordsIn(agentsDir(env));
+  const legacyDir = legacyAgentsDir(env);
+  if (legacyDir === null) return primary;
+  const have = new Set(primary.map((c) => basename(c.path)));
+  const legacy = listAgentRecordsIn(legacyDir).filter((c) => !have.has(basename(c.path)));
+  return sortByDir([...primary, ...legacy]);
+}
+
+function sortByDir(list: AgentConnection[]): AgentConnection[] {
+  return list.sort((x, y) => (x.record.dir < y.record.dir ? -1 : x.record.dir > y.record.dir ? 1 : 0));
+}
+
+function listAgentRecordsIn(dir: string): AgentConnection[] {
   let names: string[];
   try {
     names = readdirSync(dir);

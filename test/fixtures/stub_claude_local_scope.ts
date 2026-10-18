@@ -6,17 +6,19 @@
  * writes nothing, so a test built on it can count adds but can never see the
  * NEXT launch read back what the last one wrote. Alternating launches across
  * two folders — what `suite restore` does at boot — is exactly the case where
- * that read-back matters. This stub closes the loop, at local scope only:
+ * that read-back matters. This stub closes the loop, at local AND user scope:
  *
- *   claude mcp add NAME -s local [-e K=V ...] -- CMD ARGS...        stdio entry
- *   claude mcp add NAME -s local (-t|--transport) http URL [-H "K: V" ...]
- *   claude mcp remove NAME -s local
- *   claude mcp list                                                 every entry, "✔ Connected"
+ *   claude mcp add NAME -s local|user [-e K=V ...] -- CMD ARGS...        stdio entry
+ *   claude mcp add NAME -s local|user (-t|--transport) http URL [-H "K: V" ...]
+ *   claude mcp remove NAME -s local|user
+ *   claude mcp list        this folder's effective entries, "✔ Connected": local, then unshadowed user
  *
- * Entries land in `projects[<cwd>].mcpServers` of `$CLAUDE_CONFIG_DIR/.claude.json`
- * (else `$HOME/.claude.json`), mode 0600 — the shape Claude Code 2.1.281
- * writes (measured; see MCP_SCOPE in src/commands/init.ts). An add for a name
- * already present fails with "already exists", exit 1, as the real CLI does.
+ * Local entries land in `projects[<cwd>].mcpServers` of `$CLAUDE_CONFIG_DIR/.claude.json`
+ * (else `$HOME/.claude.json`), user entries in its top-level `mcpServers`, mode
+ * 0600 — the shapes Claude Code 2.1.281 writes (measured; see MCP_SCOPE in
+ * src/commands/init.ts). An add for a name already present IN THAT SCOPE fails
+ * with "already exists", exit 1, as the real CLI does; a remove of an absent
+ * name fails with "No MCP server found". A scope other than local/user fails.
  * Every invocation's argv is appended, tab-separated, to $STUB_LOG.
  *
  * Named apart from the 01a0d6b9 branch's test/fixtures/stub_claude_mcp.ts so
@@ -28,6 +30,7 @@ import { resolve } from "node:path";
 type Entry = Record<string, unknown>;
 interface ClaudeJson {
   projects?: Record<string, { mcpServers?: Record<string, Entry> }>;
+  mcpServers?: Record<string, Entry>;
   [k: string]: unknown;
 }
 
@@ -49,7 +52,12 @@ function save(data: ClaudeJson): void {
   chmodSync(file, 0o600);
 }
 
-function servers(data: ClaudeJson): Record<string, Entry> {
+function servers(data: ClaudeJson, scope = "local"): Record<string, Entry> {
+  if (scope === "user") {
+    data.mcpServers ??= {};
+    return data.mcpServers;
+  }
+  if (scope !== "local") fail(`stub_claude_local_scope: only -s local|user is modelled, got ${scope}`);
   data.projects ??= {};
   data.projects[cwd] ??= {};
   const project = data.projects[cwd] as { mcpServers?: Record<string, Entry> };
@@ -66,7 +74,9 @@ if (argv[0] !== "mcp") process.exit(0);
 
 if (argv[1] === "list") {
   const data = load();
-  for (const name of Object.keys(data.projects?.[cwd]?.mcpServers ?? {})) {
+  const local = Object.keys(data.projects?.[cwd]?.mcpServers ?? {});
+  const user = Object.keys(data.mcpServers ?? {}).filter((n) => !local.includes(n));
+  for (const name of [...local, ...user]) {
     process.stdout.write(`${name}: stub - ✔ Connected\n`);
   }
   process.exit(0);
@@ -74,8 +84,10 @@ if (argv[1] === "list") {
 
 if (argv[1] === "remove") {
   const name = argv[2] ?? fail("remove: no name");
+  const at = argv.indexOf("-s") >= 0 ? argv.indexOf("-s") : argv.indexOf("--scope");
+  const scope = at >= 0 ? (argv[at + 1] ?? "local") : "local";
   const data = load();
-  const map = servers(data);
+  const map = servers(data, scope);
   if (!(name in map)) fail(`No MCP server found with name: ${name}`);
   delete map[name];
   save(data);
@@ -116,10 +128,9 @@ if (argv[1] === "add") {
       positional.push(a);
     }
   }
-  if (scope !== "local") fail(`stub_claude_local_scope: only -s local is modelled, got ${scope}`);
   const data = load();
-  const map = servers(data);
-  if (name in map) fail(`MCP server ${name} already exists in local config`);
+  const map = servers(data, scope);
+  if (name in map) fail(`MCP server ${name} already exists in ${scope} config`);
   if (transport === "http") {
     map[name] = { type: "http", url: positional[0] ?? "", headers };
   } else {
@@ -127,7 +138,7 @@ if (argv[1] === "add") {
     map[name] = { type: "stdio", command: cmd ?? "", args, env };
   }
   save(data);
-  process.stdout.write(`Added ${transport === "http" ? "HTTP" : "stdio"} MCP server ${name} to local config\n`);
+  process.stdout.write(`Added ${transport === "http" ? "HTTP" : "stdio"} MCP server ${name} to ${scope} config\n`);
   process.exit(0);
 }
 

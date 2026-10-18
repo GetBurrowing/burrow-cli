@@ -29,7 +29,7 @@
  *     requires seeing the word from `claude mcp list`, and a line we cannot
  *     parse is a FAILURE that prints the raw line — never a false green.
  */
-import { resolve } from "node:path";
+import { dirname, resolve } from "node:path";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
@@ -45,6 +45,7 @@ import { promptConnection } from "../connection.ts";
 import { canonicalDir, writeAgentConnection } from "../agent_connections.ts";
 import { nextCommand, row } from "../ui.ts";
 import { httpsCloneUrl, sshCloneUrl, type Env } from "../repo_source.ts";
+import { bothNames, burrowName, entryValue, suiteName, type FallbackSuffix } from "../env_names.ts";
 import {
   type SupervisorIo,
   type SupervisorResult,
@@ -53,6 +54,7 @@ import {
   supervisorPlan,
   writeRestoreUnit,
 } from "../supervisor.ts";
+import { CLI_NAME } from "../version.ts";
 
 /* ------------------------------------------------------------------------- */
 /* Empirical finding — ${ENV_VAR} interpolation                               */
@@ -153,6 +155,7 @@ export interface InitOptions {
 }
 
 /** The Claude Code channel plugin's repo name. Its owner comes from repo_source.ts. */
+// Not renamed to burrow in 0.8.0: the channel repo rename is task C's; the old name redirects on GitHub.
 export const PLUGIN_REPO_NAME = "claude-code-suite-channel";
 
 /** The plugin's clone URL under the owner `env` names (SUITE_GITHUB_OWNER). */
@@ -292,7 +295,7 @@ export const BUN_SH_MANAGER = "bun.sh";
 /**
  * What `curl -fsSL https://bun.sh/install | bash` needs before it can work: it
  * fetches with curl, runs under bash, and unpacks a ZIP release with unzip.
- * The launcher (`bin/suite.template`) checks the same three; this is the same
+ * The launcher (`bin/burrow.template`) checks the same three; this is the same
  * precondition on the other entrypoint, because which one a user reaches
  * should not decide whether they get a clear refusal or a broken half-install.
  */
@@ -515,7 +518,7 @@ function isSecureScheme(protocol: string): boolean {
       return false;
     default:
       throw new Error(
-        `suite: ${protocol}// is not a Suite URL — paste the https:// address you open in a browser, or the wss:// runtime URL.`,
+        `${CLI_NAME}: ${protocol}// is not a Burrow URL — paste the https:// address you open in a browser, or the wss:// runtime URL.`,
       );
   }
 }
@@ -556,25 +559,21 @@ export function channelAddArgs(entry: ChannelEntry): string[] {
   if (!entry.indexPath.startsWith("/")) {
     throw new Error(`the plugin entrypoint must be an absolute path, got: ${entry.indexPath}`);
   }
-  return [
-    "claude",
-    "mcp",
-    "add",
-    CHANNEL_SERVER,
-    "-s",
-    MCP_SCOPE,
-    "-e",
-    `SUITE_URL=${channelWsUrl(entry.suiteUrl)}`,
-    "-e",
-    `SUITE_RUNTIME_ID=${entry.runtimeId}`,
-    "-e",
-    `SUITE_TOKEN=${entry.tokenLiteral}`,
-    "-e",
-    "SUITE_ALLOW_PERMISSION_RELAY=0",
-    "--",
-    "bun",
-    entry.indexPath,
+  // BOTH NAMES, ONE VALUE. The pinned channel plugin reads only `SUITE_*`
+  // today, so those stay; `BURROW_*` is written alongside so a plugin that has
+  // moved to the new names reads the same entry. Readers go BURROW-first (see
+  // `entryValue` in env_names.ts); staleness demands the two agree.
+  const pairs: Array<[FallbackSuffix, string]> = [
+    ["URL", channelWsUrl(entry.suiteUrl)],
+    ["RUNTIME_ID", entry.runtimeId],
+    ["TOKEN", entry.tokenLiteral],
+    ["ALLOW_PERMISSION_RELAY", "0"],
   ];
+  const envArgs: string[] = [];
+  for (const [suffix, value] of pairs) {
+    for (const [name, v] of Object.entries(bothNames(suffix, value))) envArgs.push("-e", `${name}=${v}`);
+  }
+  return ["claude", "mcp", "add", CHANNEL_SERVER, "-s", MCP_SCOPE, ...envArgs, "--", "bun", entry.indexPath];
 }
 
 /**
@@ -711,6 +710,26 @@ export function connectionReport(statuses: ServerStatus[]): { ok: boolean; lines
 /* ------------------------------------------------------------------------- */
 
 /**
+ * The directories Claude Code may key this folder's local-scope entries under:
+ * the folder itself, and the enclosing git work tree's root when there is one
+ * (measured, see `MCP_SCOPE`).
+ */
+export function projectKeys(cwd: string): string[] {
+  const keys = [resolve(cwd)];
+  let dir = resolve(cwd);
+  for (;;) {
+    if (existsSync(resolve(dir, ".git"))) {
+      if (!keys.includes(dir)) keys.push(dir);
+      break;
+    }
+    const parent = dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return keys;
+}
+
+/**
  * Where Claude Code keeps user- and local-scope MCP entries. Read-only here:
  * this CLI never writes it except through `claude mcp`.
  */
@@ -730,8 +749,7 @@ export function userScopeChannelRuntime(text: string): { present: boolean; runti
     const raw = JSON.parse(text) as { mcpServers?: Record<string, { env?: Record<string, unknown> }> };
     const entry = raw.mcpServers?.[CHANNEL_SERVER];
     if (entry === undefined) return { present: false, runtimeId: null };
-    const id = entry.env?.SUITE_RUNTIME_ID;
-    return { present: true, runtimeId: typeof id === "string" ? id : null };
+    return { present: true, runtimeId: entryValue(entry.env, "RUNTIME_ID") ?? null };
   } catch {
     return { present: false, runtimeId: null };
   }
@@ -758,20 +776,164 @@ export function userScopeLines(found: { present: boolean; runtimeId: string | nu
   return [
     row("warning", "", `a user-scope ${CHANNEL_SERVER} entry names ${named}, not ${runtimeId}; left alone`),
     row("", "", "this directory uses its own entry, which takes precedence here. Any other agent"),
-    row("", "", "directory WITHOUT its own entry still runs as that runtime: run suite init there."),
+    row("", "", `directory WITHOUT its own entry still runs as that runtime: run ${CLI_NAME} init there.`),
   ];
 }
 
+/* ------------------------------------------------------------------------- */
+/* Convergence: one startup-suite, one suite-channel, no legacy alias         */
+/* ------------------------------------------------------------------------- */
+
 /**
- * Register both entries at {@link MCP_SCOPE} in the agent directory.
+ * Server names an older or hand-made setup registered for the SAME install
+ * under a different name. Never ours: this CLI registers only
+ * {@link CHANNEL_SERVER} and {@link TOOLS_SERVER}.
  *
- * Returns the report lines. Never touches user scope: a clash is resolved by
- * removing THIS directory's local entry and re-adding, never anything wider.
+ * WHY THEY ARE REMOVED and canonical user-scope entries are not: a canonical
+ * user-scope entry is SHADOWED in this folder by the local one we just wrote,
+ * so leaving it costs this folder nothing. An alias never shares a name with
+ * ours, so it is never shadowed: it loads a second tools namespace (e.g.
+ * `mcp__suite__*`) beside `mcp__startup-suite__*`, pointing wherever it
+ * points. A real host had a user-scope `suite` naming an install it had left.
+ */
+export const LEGACY_ALIASES = ["suite", "burrow"] as const;
+
+/** An MCP entry as `~/.claude.json` stores it. Holds tokens: never print one. */
+export interface StoredEntry {
+  type?: string;
+  command?: string;
+  args?: string[];
+  env?: Record<string, string>;
+  url?: string;
+  headers?: Record<string, string>;
+}
+
+/** This folder's view of `~/.claude.json`: its local block and the user scope. */
+export interface ScopeView {
+  local: Record<string, StoredEntry>;
+  user: Record<string, StoredEntry>;
+}
+
+/** Parse `~/.claude.json` into {@link ScopeView} for `cwd`, or null when it is not a JSON object. */
+export function scopeView(text: string, cwd: string): ScopeView | null {
+  let raw: { projects?: Record<string, { mcpServers?: unknown }>; mcpServers?: unknown };
+  try {
+    const parsed = JSON.parse(text) as unknown;
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return null;
+    raw = parsed as typeof raw;
+  } catch {
+    return null;
+  }
+  const asMap = (v: unknown): Record<string, StoredEntry> | null =>
+    typeof v === "object" && v !== null && !Array.isArray(v) ? (v as Record<string, StoredEntry>) : null;
+  let local: Record<string, StoredEntry> = {};
+  for (const key of projectKeys(cwd)) {
+    const servers = asMap(raw.projects?.[key]?.mcpServers);
+    if (servers !== null) {
+      local = servers;
+      break;
+    }
+  }
+  return { local, user: asMap(raw.mcpServers) ?? {} };
+}
+
+/** The lowercased host(s) an entry points at: its url, or every URL name in its env. Never a token. */
+export function entryHosts(entry: StoredEntry): string[] {
+  const urls: string[] = [];
+  if (typeof entry.url === "string") urls.push(entry.url);
+  const env = entry.env ?? {};
+  for (const name of [burrowName("URL"), suiteName("URL")]) {
+    const v = env[name];
+    if (typeof v === "string" && v.trim() !== "") urls.push(v);
+  }
+  const hosts: string[] = [];
+  for (const u of urls) {
+    const h = hostOf(u);
+    if (h !== null && !hosts.includes(h)) hosts.push(h);
+  }
+  return hosts;
+}
+
+function hostPhrase(entry: StoredEntry): string {
+  const hosts = entryHosts(entry);
+  return hosts.length === 0 ? "an unreadable host" : hosts.join(", ");
+}
+
+/**
+ * What is wrong with this folder's effective view, as one line per entry, or []
+ * when it has converged: {@link TOOLS_SERVER} and {@link CHANNEL_SERVER} each
+ * present (local wins over user, as Claude Code resolves them), each naming only
+ * `host` (when known), and no {@link LEGACY_ALIASES} name at either scope.
+ * Lines name scope and host, never a token.
+ */
+export function convergenceProblems(view: ScopeView, host: string | null): string[] {
+  const problems: string[] = [];
+  for (const name of [TOOLS_SERVER, CHANNEL_SERVER]) {
+    const scope = view.local[name] !== undefined ? "local" : view.user[name] !== undefined ? "user" : null;
+    if (scope === null) {
+      problems.push(`${name}: not registered for this folder`);
+      continue;
+    }
+    const entry = (scope === "local" ? view.local[name] : view.user[name]) as StoredEntry;
+    const hosts = entryHosts(entry);
+    if (host !== null && (hosts.length === 0 || hosts.some((h) => h !== host))) {
+      problems.push(`${name}: ${scope} scope names ${hostPhrase(entry)}, not ${host}`);
+    }
+  }
+  for (const name of LEGACY_ALIASES) {
+    if (view.local[name] !== undefined) problems.push(`${name}: local scope, ${hostPhrase(view.local[name] as StoredEntry)}`);
+    if (view.user[name] !== undefined) problems.push(`${name}: user scope, ${hostPhrase(view.user[name] as StoredEntry)}`);
+  }
+  return problems;
+}
+
+/**
+ * The folder's MCP entries did not converge after registration. Carries the
+ * report lines produced before the check (removal rows, replace rows), so a
+ * caller that goes on regardless can still print them.
+ *
+ * A LAUNCH (`burrow claude`, `burrow restore`) catches this and starts the
+ * agent with a warning: an agent that runs with one stale alias beside its
+ * entries is better than an agent that does not run (Dalton, 2026-10-17).
+ */
+export class ConvergenceFailed extends Error {
+  readonly lines: string[];
+  constructor(message: string, lines: string[]) {
+    super(message);
+    this.name = "ConvergenceFailed";
+    this.lines = lines;
+  }
+}
+
+/** `~/.claude.json`, or null when it does not exist or cannot be read. */
+function readClaudeJson(env: Record<string, string | undefined>): string | null {
+  try {
+    return readFileSync(claudeJsonPath(env), "utf8");
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Register `invocations` at {@link MCP_SCOPE} in the agent directory, then
+ * CONVERGE: remove every {@link LEGACY_ALIASES} entry this folder sees, and
+ * check what is left.
+ *
+ * Returns the report lines; THROWS {@link ConvergenceFailed} when the folder
+ * did not converge, listing the entries. Canonical user-scope entries are never touched: a clash is
+ * resolved by removing THIS directory's local entry and re-adding. The only
+ * user-scope call this makes is the removal of an alias, printed as it is done.
+ *
+ * `suiteUrl` names the install just registered; without it the host half of
+ * the check is skipped (the names half still runs). `invocations` may be empty:
+ * a folder whose entries are current but which still sees an alias converges
+ * all the same.
  */
 export async function registerServers(
   deps: Pick<InitDeps, "run" | "cwd" | "env">,
   invocations: string[][],
   runtimeId: string,
+  suiteUrl?: string,
 ): Promise<string[]> {
   const lines: string[] = [];
   for (const argv of invocations) {
@@ -811,13 +973,44 @@ export async function registerServers(
   // passes one invocation, and must not be told both were registered.
   for (const argv of invocations) lines.push(row(argv[3] as string, "registered", `local scope: ${deps.cwd}`));
 
-  let text: string | null = null;
-  try {
-    text = readFileSync(claudeJsonPath(deps.env), "utf8");
-  } catch {
-    text = null;
+  const text = readClaudeJson(deps.env);
+  if (text === null) {
+    // Nothing to read is not the same as converged; say so rather than pass.
+    lines.push(row("convergence", "unchecked", `${claudeJsonPath(deps.env)} cannot be read`));
+    return lines;
   }
-  if (text !== null) lines.push(...userScopeLines(userScopeChannelRuntime(text), runtimeId));
+  lines.push(...userScopeLines(userScopeChannelRuntime(text), runtimeId));
+
+  const view = scopeView(text, deps.cwd);
+  if (view === null) {
+    lines.push(row("convergence", "unchecked", `${claudeJsonPath(deps.env)} is not valid JSON`));
+    return lines;
+  }
+  // (i) Legacy aliases, local first, then user. Each removal is printed with
+  // the scope and the host it pointed at — never the token.
+  for (const [scope, map] of [
+    ["local", view.local],
+    ["user", view.user],
+  ] as const) {
+    for (const name of LEGACY_ALIASES) {
+      const entry = map[name];
+      if (entry === undefined) continue;
+      const r = await deps.run(["claude", "mcp", "remove", name, "-s", scope], { cwd: deps.cwd });
+      if (r.exitCode === 0) lines.push(row(name, "removed", `${scope} scope, pointed at ${hostPhrase(entry)}`));
+    }
+  }
+
+  // (ii) The check, against what the file says NOW, not what we meant to do.
+  const after = readClaudeJson(deps.env);
+  const afterView = after === null ? null : scopeView(after, deps.cwd);
+  const host = suiteUrl === undefined ? null : hostOf(suiteUrl);
+  const problems = afterView === null ? [`${claudeJsonPath(deps.env)} cannot be read back`] : convergenceProblems(afterView, host);
+  if (problems.length > 0) {
+    throw new ConvergenceFailed(
+      [`this folder's MCP entries did not converge (${deps.cwd}):`, ...problems.map((p) => `  ${p}`)].join("\n"),
+      lines,
+    );
+  }
   return lines;
 }
 
@@ -887,9 +1080,10 @@ export function adoptMcpJson(text: string): AdoptResult {
 
   const env = (typeof channel?.env === "object" && channel.env !== null ? channel.env : {}) as Record<string, unknown>;
   const str = (v: unknown): string => (typeof v === "string" ? v.trim() : "");
-  const runtimeId = str(env.SUITE_RUNTIME_ID);
-  const channelToken = str(env.SUITE_TOKEN);
-  const channelUrl = str(env.SUITE_URL);
+  // BURROW-first, SUITE fallback: a folder's .mcp.json may be either generation.
+  const runtimeId = entryValue(env, "RUNTIME_ID") ?? "";
+  const channelToken = entryValue(env, "TOKEN") ?? "";
+  const channelUrl = entryValue(env, "URL") ?? "";
   const toolsUrl = str(tools?.url);
   const headers = (typeof tools?.headers === "object" && tools.headers !== null ? tools.headers : {}) as Record<string, unknown>;
   const authKey = Object.keys(headers).find((k) => k.toLowerCase() === "authorization");
@@ -988,7 +1182,7 @@ export async function runInit(deps: InitDeps, options: InitOptions = {}): Promis
     }
     const result: AdoptResult = text === null ? { ok: false, problems: [`${file} cannot be read`] } : adoptMcpJson(text);
     if (!result.ok) {
-      complain(`suite init: refusing --from-mcp-json for ${dir}; nothing was written:`);
+      complain(`${CLI_NAME} init: refusing --from-mcp-json for ${dir}; nothing was written:`);
       for (const p of result.problems) complain(`  ${p}`);
       return { supervisor: null, exitCode: 1, tmuxMissing: false, configPath: "" };
     }
@@ -1011,7 +1205,7 @@ export async function runInit(deps: InitDeps, options: InitOptions = {}): Promis
       throw new Error(
         `the ${plan.manager} installer needs ${missingTools.join(", ")}, ` +
           `${missingTools.length === 1 ? "which is" : "which are"} not on PATH. ` +
-          `install ${missingTools.join(" and ")} with your system package manager, then re-run suite init`,
+          `install ${missingTools.join(" and ")} with your system package manager, then re-run ${CLI_NAME} init`,
       );
     }
     if (await confirm(deps.prompter, `bun is not installed. install it with ${plan.manager}?`)) {
@@ -1040,12 +1234,12 @@ export async function runInit(deps: InitDeps, options: InitOptions = {}): Promis
     say(row("tmux", tmux.version, "present"));
   } else {
     say(row("tmux", "not installed"));
-    say(row("", "", "agents will stop when you close the terminal; suite claude cannot persist them"));
-    say(row("", "", "install tmux and re-run suite init to fix this"));
+    say(row("", "", `agents will stop when you close the terminal; ${CLI_NAME} claude cannot persist them`));
+    say(row("", "", `install tmux and re-run ${CLI_NAME} init to fix this`));
   }
 
   if (options.checkout !== undefined) {
-    say(row("", "", "--checkout is ignored: suite claude sets up the plugin checkout, under the data dir"));
+    say(row("", "", `--checkout is ignored: ${CLI_NAME} claude sets up the plugin checkout, under the data dir`));
   }
 
   // 3. the install connection -------------------------------------------
@@ -1097,7 +1291,7 @@ export async function runInit(deps: InitDeps, options: InitOptions = {}): Promis
   say(row("agent", dir, `connected as ${connectedAs.runtimeId} (${connectedAs.suiteUrl})`));
   const home = deps.env.HOME ?? "";
   if (home !== "" && dir === canonicalDir(home)) {
-    say(row("", "", "this is your home folder: agents in OTHER folders will not use this connection; run suite init in each agent folder"));
+    say(row("", "", `this is your home folder: agents in OTHER folders will not use this connection; run ${CLI_NAME} init in each agent folder`));
   }
 
   // 4. the watchdog, installed unless explicitly declined ---------------
@@ -1108,6 +1302,7 @@ export async function runInit(deps: InitDeps, options: InitOptions = {}): Promis
       home,
       // Absolute path: a service inherits a minimal PATH, and a bare name there
       // fails to start with no useful signal.
+      // Still `suite`, not `burrow`: the path is baked into installed units, and      // changing it rewrites every live host\'s watchdog unit (see supervisor.ts).
       binary: `${home}/.local/bin/suite`,
       inheritedPath: deps.env.PATH,
       inheritedLocale: deps.env.LANG ?? deps.env.LC_ALL,
@@ -1127,6 +1322,7 @@ export async function runInit(deps: InitDeps, options: InitOptions = {}): Promis
     const restore = restoreUnitPlan({
       platform: deps.platform,
       home,
+      // Still `suite`, not `burrow`: the path is baked into installed units, and      // changing it rewrites every live host\'s watchdog unit (see supervisor.ts).
       binary: `${home}/.local/bin/suite`,
       inheritedPath: deps.env.PATH,
       intervalSeconds: 60,
@@ -1141,7 +1337,7 @@ export async function runInit(deps: InitDeps, options: InitOptions = {}): Promis
 
   say("");
   say(`agent ${dir} connected as ${connectedAs.runtimeId} (${connectedAs.suiteUrl}). start it from its folder:`);
-  say(nextCommand(`cd ${dir} && suite claude`));
+  say(nextCommand(`cd ${dir} && ${CLI_NAME} claude`));
 
   return {
     supervisor,

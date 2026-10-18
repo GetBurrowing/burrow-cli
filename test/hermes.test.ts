@@ -414,7 +414,7 @@ describe("stamping from nothing (file: ref)", () => {
     expect(readFileSync(join(home, "python-calls"), "utf8")).toContain(`-m\0pip\0install\0--quiet\0${MCP_SDK_PIN}`);
 
     // The start_agent_session step is this command without --stamp-only.
-    expect(result.human_steps).toEqual([{ kind: "start_agent_session", text: expect.stringContaining(`suite hermes --root ${root}`) }]);
+    expect(result.human_steps).toEqual([{ kind: "start_agent_session", text: expect.stringContaining(`burrow hermes --root ${root}`) }]);
   });
 
   test("no token and no parent SUITE_/HERMES_/OPENCLAW_ value in any argv, env, output or file outside the sanctioned copy", async () => {
@@ -517,7 +517,7 @@ describe("idempotence and repair", () => {
   });
 });
 
-describe("the Suite platform headless defaults (--full-toolset opts out)", () => {
+describe("the Burrow platform headless defaults (--full-toolset opts out)", () => {
   const cfgPath = (): string => join(hermesHome, "config.yaml");
   const toolsetValue = (): unknown => lookupKey(parseYaml(readFileSync(cfgPath(), "utf8")), TOOLSET_KEY);
   /** Every stub call that writes or removes the toolset key. */
@@ -990,11 +990,11 @@ describe("the gateway session", () => {
     // The gateway died and took the tmux server with it: tmux says none, the roster says launched.
     stderr = [];
     await runHermes(stampArgs(), makeDeps({ tmux: tmux.deps, restore }));
-    expect(stderr.join("")).toContain(`suite: previous session ${session} was stale (recorded, no longer running); relaunching`);
+    expect(stderr.join("")).toContain(`burrow: previous session ${session} was stale (recorded, no longer running); relaunching`);
     expect(tmux.ran.filter((a) => a[1] === "new-session")).toHaveLength(2);
   });
 
-  test("--gateway-only execs `hermes gateway run` with an allowlisted env and no Suite credential", async () => {
+  test("--gateway-only execs `hermes gateway run` with an allowlisted env and no Burrow credential", async () => {
     makeManagedPython();
     await stamp();
     const deps = makeDeps();
@@ -1055,7 +1055,7 @@ describe("--stamp-only as a subprocess: the machine contract", () => {
     expect(r.doc.harness).toBe("hermes");
     expect(r.doc.token_ref).toBe(`file:${tokenPath}`);
     expect(r.stdout.trimEnd().endsWith("}")).toBe(true);
-    expect(r.stderr).toContain("suite: ");
+    expect(r.stderr).toContain("burrow: ");
     const step = r.doc.human_steps.find((s) => s.kind === "start_agent_session");
     expect(step?.text).not.toContain("--stamp-only");
     expect(r.doc.actions.find((a) => a.kind === "plugin_checkout")?.target.endsWith(`@${channelRef}`)).toBe(true);
@@ -1073,8 +1073,8 @@ describe("--stamp-only as a subprocess: the machine contract", () => {
 });
 
 describe("pins", () => {
-  test("the channel is pinned to the squash sha of hermes-suite-channel v0.2.0 (PR #6) on main", () => {
-    expect(HERMES_CHANNEL_REF).toBe("71041456d605e2d3341a214e5c09e924148f3558");
+  test("the channel is pinned to the commit tagged v0.3.0 on burrow-channel-hermes main (PR #7)", () => {
+    expect(HERMES_CHANNEL_REF).toBe("f1399d77eba86f898d0d32de8c8baa0a783a72ec");
   });
 
   test("the pin's DEPLOYER comment is present, so the bump is not forgotten at merge", () => {

@@ -9,6 +9,10 @@
  * which is why it is pinned directly rather than through an install.
  */
 import { describe, expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
+import { chmodSync, existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   DEFAULT_REF,
   FETCHERS,
@@ -83,6 +87,12 @@ describe("the ref reaches both halves", () => {
     expect(resolveRef({})).toBe(DEFAULT_REF);
     expect(resolveRef({ SUITE_CLI_REF: "" })).toBe(DEFAULT_REF);
     expect(resolveRef({ SUITE_CLI_REF: "release/1.0" })).toBe("release/1.0");
+  });
+
+  test("resolveRef: BURROW_CLI_REF is read first and wins; an empty one falls back", () => {
+    expect(resolveRef({ BURROW_CLI_REF: "next" })).toBe("next");
+    expect(resolveRef({ BURROW_CLI_REF: "next", SUITE_CLI_REF: "old" })).toBe("next");
+    expect(resolveRef({ BURROW_CLI_REF: "", SUITE_CLI_REF: "old" })).toBe("old");
   });
 });
 
@@ -212,5 +222,91 @@ describe("the update exits with the installer's own code", () => {
     const d = deps({ exec: async () => 0 });
     expect(await runUpdate(d)).toBe(0);
     expect(d.stderr).toEqual([]);
+  });
+});
+
+/* ------------------------------------------------------------------------- */
+/* Both generations of name reach the installer                              */
+/* ------------------------------------------------------------------------- */
+
+describe("the installer gets BURROW_* AND SUITE_* names, one value per pair", () => {
+  const NAMES = ["BURROW_GITHUB_OWNER", "BURROW_CLI_REF", "SUITE_GITHUB_OWNER", "SUITE_CLI_REF"];
+
+  /** Every `NAME='value'` assignment in the script, in order. */
+  const assignments = (script: string) => [...script.matchAll(/\b([A-Z_]+)='([^']*)'/g)].map((m) => [m[1], m[2]]);
+
+  for (const fetcher of FETCHERS) {
+    test(`${fetcher}: all four names, each exactly once, one value per pair`, () => {
+      const script = updateArgv("v9.9.9", fetcher, { BURROW_GITHUB_OWNER: "NewOrg" })[2] ?? "";
+      const pairs = assignments(script).filter(([n]) => NAMES.includes(n ?? ""));
+      expect(pairs).toEqual([
+        ["BURROW_GITHUB_OWNER", "NewOrg"],
+        ["BURROW_CLI_REF", "v9.9.9"],
+        ["SUITE_GITHUB_OWNER", "NewOrg"],
+        ["SUITE_CLI_REF", "v9.9.9"],
+      ]);
+    });
+  }
+
+  test("SUITE_GITHUB_OWNER as the only input still reaches both names", () => {
+    const script = updateArgv("main", "curl", { SUITE_GITHUB_OWNER: "OldOrg" })[2] ?? "";
+    expect(script).toContain("BURROW_GITHUB_OWNER='OldOrg'");
+    expect(script).toContain("SUITE_GITHUB_OWNER='OldOrg'");
+  });
+
+  test("the temp installer is a per-process burrow path, not the shared /tmp/suite-install.sh", () => {
+    const script = updateArgv(DEFAULT_REF)[2] ?? "";
+    expect(script).toContain("/tmp/burrow-install.sh.$$");
+    expect(script).not.toContain("/tmp/suite-install.sh");
+  });
+
+  /**
+   * The argv run for real against a stub `curl` that "downloads" an installer
+   * which prints the four names it was handed, then exits 7. Proves an OLD
+   * installer (one that reads only SUITE_*) is honoured, that the installer's
+   * exit code survives the cleanup, and that the temp file is gone afterwards.
+   */
+  test("run for real: an old SUITE-only installer sees the pin; its exit code and cleanup hold", () => {
+    const dir = mkdtempSync(join(tmpdir(), "burrow-update-argv."));
+    try {
+      const body = join(dir, "installer.sh");
+      writeFileSync(
+        body,
+        '#!/bin/sh\nprintf "%s|%s|%s|%s|%s\\n" "$BURROW_GITHUB_OWNER" "$BURROW_CLI_REF" "$SUITE_GITHUB_OWNER" "$SUITE_CLI_REF" "$0"\nexit 7\n',
+      );
+      writeFileSync(
+        join(dir, "curl"),
+        `#!/bin/sh\nout=""\nwhile [ $# -gt 0 ]; do if [ "$1" = "-o" ]; then out="$2"; shift; fi; shift; done\ncat ${JSON.stringify(body)} >"$out"\n`,
+      );
+      chmodSync(join(dir, "curl"), 0o755);
+      writeFileSync(join(dir, "gh"), "#!/bin/sh\nexit 1\n");
+      chmodSync(join(dir, "gh"), 0o755);
+      const argv = updateArgv("v1.2.3", "curl", { BURROW_GITHUB_OWNER: "NewOrg", SUITE_GITHUB_OWNER: "OldOrg" });
+      const r = spawnSync(argv[0] ?? "sh", argv.slice(1), {
+        encoding: "utf8",
+        env: { PATH: `${dir}:/usr/bin:/bin`, HOME: dir },
+      });
+      expect(r.status).toBe(7);
+      const [owner, ref, legacyOwner, legacyRef, path] = (r.stdout ?? "").trim().split("|");
+      expect([owner, ref, legacyOwner, legacyRef]).toEqual(["NewOrg", "v1.2.3", "NewOrg", "v1.2.3"]);
+      expect(path).toMatch(/^\/tmp\/burrow-install\.sh\.\d+$/);
+      expect(existsSync(path ?? "")).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a refused ref names the variable that supplied it", async () => {
+    const viaBurrow = deps({ env: { BURROW_CLI_REF: "main; id", SUITE_CLI_REF: "main" } });
+    expect(await runUpdate(viaBurrow)).toBe(UPDATE_REFUSED_EXIT);
+    expect(viaBurrow.stderr.join("\n")).toContain('BURROW_CLI_REF="main; id"');
+    const viaSuite = deps({ env: { SUITE_CLI_REF: "main; id" } });
+    expect(await runUpdate(viaSuite)).toBe(UPDATE_REFUSED_EXIT);
+    expect(viaSuite.stderr.join("\n")).toContain('SUITE_CLI_REF="main; id"');
+    expect(viaSuite.stderr.join("\n")).toContain("burrow: refusing");
+  });
+
+  test("the announcement says burrow", () => {
+    expect(announceLines(DEFAULT_REF)[0]).toStartWith(`updating burrow ${VERSION}`);
   });
 });

@@ -30,12 +30,45 @@ function home(env: Env): string {
   return h;
 }
 
-export function configDir(env: Env = process.env): string {
+/** The config directory's name before and after the Burrow rename. */
+export const CONFIG_DIRNAME = "burrow";
+export const LEGACY_CONFIG_DIRNAME = "suite";
+
+/** `$XDG_CONFIG_HOME` when absolute, else `~/.config`. */
+export function configBase(env: Env = process.env): string {
   const xdg = env.XDG_CONFIG_HOME;
-  const base = xdg !== undefined && xdg !== "" && isAbsolute(xdg) ? xdg : resolve(home(env), ".config");
-  return resolve(base, "suite");
+  return xdg !== undefined && xdg !== "" && isAbsolute(xdg) ? xdg : resolve(home(env), ".config");
 }
 
+/** `<config>/suite`, whether or not it exists. Only ever READ from by a fallback; never created here. */
+export function legacyConfigDir(env: Env = process.env): string {
+  return resolve(configBase(env), LEGACY_CONFIG_DIRNAME);
+}
+
+/**
+ * The config directory, decided by EXISTENCE, never by migrating:
+ *
+ *   `<config>/burrow` when it exists;
+ *   else `<config>/suite` when it exists (a host set up before the rename);
+ *   else `<config>/burrow` (a cold host).
+ *
+ * Reads and writes both go to the resolved directory, so an old host keeps
+ * writing where its records already are, and nothing a user has is moved or
+ * deleted. Core's agent-host writes `~/.config/suite/agents/<key>.json` itself;
+ * on such a host the suite directory exists and is chosen by the same rule.
+ * When BOTH exist, burrow wins, and agent records missing from it are still
+ * read from the suite directory one file at a time (agent_connections.ts).
+ */
+export function configDir(env: Env = process.env): string {
+  const base = configBase(env);
+  const burrow = resolve(base, CONFIG_DIRNAME);
+  if (existsSync(burrow)) return burrow;
+  const legacy = resolve(base, LEGACY_CONFIG_DIRNAME);
+  if (existsSync(legacy)) return legacy;
+  return burrow;
+}
+
+/** NOT renamed: absolute paths under it are recorded in MCP entries and service units. */
 export function dataDir(env: Env = process.env): string {
   const xdg = env.XDG_DATA_HOME;
   const base = xdg !== undefined && xdg !== "" && isAbsolute(xdg) ? xdg : resolve(home(env), ".local", "share");

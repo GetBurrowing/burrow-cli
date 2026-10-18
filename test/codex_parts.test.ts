@@ -239,7 +239,7 @@ describe("suite codex options and argv", () => {
       'mcp_servers.startup-suite.default_tools_approval_mode="approve"',
       'mcp_servers.suite-channel.command="/usr/bin/bun"',
       'mcp_servers.suite-channel.args=["/opt/suite/src/cli.ts","codex","--reply-mcp"]',
-      'mcp_servers.suite-channel.env={SUITE_CODEX_BRIDGE_SOCKET="/run/user/1000/suite-codex-ab.sock"}',
+      'mcp_servers.suite-channel.env={BURROW_CODEX_BRIDGE_SOCKET="/run/user/1000/suite-codex-ab.sock",SUITE_CODEX_BRIDGE_SOCKET="/run/user/1000/suite-codex-ab.sock"}',
       'mcp_servers.suite-channel.default_tools_approval_mode="approve"',
     ]);
   });

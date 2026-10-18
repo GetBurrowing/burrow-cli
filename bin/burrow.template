@@ -1,16 +1,36 @@
 #!/bin/sh
-# Rendered by install.sh: @SUITE_LIB_DIR@ and @SUITE_VERSION@ are substituted
-# at install time. POSIX sh, because this file must answer --version even on a
-# machine where bun is not installed yet.
+# Rendered by install.sh: @BURROW_LIB_DIR@, @BURROW_VERSION@ and
+# @BURROW_INVOKED_AS@ are substituted at install time. POSIX sh, because this
+# file must answer --version even on a machine where bun is not installed yet.
+#
+# install.sh renders this file TWICE: once as `burrow` and once as `suite`, the
+# old name kept as an alias. Two rendered files, never a symlink, so each one
+# knows the name it was installed under (BURROW_INVOKED_AS) without reading $0.
 set -eu
 
-SUITE_LIB_DIR="@SUITE_LIB_DIR@"
-SUITE_VERSION="@SUITE_VERSION@"
-export SUITE_LIB_DIR SUITE_VERSION
+BURROW_LIB_DIR="@BURROW_LIB_DIR@"
+BURROW_VERSION="@BURROW_VERSION@"
+BURROW_INVOKED_AS="@BURROW_INVOKED_AS@"
+# The SUITE_* names are exported too: `burrow update` to an older pinned ref
+# installs a library that reads only SUITE_LIB_DIR / SUITE_VERSION.
+SUITE_LIB_DIR="$BURROW_LIB_DIR"
+SUITE_VERSION="$BURROW_VERSION"
+export BURROW_LIB_DIR BURROW_VERSION BURROW_INVOKED_AS SUITE_LIB_DIR SUITE_VERSION
+
+# The alias notice, on STDERR only. --version is answered here without bun, so
+# the launcher says it on that path itself; every other path reaches src/cli.ts,
+# which says it there (once, never both). stdout stays byte-identical between
+# `suite` and `burrow`: install.sh and core's agent-host read it.
+alias_notice() {
+	if [ "$BURROW_INVOKED_AS" = "suite" ] && [ "${BURROW_NO_DEPRECATION:-}" != "1" ]; then
+		printf 'suite: this command is now burrow; suite keeps working as an alias\n' >&2
+	fi
+}
 
 case "${1:-}" in
 --version | -V)
-	printf '%s\n' "$SUITE_VERSION"
+	alias_notice
+	printf '%s\n' "$BURROW_VERSION"
 	exit 0
 	;;
 esac
@@ -122,12 +142,12 @@ fi
 # release tarball. Install them once, into the library directory, the first
 # time the launcher runs without them. install.sh does the same when bun is
 # already present; this covers installs made before bun existed on the machine.
-if [ ! -d "$SUITE_LIB_DIR/node_modules" ] && grep -q '"dependencies"' "$SUITE_LIB_DIR/package.json" 2>/dev/null; then
-	printf 'suite: installing runtime dependencies into %s\n' "$SUITE_LIB_DIR" >&2
-	(cd "$SUITE_LIB_DIR" && bun install --production >&2) || {
-		printf 'suite: could not install runtime dependencies; run: (cd %s && bun install --production)\n' "$SUITE_LIB_DIR" >&2
+if [ ! -d "$BURROW_LIB_DIR/node_modules" ] && grep -q '"dependencies"' "$BURROW_LIB_DIR/package.json" 2>/dev/null; then
+	printf 'burrow: installing runtime dependencies into %s\n' "$BURROW_LIB_DIR" >&2
+	(cd "$BURROW_LIB_DIR" && bun install --production >&2) || {
+		printf 'burrow: could not install runtime dependencies; run: (cd %s && bun install --production)\n' "$BURROW_LIB_DIR" >&2
 		exit 1
 	}
 fi
 
-exec bun "$SUITE_LIB_DIR/src/cli.ts" "$@"
+exec bun "$BURROW_LIB_DIR/src/cli.ts" "$@"

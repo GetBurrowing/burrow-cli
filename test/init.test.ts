@@ -42,6 +42,7 @@ import {
   cleanupCleanEnvs,
   createCleanEnv,
   stubsFor,
+  WRITING_CLAUDE_STUB,
   type CleanEnv,
 } from "./clean-env/fixture.ts";
 
@@ -396,16 +397,16 @@ describe("init on a machine where nothing is installed", () => {
     expect(await Bun.file(mine).text()).toBe(theirs);
 
     // And yet the agent ends up with the conventions.
-    const owned = resolve(fx.root, "SUITE_CONVENTIONS.md");
+    const owned = resolve(fx.root, "BURROW_CONVENTIONS.md");
     expect(existsSync(owned)).toBe(true);
     expect(await Bun.file(owned).text()).toContain("assignment IS the authorization");
     expect(result.conventions).toBe("unlinked");
 
     // Silence is what let this survive, so the run says it plainly.
     const printed = deps.lines.join("\n");
-    expect(printed).toContain("SUITE_CONVENTIONS.md");
-    expect(printed).toContain("states no Suite conventions");
-    expect(printed).toContain("@SUITE_CONVENTIONS.md");
+    expect(printed).toContain("BURROW_CONVENTIONS.md");
+    expect(printed).toContain("states no Burrow conventions");
+    expect(printed).toContain("@BURROW_CONVENTIONS.md");
   });
 
   test("a CLAUDE.md that already carries the conventions gets no second copy", async () => {
@@ -418,15 +419,41 @@ describe("init on a machine where nothing is installed", () => {
     const { wiring: result } = await initThenWire(deps);
 
     expect(result.conventions).toBe("carries");
-    expect(existsSync(resolve(fx.root, "SUITE_CONVENTIONS.md"))).toBe(false);
-    expect(deps.lines.join("\n")).not.toContain("states no Suite conventions");
+    expect(existsSync(resolve(fx.root, "BURROW_CONVENTIONS.md"))).toBe(false);
+    expect(deps.lines.join("\n")).not.toContain("states no Burrow conventions");
   });
 
   test("a freshly seeded CLAUDE.md needs no second file either", async () => {
     const fx = makeFixture();
     const { wiring: result } = await initThenWire(makeDeps(fx, scriptedPrompter(credentialAnswers())));
     expect(result.conventions).toBe("seeded");
-    expect(existsSync(resolve(fx.root, "SUITE_CONVENTIONS.md"))).toBe(false);
+    expect(existsSync(resolve(fx.root, "BURROW_CONVENTIONS.md"))).toBe(false);
+  });
+
+  test("an upgraded folder keeps its SUITE_CONVENTIONS.md: refreshed in place, never renamed", async () => {
+    /*
+     * Constraint (b): never move a user's file. A pre-0.8.0 folder has the old
+     * owned file and a CLAUDE.md that loads it by that name; renaming would
+     * break that line. The control is the test above: a folder with neither
+     * gets BURROW_CONVENTIONS.md, so this one is not passing on a CLI that
+     * never writes the new name.
+     */
+    const fx = makeFixture();
+    const theirs = "# mine\n\n@SUITE_CONVENTIONS.md\n";
+    await Bun.write(resolve(fx.root, "CLAUDE.md"), theirs);
+    const legacy = resolve(fx.root, "SUITE_CONVENTIONS.md");
+    await Bun.write(legacy, "# stale copy from 0.7.3\n");
+    const deps = makeDeps(fx, scriptedPrompter(credentialAnswers()));
+
+    const { wiring: result } = await initThenWire(deps);
+
+    expect(result.conventions).toBe("linked");
+    expect(existsSync(resolve(fx.root, "BURROW_CONVENTIONS.md"))).toBe(false);
+    const text = await Bun.file(legacy).text();
+    expect(text).toContain("assignment IS the authorization");
+    // It tells the operator the name their CLAUDE.md already uses.
+    expect(text).toContain("@SUITE_CONVENTIONS.md");
+    expect(await Bun.file(resolve(fx.root, "CLAUDE.md")).text()).toBe(theirs);
   });
 
   test("offers the bun install rather than performing it unasked", async () => {
@@ -624,13 +651,22 @@ describe("an existing checkout", () => {
     expect(invocation(fx, ["git", "clone"])).toBeNull();
   });
 
-  test("an incomplete checkout is fast-forwarded; a failed fast-forward stops and is never forced", async () => {
+  // Before the 0.8.0 release fix a failed fast-forward threw out of the wiring
+  // and stopped the launch. A plugin checkout is a convergence step: it now
+  // warns loudly and the launch goes on (claude_wiring.ts launchWarning). The
+  // no-force promise is unchanged.
+  test("an incomplete checkout is fast-forwarded; a failed fast-forward is warned about, the launch goes on, and it is never forced", async () => {
     const fx = makeFixture({ pullFails: true });
     // .git but no src/index.ts: not usable, so the wiring tries to update it.
     mkdirSync(resolve(fx.checkout, ".git"), { recursive: true });
     const deps = makeDeps(fx, scriptedPrompter(credentialAnswers()));
 
-    await expect(initThenWire(deps)).rejects.toThrow(PullFailed);
+    const { wiring } = await initThenWire(deps);
+    expect(wiring.checkout).toBe("failed");
+    const said = deps.lines.join("\n");
+    expect(said).toContain("WARNING: the channel plugin install failed");
+    expect(said).toContain("could not be fast-forwarded");
+    expect(wiring.warnings.length).toBeGreaterThan(0);
 
     expect(invocation(fx, ["git", "pull", "--ff-only"])).not.toBeNull();
     for (const line of fx.log()) {
@@ -638,7 +674,6 @@ describe("an existing checkout", () => {
       expect(line).not.toMatch(/--force|-f\b/);
       expect(line).not.toMatch(/\tclean\b/);
     }
-    expect(invocation(fx, ["claude", "mcp", "add", CHANNEL_SERVER])).toBeNull();
   });
 });
 
@@ -898,16 +933,16 @@ describe("url derivation", () => {
     expect(channelWsUrl("ws://localhost:4000/runtime/ws")).toBe("ws://localhost:4000/runtime/ws");
   });
 
-  test("either paste of the same Suite produces the same pair", () => {
+  test("either paste of the same Burrow produces the same pair", () => {
     const fromBrowser = "https://suite.example.invalid";
     const fromRuntime = "wss://suite.example.invalid/runtime/ws";
     expect(channelWsUrl(fromBrowser)).toBe(channelWsUrl(fromRuntime));
     expect(toolsHttpUrl(fromBrowser)).toBe(toolsHttpUrl(fromRuntime));
   });
 
-  test("a scheme that is not a Suite URL is refused by name, not coerced", () => {
-    expect(() => toolsHttpUrl("ftp://suite.example.invalid")).toThrow(/not a Suite URL/);
-    expect(() => channelWsUrl("ftp://suite.example.invalid")).toThrow(/not a Suite URL/);
+  test("a scheme that is not a Burrow URL is refused by name, not coerced", () => {
+    expect(() => toolsHttpUrl("ftp://suite.example.invalid")).toThrow(/not a Burrow URL/);
+    expect(() => channelWsUrl("ftp://suite.example.invalid")).toThrow(/not a Burrow URL/);
   });
 });
 
@@ -923,6 +958,38 @@ describe("mcp add argv", () => {
     const argv = channelAddArgs(entry);
     expect(argv.slice(0, 6)).toEqual(["claude", "mcp", "add", CHANNEL_SERVER, "-s", "local"]);
     expect(argv.slice(-3)).toEqual(["--", "bun", entry.indexPath]);
+  });
+
+  test("the channel entry carries all 8 env names: BURROW_* and SUITE_* for each of 4, one value per pair", () => {
+    const argv = channelAddArgs(entry);
+    const env: Record<string, string> = {};
+    for (let i = 0; i < argv.length; i++) {
+      if (argv[i] !== "-e") continue;
+      const kv = argv[i + 1] as string;
+      env[kv.slice(0, kv.indexOf("="))] = kv.slice(kv.indexOf("=") + 1);
+    }
+    // A raw list, not derived from the code under test.
+    expect(Object.keys(env).sort()).toEqual(
+      [
+        "BURROW_ALLOW_PERMISSION_RELAY",
+        "BURROW_RUNTIME_ID",
+        "BURROW_TOKEN",
+        "BURROW_URL",
+        "SUITE_ALLOW_PERMISSION_RELAY",
+        "SUITE_RUNTIME_ID",
+        "SUITE_TOKEN",
+        "SUITE_URL",
+      ].sort(),
+    );
+    for (const suffix of ["URL", "RUNTIME_ID", "TOKEN", "ALLOW_PERMISSION_RELAY"]) {
+      expect(env[`BURROW_${suffix}`]).toBe(env[`SUITE_${suffix}`] as string);
+    }
+    expect(env.SUITE_URL).toBe(channelWsUrl(SUITE_URL));
+    expect(env.SUITE_RUNTIME_ID).toBe(RUNTIME_ID);
+    expect(env.SUITE_ALLOW_PERMISSION_RELAY).toBe("0");
+    // The server name never changes: allowlists name mcp__startup-suite__ and server:suite-channel.
+    expect(argv[3]).toBe("suite-channel");
+    expect(toolsAddArgs(SUITE_URL, TOKEN, [])[3]).toBe("startup-suite");
   });
 
   test("a relative entrypoint is refused outright", () => {
@@ -1034,10 +1101,17 @@ describe("MCP entries are per agent directory", () => {
     writeFileSync(resolve(home, ".claude.json"), JSON.stringify(body));
   }
 
-  function recordingRun(calls: Array<{ argv: string[]; cwd?: string }>): InitDeps["run"] {
+  /** Runs test/fixtures/stub_claude_local_scope.ts for real, with `home` as HOME. Records every call. */
+  function stubRun(home: string, calls: Array<{ argv: string[]; cwd?: string }>): InitDeps["run"] {
     return async (argv, opts) => {
       calls.push({ argv, cwd: opts?.cwd });
-      return { exitCode: 0, stdout: "", stderr: "" };
+      const p = Bun.spawnSync([process.execPath, WRITING_CLAUDE_STUB, ...argv.slice(1)], {
+        cwd: opts?.cwd,
+        env: { HOME: home, PATH: process.env.PATH ?? "" },
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      return { exitCode: p.exitCode ?? 1, stdout: p.stdout.toString(), stderr: p.stderr.toString() };
     };
   }
 
@@ -1077,21 +1151,165 @@ describe("MCP entries are per agent directory", () => {
   test("a user-scope entry naming ANOTHER runtime is left byte-for-byte alone, and warned about", async () => {
     const home = mkdtempSync(resolve(tmpdir(), "suite-cli-scope-"));
     claudeJson(home, OTHER_RUNTIME);
-    const before = readFileSync(resolve(home, ".claude.json"), "utf8");
+    const userBefore = JSON.stringify((JSON.parse(readFileSync(resolve(home, ".claude.json"), "utf8")) as { mcpServers: unknown }).mcpServers);
     const calls: Array<{ argv: string[]; cwd?: string }> = [];
-    const lines = await registerServers(
-      { run: recordingRun(calls), cwd: home, env: { HOME: home } },
-      invocations(),
-      RUNTIME_ID,
-    );
+    // A claude that really writes, so convergence reads back what the adds did.
+    const lines = await registerServers({ run: stubRun(home, calls), cwd: home, env: { HOME: home } }, invocations(), RUNTIME_ID);
     const said = lines.join("\n");
     expect(said).toContain("warning");
     expect(said).toContain(OTHER_RUNTIME);
     expect(said).toContain("left alone");
     // The token sitting next to it is never echoed.
     expect(said).not.toContain(TOKEN);
-    expect(readFileSync(resolve(home, ".claude.json"), "utf8")).toBe(before);
+    // The user-scope block is exactly what it was; only this folder's local block was written.
+    const after = JSON.parse(readFileSync(resolve(home, ".claude.json"), "utf8")) as { mcpServers: unknown };
+    expect(JSON.stringify(after.mcpServers)).toBe(userBefore);
+    expect(calls.some((c) => c.argv.includes("user"))).toBe(false);
     rmSync(home, { recursive: true, force: true });
+  });
+
+  /* Convergence (01a14b9f stage 3) ------------------------------------------ */
+
+  const OLD_URL = "https://old.example.invalid";
+  const OLD_TOKEN = "tok_fixture_old_00000000000000000000000";
+
+  /** A scratch HOME and agent folder, with `body` as ~/.claude.json (`{dir}` is replaced by the folder). */
+  function scratch(body: (dir: string) => unknown): { home: string; agent: string; file: string } {
+    const home = mkdtempSync(resolve(tmpdir(), "suite-cli-converge-"));
+    const agent = resolve(home, "agents", "one");
+    mkdirSync(agent, { recursive: true });
+    const file = resolve(home, ".claude.json");
+    writeFileSync(file, JSON.stringify(body(agent)), { mode: 0o600 });
+    return { home, agent, file };
+  }
+
+  const oldTools = { type: "http", url: `${OLD_URL}/mcp`, headers: { Authorization: `Bearer ${OLD_TOKEN}` } };
+  const oldChannel = {
+    type: "stdio",
+    command: "bun",
+    args: ["/x/src/index.ts"],
+    env: { SUITE_URL: channelWsUrl(OLD_URL), SUITE_RUNTIME_ID: OTHER_RUNTIME, SUITE_TOKEN: OLD_TOKEN },
+  };
+
+  type Raw = { mcpServers?: Record<string, { url?: string; env?: Record<string, string> }>; projects: Record<string, { mcpServers: Record<string, { url?: string; env?: Record<string, string> }> }> };
+  const read = (file: string): Raw => JSON.parse(readFileSync(file, "utf8")) as Raw;
+
+  test("KITE: a stale local startup-suite and suite-channel naming the OLD host converge to the new host", async () => {
+    const { home, agent, file } = scratch((dir) => ({
+      projects: { [dir]: { mcpServers: { [TOOLS_SERVER]: oldTools, [CHANNEL_SERVER]: oldChannel } } },
+    }));
+    const calls: Array<{ argv: string[]; cwd?: string }> = [];
+    const lines = await registerServers({ run: stubRun(home, calls), cwd: agent, env: { HOME: home } }, invocations(), RUNTIME_ID, SUITE_URL);
+    const local = read(file).projects[agent]?.mcpServers ?? {};
+    expect(local[TOOLS_SERVER]?.url).toBe(toolsHttpUrl(SUITE_URL));
+    expect(local[CHANNEL_SERVER]?.env?.SUITE_URL).toBe(channelWsUrl(SUITE_URL));
+    expect(local[CHANNEL_SERVER]?.env?.BURROW_URL).toBe(channelWsUrl(SUITE_URL));
+    expect(local[CHANNEL_SERVER]?.env?.SUITE_RUNTIME_ID).toBe(RUNTIME_ID);
+    expect(Object.keys(local).sort()).toEqual([CHANNEL_SERVER, TOOLS_SERVER].sort());
+    const said = lines.join("\n");
+    expect(said).toContain("replaced");
+    expect(said).not.toContain(TOKEN);
+    expect(said).not.toContain(OLD_TOKEN);
+    rmSync(home, { recursive: true, force: true });
+  });
+
+  test("KELLY: a user-scope `suite` naming the old host, and a local `burrow`, are removed and each removal is printed", async () => {
+    const { home, agent, file } = scratch((dir) => ({
+      mcpServers: { suite: oldTools },
+      projects: { [dir]: { mcpServers: { burrow: oldTools, [TOOLS_SERVER]: oldTools } } },
+    }));
+    const calls: Array<{ argv: string[]; cwd?: string }> = [];
+    const lines = await registerServers({ run: stubRun(home, calls), cwd: agent, env: { HOME: home } }, invocations(), RUNTIME_ID, SUITE_URL);
+    const raw = read(file);
+    expect(raw.mcpServers ?? {}).toEqual({});
+    expect(Object.keys(raw.projects[agent]?.mcpServers ?? {}).sort()).toEqual([CHANNEL_SERVER, TOOLS_SERVER].sort());
+    const said = lines.join("\n");
+    const removed = lines.filter((l) => l.includes("removed"));
+    expect(removed).toHaveLength(2);
+    expect(removed.find((l) => l.includes("suite") && l.includes("user scope"))).toContain("old.example.invalid");
+    expect(removed.find((l) => l.includes("burrow") && l.includes("local scope"))).toContain("old.example.invalid");
+    expect(said).not.toContain(OLD_TOKEN);
+    expect(said).not.toContain(TOKEN);
+    // The ONLY user-scope call is that alias removal: canonical user entries are never touched.
+    const userCalls = calls.filter((c) => c.argv.includes("user"));
+    expect(userCalls.map((c) => c.argv)).toEqual([["claude", "mcp", "remove", "suite", "-s", "user"]]);
+    rmSync(home, { recursive: true, force: true });
+  });
+
+  test("a SECOND registration is a no-op apart from replace rows: nothing removed, nothing else written", async () => {
+    const { home, agent, file } = scratch((dir) => ({ mcpServers: { suite: oldTools }, projects: { [dir]: { mcpServers: {} } } }));
+    const deps = { run: stubRun(home, []), cwd: agent, env: { HOME: home } };
+    await registerServers(deps, invocations(), RUNTIME_ID, SUITE_URL);
+    const first = read(file);
+    const lines = await registerServers(deps, invocations(), RUNTIME_ID, SUITE_URL);
+    expect(lines.filter((l) => l.includes("removed"))).toEqual([]);
+    expect(lines.filter((l) => l.includes("replaced"))).toHaveLength(2);
+    expect(read(file)).toEqual(first);
+    rmSync(home, { recursive: true, force: true });
+  });
+
+  test("a canonical user-scope suite-channel naming another runtime is still left alone, with the warning, beside an alias removal", async () => {
+    const { home, agent, file } = scratch(() => ({ mcpServers: { [CHANNEL_SERVER]: oldChannel, suite: oldTools }, projects: {} }));
+    const lines = await registerServers({ run: stubRun(home, []), cwd: agent, env: { HOME: home } }, invocations(), RUNTIME_ID, SUITE_URL);
+    const raw = read(file);
+    expect(raw.mcpServers?.[CHANNEL_SERVER]).toEqual(oldChannel);
+    expect(raw.mcpServers?.suite).toBeUndefined();
+    const said = lines.join("\n");
+    expect(said).toContain("warning");
+    expect(said).toContain(OTHER_RUNTIME);
+    expect(said).toContain("left alone");
+    rmSync(home, { recursive: true, force: true });
+  });
+
+  test("an alias that will not go is an init FAILURE listing the entries by scope and host, never a token", async () => {
+    const { home, agent } = scratch(() => ({ mcpServers: { suite: oldTools }, projects: {} }));
+    const inner = stubRun(home, []);
+    const run: InitDeps["run"] = async (argv, opts) =>
+      argv[2] === "remove" && argv.includes("user") ? { exitCode: 1, stdout: "", stderr: "EACCES" } : inner(argv, opts);
+    let message = "";
+    try {
+      await registerServers({ run, cwd: agent, env: { HOME: home } }, invocations(), RUNTIME_ID, SUITE_URL);
+    } catch (e) {
+      message = e instanceof Error ? e.message : String(e);
+    }
+    expect(message).toContain("did not converge");
+    expect(message).toContain("suite: user scope, old.example.invalid");
+    expect(message).not.toContain(OLD_TOKEN);
+    rmSync(home, { recursive: true, force: true });
+  });
+
+  test("an entry naming a host other than the one registered is a failure, named", async () => {
+    const { home, agent } = scratch(() => ({ projects: {} }));
+    let message = "";
+    try {
+      await registerServers({ run: stubRun(home, []), cwd: agent, env: { HOME: home } }, invocations(), RUNTIME_ID, OLD_URL);
+    } catch (e) {
+      message = e instanceof Error ? e.message : String(e);
+    }
+    expect(message).toContain(`${TOOLS_SERVER}: local scope names suite.example.invalid, not old.example.invalid`);
+    rmSync(home, { recursive: true, force: true });
+  });
+
+  test("POSITIVE CONTROL: the stub models user scope, so the Kelly test can see a removal land", () => {
+    const home = mkdtempSync(resolve(tmpdir(), "suite-cli-stubctl-"));
+    const spawn = (...args: string[]) =>
+      Bun.spawnSync([process.execPath, WRITING_CLAUDE_STUB, ...args], { cwd: home, env: { HOME: home }, stdout: "pipe", stderr: "pipe" });
+    expect(spawn("mcp", "add", "suite", "-s", "user", "-t", "http", "https://x.example.invalid/mcp").exitCode).toBe(0);
+    expect((read(resolve(home, ".claude.json")).mcpServers ?? {}).suite?.url).toBe("https://x.example.invalid/mcp");
+    expect(spawn("mcp", "add", "suite", "-s", "user", "-t", "http", "https://x.example.invalid/mcp").stderr.toString()).toContain("already exists");
+    expect(spawn("mcp", "list").stdout.toString()).toContain("suite:");
+    expect(spawn("mcp", "remove", "suite", "-s", "user").exitCode).toBe(0);
+    expect(read(resolve(home, ".claude.json")).mcpServers ?? {}).toEqual({});
+    expect(spawn("mcp", "remove", "suite", "-s", "user").exitCode).toBe(1);
+    expect(spawn("mcp", "add", "x", "-s", "project", "-t", "http", "u").exitCode).toBe(1);
+    rmSync(home, { recursive: true, force: true });
+  });
+
+  test("userScopeChannelRuntime reads BURROW_RUNTIME_ID first, SUITE_RUNTIME_ID as the fallback", () => {
+    const body = (env: Record<string, string>) => JSON.stringify({ mcpServers: { [CHANNEL_SERVER]: { env } } });
+    expect(userScopeChannelRuntime(body({ BURROW_RUNTIME_ID: "rt-new", SUITE_RUNTIME_ID: "rt-old" })).runtimeId).toBe("rt-new");
+    expect(userScopeChannelRuntime(body({ SUITE_RUNTIME_ID: "rt-old" })).runtimeId).toBe("rt-old");
+    expect(userScopeChannelRuntime(body({ BURROW_RUNTIME_ID: "", SUITE_RUNTIME_ID: "rt-old" })).runtimeId).toBe("rt-old");
   });
 
   test("CONTROL: the same runtime is noted, not warned; no user entry says nothing", () => {

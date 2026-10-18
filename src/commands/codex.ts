@@ -45,11 +45,11 @@ import { channelWsUrl, toolsHttpUrl } from "./init.ts";
 import { agentNameFromRuntimeId, liveDeepseekDeps, loadCredentials, runInSession, selfArgv, sessionNameForAgent, type DeepseekDeps } from "./deepseek.ts";
 import { liveRestoreDeps, loadRoster, recordLaunch, type RestoreDeps } from "./restore.ts";
 import { ensureSupervision, liveSupervisorIo, type SupervisorIo } from "../supervisor.ts";
-import { VERSION } from "../version.ts";
+import { VERSION, CLI_NAME } from "../version.ts";
 import { AppServerClient, processTransport } from "../codex/app_server.ts";
 import { CodexBridge, type ApprovalPolicy } from "../codex/bridge.ts";
 import { PhoenixChannel, socketUrl, type SocketLike } from "../codex/phoenix.ts";
-import { BRIDGE_SOCKET_ENV, listenBridgeSocket, runReplyMcp } from "../codex/reply_mcp.ts";
+import { BRIDGE_SOCKET_ENVS, listenBridgeSocket, runReplyMcp } from "../codex/reply_mcp.ts";
 import type { InitializeResponse, SandboxMode } from "../codex/protocol.ts";
 
 export const AGENT = "codex";
@@ -166,11 +166,11 @@ export function appServerArgv(input: {
     // than each call stopping for a human who is not there.
     `${t}.default_tools_approval_mode="approve"`,
     "-c",
-    `${c}.command=${tomlString(cmd ?? "suite")}`,
+    `${c}.command=${tomlString(cmd ?? CLI_NAME)}`,
     "-c",
     `${c}.args=[${[...cmdArgs, "codex", "--reply-mcp"].map(tomlString).join(",")}]`,
     "-c",
-    `${c}.env={${BRIDGE_SOCKET_ENV}=${tomlString(input.socketPath)}}`,
+    `${c}.env={${BRIDGE_SOCKET_ENVS.map((n) => `${n}=${tomlString(input.socketPath)}`).join(",")}}`,
     "-c",
     `${c}.default_tools_approval_mode="approve"`,
   ];
@@ -225,7 +225,7 @@ export async function runCodex(args: string[], deps: CodexDeps): Promise<number>
   try {
     opts = parseCodexOptions(args);
   } catch (error) {
-    deps.stderr.write(`suite codex: ${error instanceof Error ? error.message : String(error)}\n`);
+    deps.stderr.write(`${CLI_NAME} codex: ${error instanceof Error ? error.message : String(error)}\n`);
     return 2;
   }
   if (opts.replyMcp) return await runReplyMcp(deps.env, VERSION);
@@ -247,8 +247,8 @@ export async function runCodex(args: string[], deps: CodexDeps): Promise<number>
   }
   if (!hasConnection(config)) {
     deps.stderr.write(
-      `suite codex: ${agentDir} is not connected to Suite yet, and there is no terminal to ask in.\n` +
-        `suite codex: run \`suite init --dir ${agentDir}\`, or this command from a terminal.\n`,
+      `${CLI_NAME} codex: ${agentDir} is not connected to Burrow yet, and there is no terminal to ask in.\n` +
+        `${CLI_NAME} codex: run \`${CLI_NAME} init --dir ${agentDir}\`, or this command from a terminal.\n`,
     );
     return 1;
   }
@@ -259,13 +259,13 @@ export async function runCodex(args: string[], deps: CodexDeps): Promise<number>
   }
   const token = store.get(TOKEN_KEY);
   if (token === undefined) {
-    deps.stderr.write("suite codex: no runtime token found. Run `suite init` to capture one.\n");
+    deps.stderr.write(`${CLI_NAME} codex: no runtime token found. Run \`${CLI_NAME} init\` to capture one.\n`);
     return 1;
   }
 
   const codexBin = opts.codexBin ?? deps.which(AGENT);
   if (codexBin === null) {
-    deps.stderr.write(`suite codex: codex is not installed; ${CODEX_INSTALL_HINT}.\n`);
+    deps.stderr.write(`${CLI_NAME} codex: codex is not installed; ${CODEX_INSTALL_HINT}.\n`);
     return MISSING_CODEX_EXIT;
   }
 
@@ -276,16 +276,16 @@ export async function runCodex(args: string[], deps: CodexDeps): Promise<number>
   if (!(await codexLoggedIn(deps, codexBin, codexHome))) {
     if (opts.noSession || !deps.isTTY()) {
       deps.stderr.write(
-        `suite codex: Codex is not logged in (CODEX_HOME=${codexHome}). Log in from a terminal with\n` +
-          `suite codex:   CODEX_HOME=${codexHome} codex login --device-auth\n` +
-          "suite codex: or run `suite codex` from a terminal, which runs that for you.\n",
+        `${CLI_NAME} codex: Codex is not logged in (CODEX_HOME=${codexHome}). Log in from a terminal with\n` +
+          `${CLI_NAME} codex:   CODEX_HOME=${codexHome} codex login --device-auth\n` +
+          `${CLI_NAME} codex: or run \`${CLI_NAME} codex\` from a terminal, which runs that for you.\n`,
       );
       return NOT_LOGGED_IN_EXIT;
     }
-    deps.stderr.write(`suite codex: Codex is not logged in here (CODEX_HOME=${codexHome}). Starting Codex's own login — this CLI never sees the token.\n`);
+    deps.stderr.write(`${CLI_NAME} codex: Codex is not logged in here (CODEX_HOME=${codexHome}). Starting Codex's own login — this CLI never sees the token.\n`);
     await deps.run([codexBin, "login", "--device-auth"], { env: codexEnv(deps.env, codexHome) });
     if (!(await codexLoggedIn(deps, codexBin, codexHome))) {
-      deps.stderr.write("suite codex: still not logged in; stopping.\n");
+      deps.stderr.write(`${CLI_NAME} codex: still not logged in; stopping.\n`);
       return NOT_LOGGED_IN_EXIT;
     }
   }
@@ -308,7 +308,7 @@ export async function runCodex(args: string[], deps: CodexDeps): Promise<number>
       approvals: opts.approvals,
       sandbox: opts.sandbox,
       env: deps.env,
-      log: (line) => deps.stderr.write(`suite codex: ${line}\n`),
+      log: (line) => deps.stderr.write(`${CLI_NAME} codex: ${line}\n`),
     });
   }
 
@@ -341,11 +341,12 @@ export async function runCodex(args: string[], deps: CodexDeps): Promise<number>
         void ensureSupervision(deps.supervisorIo, {
           platform: deps.platform as NodeJS.Platform,
           home,
+          // Still `suite`, not `burrow`: the path is baked into installed units, and          // changing it rewrites every live host\'s watchdog unit (see supervisor.ts).
           binary: `${home}/.local/bin/suite`,
           inheritedPath: deps.env.PATH,
           inheritedLocale: deps.env.LANG ?? deps.env.LC_ALL,
           intervalSeconds: 60,
-        }).then((sup) => deps.stderr.write(`suite codex: watchdog: ${sup.watchdog}\n`));
+        }).then((sup) => deps.stderr.write(`${CLI_NAME} codex: watchdog: ${sup.watchdog}\n`));
       }
     },
     wasRecorded: () => deps.restore !== undefined && loadRoster(deps.restore, home).some((e) => e.session === session),
@@ -409,7 +410,7 @@ export async function runBridge(input: BridgeInput): Promise<number> {
     });
     void (async () => {
       const init = await client.request<InitializeResponse>("initialize", {
-        clientInfo: { name: "suite_codex", title: "Suite CLI", version: VERSION },
+        clientInfo: { name: "suite_codex", title: "Burrow CLI", version: VERSION },
         capabilities: { experimentalApi: false, requestAttestation: false },
       });
       client.notify("initialized");
