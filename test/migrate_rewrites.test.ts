@@ -771,7 +771,10 @@ describe("systemd: the old units are swapped for burrow-watch and burrow-agents"
     const sc = callsOf(w, "systemctl");
     expect(sc.some((c) => c.includes(" stop ") || c.includes(" start "))).toBe(false);
     expect(w.units.get("suite-watch.service")).toMatchObject({ enabled: true, active: true });
-    expect(d.errs.filter((l) => l.includes("left suite-watch.service running"))).toHaveLength(1);
+    // One stderr line for it, whatever else the run reported.
+    expect(d.errs.filter((l) => l.includes("suite-watch"))).toEqual([
+      expect.stringMatching(/^burrow: deferred unit .*suite-watch\.service: this process is the watch daemon; it cannot stop its own unit/),
+    ]);
     expect(readState(h).deferred).toEqual([expect.objectContaining({ step: "unit", reason: expect.stringContaining("watch daemon") })]);
 
     // Positive control: the same host, not supervised, swaps.

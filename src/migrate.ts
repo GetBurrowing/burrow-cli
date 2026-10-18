@@ -1683,8 +1683,8 @@ function swapSystemdUnit(rw: Rw, which: Which, legacy: string): void {
     if (reason !== null) {
       writeUnitFile(rw, newPath, newText);
       sc("daemon-reload");
+      // Reported once, by reportRewrites, like every deferral.
       defer(self !== null ? `${reason}; it cannot stop its own unit, so the next burrow run outside it swaps it` : `${reason}; stopping it would take tmux down`);
-      if (self !== null) d.stderr(`${PREFIX}: left ${oldUnit} running (${self}); the next burrow run outside it swaps it for ${newUnit}`);
       return;
     }
   }
@@ -1734,8 +1734,7 @@ function swapPlist(rw: Rw, which: Which, legacy: string): void {
   const loaded = pr !== null && pr.exitCode === 0;
   if (loaded && which === "watch" && isSupervised(d.env)) {
     // GUARD B. Not even the new plist is written: launchd would load both at the next login.
-    d.stderr(`${PREFIX}: left ${oldLabel} running (this process is the watch daemon); the next burrow run outside it swaps it for ${newLabel}`);
-    return defer("this process is the watch daemon; it cannot boot out its own job");
+    return defer("this process is the watch daemon; it cannot boot out its own job, so the next burrow run outside it swaps it");
   }
   writeUnitFile(rw, newPath, newText);
   if (loaded) {
@@ -1780,8 +1779,7 @@ function swapTmuxFallback(rw: Rw, legacyWatch: string): void {
   if (has === null || has.exitCode !== 0) return;
   const entry = { step: "tmux" as const, path: `tmux session ${LEGACY_SERVICE_NAME}`, from: LEGACY_SERVICE_NAME, to: SERVICE_NAME };
   if (isSupervised(d.env)) {
-    d.stderr(`${PREFIX}: left tmux session ${LEGACY_SERVICE_NAME} running (this process is the watch daemon); the next burrow run outside it swaps it for ${SERVICE_NAME}`);
-    return pushUnique(st.deferred, { ...entry, reason: "this process is the watch daemon" });
+    return pushUnique(st.deferred, { ...entry, reason: "this process is the watch daemon; the next burrow run outside it swaps it" });
   }
   const input = unitInputFrom(d.fs.readText(source) ?? "", d.platform, homeOf(d.env), d.env);
   const [, create] = tmuxSupervisorArgv(input.binary, input.intervalSeconds) as [string[], string[]];
