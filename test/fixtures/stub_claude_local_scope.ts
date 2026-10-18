@@ -10,8 +10,11 @@
  *
  *   claude mcp add NAME -s local|user [-e K=V ...] -- CMD ARGS...        stdio entry
  *   claude mcp add NAME -s local|user (-t|--transport) http URL [-H "K: V" ...]
+ *   claude mcp add-json NAME JSON -s local|user                          any entry, stored as given
  *   claude mcp remove NAME -s local|user
  *   claude mcp list        this folder's effective entries, "✔ Connected": local, then unshadowed user
+ *   claude mcp --help      the subcommand list; omits add-json when STUB_NO_ADD_JSON=1, as an
+ *                          older claude does (migrate.ts then falls back to `mcp add`)
  *
  * Local entries land in `projects[<cwd>].mcpServers` of `$CLAUDE_CONFIG_DIR/.claude.json`
  * (else `$HOME/.claude.json`), user entries in its top-level `mcpServers`, mode
@@ -71,6 +74,43 @@ function fail(message: string): never {
 }
 
 if (argv[0] !== "mcp") process.exit(0);
+
+const noAddJson = process.env.STUB_NO_ADD_JSON === "1";
+
+if (argv[1] === "--help" || argv[1] === "-h" || argv[1] === undefined) {
+  const commands = ["add [options] <name> <commandOrUrl> [args...]", ...(noAddJson ? [] : ["add-json [options] <name> <json>"]), "list", "remove [options] <name>"];
+  process.stdout.write(`Usage: claude mcp [options] [command]\n\nCommands:\n${commands.map((c) => `  ${c}`).join("\n")}\n`);
+  process.exit(0);
+}
+
+/** `-s|--scope VALUE` anywhere in `args`, removed; "local" when absent. */
+function takeScope(args: string[]): string {
+  const at = args.findIndex((a) => a === "-s" || a === "--scope");
+  if (at < 0) return "local";
+  const [, value] = args.splice(at, 2);
+  return value ?? "local";
+}
+
+if (argv[1] === "add-json") {
+  if (noAddJson) fail("error: unknown command 'add-json'");
+  const rest = argv.slice(2);
+  const scope = takeScope(rest);
+  const [name, json] = rest;
+  if (name === undefined || json === undefined) fail("add-json: need <name> <json>");
+  let entry: Entry;
+  try {
+    entry = JSON.parse(json) as Entry;
+  } catch {
+    fail("add-json: invalid JSON");
+  }
+  const data = load();
+  const map = servers(data, scope);
+  if (name in map) fail(`MCP server ${name} already exists in ${scope} config`);
+  map[name] = entry;
+  save(data);
+  process.stdout.write(`Added ${String(entry.type ?? "stdio")} MCP server ${name} to ${scope} config\n`);
+  process.exit(0);
+}
 
 if (argv[1] === "list") {
   const data = load();

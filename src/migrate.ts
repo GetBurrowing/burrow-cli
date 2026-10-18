@@ -47,9 +47,25 @@ import {
   writeFileSync,
   chmodSync,
 } from "node:fs";
-import { dirname, resolve } from "node:path";
-import { base, burrowRoot, type BaseKind, type Env } from "./xdg.ts";
+import { createRequire } from "node:module";
+import { basename, dirname, join, resolve } from "node:path";
+import { base, burrowRoot, home as homeOf, type BaseKind, type Env } from "./xdg.ts";
 import { burrowName as burrowEnvName, suiteName as suiteEnvName } from "./env_names.ts";
+import { harnessChildEnv } from "./harness_env.ts";
+import { claudeJsonPath, stdioAddArgs, whichBin, type StoredEntry } from "./commands/init.ts";
+import {
+  LAUNCHD_LABEL,
+  RESTORE_LAUNCHD_LABEL,
+  RESTORE_SERVICE_NAME,
+  SERVICE_NAME,
+  isSupervised,
+  launchdPlist,
+  restoreLaunchdPlist,
+  restoreUnit,
+  systemdUnit,
+  tmuxSupervisorArgv,
+  type SupervisorInput,
+} from "./supervisor.ts";
 
 /* ------------------------------------------------------------------------- */
 /* The legacy names. Nothing outside this module may spell them.             */
@@ -88,6 +104,33 @@ export const BREADCRUMB_FILENAME = "MOVED-TO-BURROW.txt";
 /** Written beside an old directory that cannot be written into: `<old>.burrow-migration.txt`. */
 export const BESIDE_BREADCRUMB_SUFFIX = ".burrow-migration.txt";
 
+/** The pre-0.9 watchdog and restore units (systemd) and LaunchAgent labels. */
+export const LEGACY_SERVICE_NAME = "suite-watch";
+export const LEGACY_RESTORE_SERVICE_NAME = "suite-agents";
+export const LEGACY_LAUNCHD_LABEL = "technology.milvenan.suite-watch";
+export const LEGACY_RESTORE_LAUNCHD_LABEL = "technology.milvenan.suite-agents";
+/** A swapped-out unit or plist is renamed to `<file>.retired-by-burrow-<ts>`, never deleted. */
+export const RETIRED_SUFFIX = ".retired-by-burrow-";
+/** A config file edited by hand (no tool writes that key) keeps `<file>.bak-burrow-<ts>`. */
+export const BACKUP_SUFFIX = ".bak-burrow-";
+
+/**
+ * Where a 0.8 install put its watchdog (`watch`) and restore (`agents`) unit or
+ * plist on this platform. supervisor.ts reads it too: while one is still
+ * installed it does not write its own beside it.
+ */
+export function legacySupervisorPaths(platform: NodeJS.Platform, home: string): { watch: string | null; agents: string | null } {
+  if (platform === "linux") {
+    const dir = `${home}/.config/systemd/user`;
+    return { watch: `${dir}/${LEGACY_SERVICE_NAME}.service`, agents: `${dir}/${LEGACY_RESTORE_SERVICE_NAME}.service` };
+  }
+  if (platform === "darwin") {
+    const dir = `${home}/Library/LaunchAgents`;
+    return { watch: `${dir}/${LEGACY_LAUNCHD_LABEL}.plist`, agents: `${dir}/${LEGACY_RESTORE_LAUNCHD_LABEL}.plist` };
+  }
+  return { watch: null, agents: null };
+}
+
 /** The watch.env key renamed during the move. */
 const LEGACY_TELEMETRY_KEY = suiteEnvName("TELEMETRY_AUTH");
 const TELEMETRY_KEY = burrowEnvName("TELEMETRY_AUTH");
@@ -124,6 +167,34 @@ export interface MigrationEntry {
   reason?: string;
 }
 
+/**
+ * One recorded path or unit the second half of the migration rewrote, skipped
+ * or deferred: an MCP entry in ~/.claude.json, an agent's openclaw/dsh/hermes
+ * config key, a systemd unit, a LaunchAgent, or the tmux fallback watcher.
+ */
+export type RewriteStep = "claude-mcp" | "openclaw" | "dsh" | "hermes" | "unit" | "plist" | "tmux";
+
+export interface RewriteEntry {
+  step: RewriteStep;
+  /** The file (and key) or unit file, e.g. `~/.claude.json:<dir>:suite-channel`. */
+  path: string;
+  from?: string;
+  to?: string;
+  reason?: string;
+}
+
+/** The rewrite steps run as three groups; a deferred entry re-runs its whole group. */
+type RewriteGroup = "claude" | "configs" | "units";
+const STEP_GROUP: Readonly<Record<RewriteStep, RewriteGroup>> = {
+  "claude-mcp": "claude",
+  openclaw: "configs",
+  dsh: "configs",
+  hermes: "configs",
+  unit: "units",
+  plist: "units",
+  tmux: "units",
+};
+
 export interface MigrationState {
   version: 1;
   /** Set once the full scan has run, refused entries or not. */
@@ -134,10 +205,37 @@ export interface MigrationState {
   refused: MigrationEntry[];
   /** Target already present, or a retired entry. Recorded so the breadcrumb is complete. */
   skipped: MigrationEntry[];
+  /** Set once every rewrite step has run, deferred entries or not. */
+  rewritesAt: string | null;
+  rewritten: RewriteEntry[];
+  /** Looked at and deliberately left (a project folder that is gone, a dev checkout's agent). Not retried. */
+  rewriteSkipped: RewriteEntry[];
+  /** Could not be done safely yet (a guard held, a tool failed). Retried on every run. */
+  deferred: RewriteEntry[];
 }
 
 function emptyState(): MigrationState {
-  return { version: 1, completedAt: null, moved: [], copiedLive: [], foreignLeft: [], refused: [], skipped: [] };
+  return {
+    version: 1,
+    completedAt: null,
+    moved: [],
+    copiedLive: [],
+    foreignLeft: [],
+    refused: [],
+    skipped: [],
+    rewritesAt: null,
+    rewritten: [],
+    rewriteSkipped: [],
+    deferred: [],
+  };
+}
+
+function rewriteList(v: unknown): RewriteEntry[] {
+  if (!Array.isArray(v)) return [];
+  return v.filter(
+    (e): e is RewriteEntry =>
+      typeof e === "object" && e !== null && typeof e.path === "string" && typeof e.step === "string" && e.step in STEP_GROUP,
+  );
 }
 
 function entryList(v: unknown): MigrationEntry[] {
@@ -167,6 +265,10 @@ export function parseMigrationState(text: string): MigrationState | null {
     foreignLeft: entryList(o.foreignLeft),
     refused: entryList(o.refused),
     skipped: entryList(o.skipped),
+    rewritesAt: typeof o.rewritesAt === "string" ? o.rewritesAt : null,
+    rewritten: rewriteList(o.rewritten),
+    rewriteSkipped: rewriteList(o.rewriteSkipped),
+    deferred: rewriteList(o.deferred),
   };
 }
 
@@ -174,9 +276,9 @@ export function serializeMigrationState(s: MigrationState): string {
   return `${JSON.stringify(s, null, 2)}\n`;
 }
 
-/** Done means: the full scan ran and nothing is waiting to be retried. */
+/** Done means: the full scan and every rewrite step ran, and nothing is waiting to be retried. */
 export function migrationDone(s: MigrationState | null): boolean {
-  return s !== null && s.completedAt !== null && s.refused.length === 0;
+  return s !== null && s.completedAt !== null && s.refused.length === 0 && s.rewritesAt !== null && s.deferred.length === 0;
 }
 
 /* ------------------------------------------------------------------------- */
@@ -427,10 +529,28 @@ export function liveMigrateFs(): MigrateFs {
 /* The migration                                                             */
 /* ------------------------------------------------------------------------- */
 
+/** What a command printed. */
+export interface CommandResult {
+  exitCode: number;
+  stdout: string;
+  stderr: string;
+}
+
 export interface MigrateDeps {
   env: Env;
   fs: MigrateFs;
   probe: LiveProbe;
+  platform: NodeJS.Platform;
+  /** For launchd's `gui/<uid>` domain. */
+  uid: number;
+  /**
+   * Run a command (claude, openclaw, systemctl, launchctl, tmux) to completion.
+   * Null when it cannot be started at all, i.e. it is not installed. Its argv
+   * can carry a token (`claude mcp add-json`): never log it.
+   */
+  run(argv: string[], opts?: { cwd?: string; env?: Env }): CommandResult | null;
+  /** The cgroup paths of a process (`/proc/<pid>/cgroup`, the part after `h:c:`); null when unreadable. */
+  cgroupOf(pid: number | "self"): string[] | null;
   pid: number;
   /** True when `pid` is a running process (EPERM counts as running). */
   pidAlive(pid: number): boolean;
@@ -442,11 +562,50 @@ export interface MigrateDeps {
   lockWaitMs: number;
 }
 
+function liveRun(env: Env): MigrateDeps["run"] {
+  return (argv, opts = {}) => {
+    const childEnv = opts.env ?? env;
+    const bin = argv[0] === undefined ? null : argv[0].includes("/") ? argv[0] : whichBin(argv[0], childEnv);
+    if (bin === null) return null;
+    try {
+      const p = Bun.spawnSync([bin, ...argv.slice(1)], {
+        cwd: opts.cwd,
+        env: childEnv as Record<string, string>,
+        stdin: "ignore",
+        stdout: "pipe",
+        stderr: "pipe",
+        timeout: 120_000,
+      });
+      return { exitCode: p.exitCode ?? 1, stdout: new TextDecoder().decode(p.stdout), stderr: new TextDecoder().decode(p.stderr) };
+    } catch {
+      return null;
+    }
+  };
+}
+
+/** `/proc/<pid>/cgroup` lines `h:c:path`, as their paths. */
+export function parseCgroupFile(text: string): string[] {
+  return text
+    .split("\n")
+    .filter((l) => l !== "")
+    .map((l) => l.split(":").slice(2).join(":"));
+}
+
 export function liveMigrateDeps(env: Env = process.env): MigrateDeps {
   return {
     env,
     fs: liveMigrateFs(),
     probe: liveProbe(),
+    platform: process.platform,
+    uid: process.getuid?.() ?? 501,
+    run: liveRun(env),
+    cgroupOf(pid) {
+      try {
+        return parseCgroupFile(readFileSync(`/proc/${pid}/cgroup`, "utf8"));
+      } catch {
+        return null;
+      }
+    },
     pid: process.pid,
     pidAlive(pid) {
       try {
@@ -853,9 +1012,18 @@ function migrate(d: MigrateDeps): MigrateResult {
     else run.retry();
     run.rewriteRoster();
     if (st.completedAt === null) st.completedAt = d.now().toISOString();
+    // The second half: paths other programs recorded, and the units. Once it
+    // has run, only the groups holding a deferred entry run again.
+    const firstRewrites = st.rewritesAt === null;
+    const groups = new Set<RewriteGroup>(firstRewrites ? ["claude", "configs", "units"] : st.deferred.map((e) => STEP_GROUP[e.step]));
+    st.deferred = st.deferred.filter((e) => !groups.has(STEP_GROUP[e.step]));
+    const rewritesBefore = st.rewritten.length;
+    runRewrites(d, st, groups);
+    if (st.rewritesAt === null) st.rewritesAt = d.now().toISOString();
     run.writeBreadcrumbs();
     d.fs.writeAtomic(migrationStatePath(d.env), serializeMigrationState(st), 0o644);
     report(d, st, fullScan);
+    reportRewrites(d, st, rewritesBefore);
     return { outcome: "ran", state: st };
   } finally {
     try {
@@ -901,4 +1069,744 @@ export function legacyLeftovers(env: Env = process.env, probe: LiveProbe = liveP
     if (snap.cwds.some((c) => c === path || c.startsWith(`${path}/`))) users.push("cwd");
     return { path, users };
   });
+}
+
+/* ------------------------------------------------------------------------- */
+/* The second half: paths other programs recorded, and the units             */
+/* ------------------------------------------------------------------------- */
+/*
+ * The first half moved this CLI's own directories. Four kinds of record
+ * OUTSIDE them still name the old ones, written by this CLI through another
+ * program, and each is rewritten through the program that owns it wherever
+ * there is one:
+ *
+ *  - ~/.claude.json's channel entries, by `claude mcp remove` + `add-json`
+ *    (never by hand: a live Claude session rewrites that file);
+ *  - an agent's openclaw.json plugins.load.paths, by `openclaw config set`;
+ *  - an agent's dsh config and Hermes config.yaml, which no tool writes for
+ *    those keys, so only that key is edited, a `.bak-burrow-<ts>` copy is
+ *    kept, and the result is read back;
+ *  - the watchdog and restore units/plists, swapped for the burrow ones.
+ *
+ * Nothing here runs unless a record actually names an old path, so a host with
+ * nothing to rewrite runs no command at all.
+ */
+
+const requireLazy = createRequire(import.meta.url);
+
+interface Rw {
+  d: MigrateDeps;
+  st: MigrationState;
+  /** Compact timestamp for retired/backup file names. */
+  ts: string;
+}
+
+function compactTs(d: Date): string {
+  return d.toISOString().replace(/[-:]/g, "").replace(/\.\d+Z$/, "Z");
+}
+
+function pushUnique(list: RewriteEntry[], e: RewriteEntry): void {
+  if (!list.some((x) => x.step === e.step && x.path === e.path)) list.push(e);
+}
+
+function firstLine(s: string): string {
+  return s.trim().split("\n")[0] ?? "";
+}
+
+/** A regex for `path` as a whole path component prefix (not `path-old`). */
+function boundedRe(path: string, flags = ""): RegExp {
+  return new RegExp(`${escapeRegExp(path)}(?=$|[/\\s"'=:])`, flags);
+}
+
+/** True when `s` names something under the old data root. */
+function namesLegacyData(s: string, env: Env): boolean {
+  return s.includes(`${legacyRoot("data", env)}/`);
+}
+
+/** Every absolute path in `s` under the burrow data root, cut at whitespace, a quote, `=` or `:`. */
+function burrowDataPaths(s: string, env: Env): string[] {
+  const re = new RegExp(`${escapeRegExp(burrowRoot("data", env))}/[^\\s"'=:]*`, "g");
+  return s.match(re) ?? [];
+}
+
+/** The first rewritten path that does not exist, or null when every one does. */
+function missingTarget(rw: Rw, strings: string[]): string | null {
+  for (const s of strings) for (const p of burrowDataPaths(s, rw.d.env)) if (rw.d.fs.kindOf(p) === null) return p;
+  return null;
+}
+
+export function runRewrites(d: MigrateDeps, st: MigrationState, groups: ReadonlySet<RewriteGroup>): void {
+  const rw: Rw = { d, st, ts: compactTs(d.now()) };
+  // Each group is fenced: one that throws defers itself and the others still run.
+  const fenced = (group: RewriteGroup, step: RewriteStep, f: () => void) => {
+    if (!groups.has(group)) return;
+    try {
+      f();
+    } catch (err) {
+      pushUnique(st.deferred, { step, path: "(the whole step)", reason: `failed: ${code(err)}` });
+    }
+  };
+  fenced("claude", "claude-mcp", () => rewriteClaudeEntries(rw));
+  fenced("configs", "openclaw", () => rewriteAgentConfigs(rw));
+  fenced("units", "unit", () => swapSupervisorUnits(rw));
+}
+
+function reportRewrites(d: MigrateDeps, st: MigrationState, rewrittenBefore: number): void {
+  const now = st.rewritten.length - rewrittenBefore;
+  if (now > 0) {
+    d.stderr(`${PREFIX}: rewrote ${now} recorded path${now === 1 ? "" : "s"} or unit${now === 1 ? "" : "s"} for the burrow directories; see ${migrationStatePath(d.env)}`);
+  }
+  for (const e of st.deferred) {
+    d.stderr(`${PREFIX}: deferred ${e.step} ${e.path}${e.reason === undefined ? "" : `: ${e.reason}`}`);
+  }
+}
+
+/* ---- 1. ~/.claude.json ---------------------------------------------------- */
+
+interface McpTarget {
+  scope: "local" | "user";
+  /** The project folder (local), or HOME (user): the cwd `claude mcp` runs in. */
+  dir: string;
+  name: string;
+  entry: StoredEntry;
+}
+
+/** The channel checkout this CLI used before 0.9, which every rewritten entry names. */
+function legacyChannelCheckout(env: Env): string {
+  const from = Object.keys(CHECKOUT_DIR_MAP)[0] as string; // claude-code-suite-channel
+  return resolve(legacyRoot("data", env), from);
+}
+
+function entryStrings(e: StoredEntry): string[] {
+  return [...(typeof e.command === "string" ? [e.command] : []), ...(Array.isArray(e.args) ? e.args.filter((a) => typeof a === "string") : [])];
+}
+
+/** The entry with only its command/args paths moved to burrow. Everything else, env included, is untouched. */
+function movedEntry(e: StoredEntry, env: Env): StoredEntry {
+  const next: StoredEntry = { ...e };
+  if (typeof e.command === "string") next.command = rewriteManagedPath(e.command, env);
+  if (Array.isArray(e.args)) next.args = e.args.map((a) => (typeof a === "string" ? rewriteManagedPath(a, env) : a));
+  return next;
+}
+
+/** The `claude mcp` argv that writes `entry` as `name` at `scope`. add-json when the CLI has it. */
+function mcpAddArgv(name: string, scope: string, entry: StoredEntry, addJson: boolean): string[] {
+  if (addJson) return ["claude", "mcp", "add-json", name, JSON.stringify(entry), "-s", scope];
+  return stdioAddArgs(name, scope, Object.entries(entry.env ?? {}), [entry.command ?? "", ...(entry.args ?? [])]);
+}
+
+export function claudeMcpTargets(text: string, env: Env): McpTarget[] | null {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(text);
+  } catch {
+    return null;
+  }
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const re = boundedRe(legacyChannelCheckout(env));
+  const named = (e: unknown): e is StoredEntry =>
+    e !== null && typeof e === "object" && entryStrings(e as StoredEntry).some((s) => re.test(s));
+  const out: McpTarget[] = [];
+  const o = raw as { projects?: Record<string, { mcpServers?: Record<string, unknown> }>; mcpServers?: Record<string, unknown> };
+  for (const [dir, proj] of Object.entries(o.projects ?? {})) {
+    for (const [name, e] of Object.entries(proj?.mcpServers ?? {})) if (named(e)) out.push({ scope: "local", dir, name, entry: e });
+  }
+  for (const [name, e] of Object.entries(o.mcpServers ?? {})) if (named(e)) out.push({ scope: "user", dir: homeOf(env), name, entry: e });
+  return out;
+}
+
+function storedAt(text: string | null, t: McpTarget): StoredEntry | undefined {
+  if (text === null) return undefined;
+  try {
+    const o = JSON.parse(text) as { projects?: Record<string, { mcpServers?: Record<string, StoredEntry> }>; mcpServers?: Record<string, StoredEntry> };
+    return t.scope === "user" ? o.mcpServers?.[t.name] : o.projects?.[t.dir]?.mcpServers?.[t.name];
+  } catch {
+    return undefined;
+  }
+}
+
+function rewriteClaudeEntries(rw: Rw): void {
+  const { d, st } = rw;
+  const env = d.env;
+  const file = claudeJsonPath(env);
+  const label = (t: McpTarget) => `${file}:${t.scope === "user" ? "user" : t.dir}:${t.name}`;
+  const defer = (path: string, reason: string) => pushUnique(st.deferred, { step: "claude-mcp", path, reason });
+  let text: string | null;
+  try {
+    text = d.fs.readText(file);
+  } catch (err) {
+    defer(file, `cannot read it (${code(err)})`);
+    return;
+  }
+  if (text === null) return;
+  const targets = claudeMcpTargets(text, env);
+  if (targets === null) {
+    defer(file, "it is not a JSON object right now");
+    return;
+  }
+  const from = legacyChannelCheckout(env);
+  const to = rewriteManagedPath(from, env);
+  let cli: { addJson: boolean } | null | undefined;
+  for (const t of targets) {
+    if (t.scope === "local" && d.fs.kindOf(t.dir) !== "dir") {
+      pushUnique(st.rewriteSkipped, { step: "claude-mcp", path: label(t), from, to, reason: "the project folder no longer exists" });
+      continue;
+    }
+    const next = movedEntry(t.entry, env);
+    const missing = missingTarget(rw, entryStrings(next));
+    if (missing !== null) {
+      defer(label(t), `${missing} does not exist yet`);
+      continue;
+    }
+    if (cli === undefined) {
+      const help = d.run(["claude", "mcp", "--help"], { env });
+      cli = help === null ? null : { addJson: /\badd-json\b/.test(`${help.stdout}\n${help.stderr}`) };
+    }
+    if (cli === null) {
+      defer(label(t), "claude is not on PATH, and ~/.claude.json is only written through it");
+      continue;
+    }
+    const opts = { cwd: t.dir, env };
+    const rm = d.run(["claude", "mcp", "remove", t.name, "-s", t.scope], opts);
+    if (rm === null || rm.exitCode !== 0) {
+      defer(label(t), `claude mcp remove exited ${rm?.exitCode ?? "unstartable"}: ${firstLine(rm?.stderr ?? "")}`);
+      continue;
+    }
+    // The add's output is never printed: claude may echo the entry, token and all.
+    const add = d.run(mcpAddArgv(t.name, t.scope, next, cli.addJson), opts);
+    if (add === null || add.exitCode !== 0) {
+      const back = d.run(mcpAddArgv(t.name, t.scope, t.entry, cli.addJson), opts);
+      const restored = back !== null && back.exitCode === 0;
+      defer(
+        label(t),
+        `claude mcp ${cli.addJson ? "add-json" : "add"} exited ${add?.exitCode ?? "unstartable"}; the original entry was ${restored ? "restored" : `NOT restored: run ${PREFIX} claude in ${t.dir}`}`,
+      );
+      continue;
+    }
+    const back = storedAt(d.fs.readText(file), t);
+    const ok =
+      back !== undefined &&
+      JSON.stringify(entryStrings(back)) === JSON.stringify(entryStrings(next)) &&
+      missingTarget(rw, entryStrings(back)) === null;
+    if (!ok) {
+      defer(label(t), "claude exited 0 but reading ~/.claude.json back does not show the new path");
+      continue;
+    }
+    st.rewritten.push({ step: "claude-mcp", path: label(t), from, to, reason: cli.addJson ? "claude mcp add-json" : "claude mcp add" });
+  }
+}
+
+/* ---- 2. agents' openclaw, dsh and hermes configs -------------------------- */
+
+interface AgentRoots {
+  roots: string[];
+  hermesHomes: string[];
+  /** Roots of roster entries a dev checkout launched: their launcher owns their paths. */
+  devRoots: string[];
+}
+
+function flagValues(command: string[], flag: string, cwd: string): string[] {
+  const out: string[] = [];
+  command.forEach((a, i) => {
+    if (a === flag && command[i + 1] !== undefined) out.push(resolve(cwd, command[i + 1] as string));
+    else if (a.startsWith(`${flag}=`)) out.push(resolve(cwd, a.slice(flag.length + 1)));
+  });
+  return out;
+}
+
+/** Agent roots, from the roster and the per-agent connection records. */
+function agentRoots(rw: Rw): AgentRoots {
+  const { d } = rw;
+  const env = d.env;
+  const roots = new Set<string>();
+  const hermes = new Set<string>();
+  const dev = new Set<string>();
+  for (const roster of [resolve(burrowRoot("state", env), "agents.json"), resolve(legacyRoot("state", env), "agents.json")]) {
+    const text = d.fs.readText(roster);
+    if (text === null) continue;
+    let agents: unknown;
+    try {
+      agents = (JSON.parse(text) as { agents?: unknown }).agents;
+    } catch {
+      continue;
+    }
+    if (!Array.isArray(agents)) continue;
+    for (const a of agents as Array<{ command?: unknown; cwd?: unknown }>) {
+      if (typeof a?.cwd !== "string" || !Array.isArray(a.command) || !a.command.every((c) => typeof c === "string")) continue;
+      const command = a.command as string[];
+      const these = [a.cwd, ...flagValues(command, "--root", a.cwd)];
+      const homes = flagValues(command, "--hermes-home", a.cwd);
+      const target = runsUnmanagedCli(command, env) ? dev : roots;
+      for (const r of these) target.add(r);
+      if (target === roots) for (const h of homes) hermes.add(h);
+    }
+    break;
+  }
+  for (const agentsDir of [resolve(burrowRoot("config", env), "agents"), resolve(legacyRoot("config", env), "agents")]) {
+    for (const name of d.fs.readdir(agentsDir) ?? []) {
+      if (!name.endsWith(".json") || name.endsWith(".credentials.json")) continue;
+      const text = d.fs.readText(resolve(agentsDir, name));
+      try {
+        const dir = (JSON.parse(text ?? "null") as { dir?: unknown } | null)?.dir;
+        if (typeof dir === "string" && dir !== "") roots.add(resolve(dir));
+      } catch {}
+    }
+  }
+  for (const r of dev) roots.delete(r);
+  for (const r of roots) hermes.add(join(r, ".hermes"));
+  return { roots: [...roots].sort(), hermesHomes: [...hermes].sort(), devRoots: [...dev].sort() };
+}
+
+/** Write `next` over `path` by hand: a `.bak-burrow-<ts>` copy first, same mode, then read it back. */
+function editByHand(rw: Rw, path: string, next: string, holds: (text: string) => boolean): string | null {
+  const fs = rw.d.fs;
+  const bak = `${path}${BACKUP_SUFFIX}${rw.ts}`;
+  try {
+    if (fs.kindOf(bak) === null) fs.copyTree(path, bak);
+    fs.writeAtomic(path, next, fs.mode(path) ?? 0o600);
+  } catch (err) {
+    return `could not write it (${code(err)})`;
+  }
+  const back = fs.readText(path);
+  return back !== null && holds(back) ? null : "written, but reading it back does not show the new value";
+}
+
+function rewriteAgentConfigs(rw: Rw): void {
+  const { roots, hermesHomes, devRoots } = agentRoots(rw);
+  for (const root of roots) {
+    rewriteOpenclaw(rw, root, false);
+    rewriteDsh(rw, root, false);
+  }
+  for (const home of hermesHomes) rewriteHermes(rw, home, false);
+  // A dev checkout's agent: looked at, so the evidence says what was left, and never written.
+  for (const root of devRoots) {
+    rewriteOpenclaw(rw, root, true);
+    rewriteDsh(rw, root, true);
+    rewriteHermes(rw, join(root, ".hermes"), true);
+  }
+}
+
+const DEV_REASON = "a dev checkout launched this agent; its launcher owns these paths";
+
+/** openclaw.json, the file `openclaw config set` writes (openclaw.ts configPathFor). */
+function rewriteOpenclaw(rw: Rw, root: string, dev: boolean): void {
+  const { d, st } = rw;
+  const env = d.env;
+  const stateDir = join(root, ".openclaw");
+  const file = join(stateDir, "openclaw.json");
+  const text = d.fs.readText(file);
+  if (text === null) return;
+  const key = "plugins.load.paths";
+  const label = `${file}:${key}`;
+  const read = (t: string): unknown[] | null => {
+    try {
+      const v = (JSON.parse(t) as { plugins?: { load?: { paths?: unknown } } })?.plugins?.load?.paths;
+      return Array.isArray(v) ? v : null;
+    } catch {
+      return null;
+    }
+  };
+  const paths = read(text);
+  if (paths === null || !paths.some((p) => typeof p === "string" && namesLegacyData(p, env))) return;
+  const next = paths.map((p) => (typeof p === "string" ? rewriteManagedPath(p, env) : p));
+  const entry = { step: "openclaw" as const, path: label, from: JSON.stringify(paths), to: JSON.stringify(next) };
+  if (dev) return pushUnique(st.rewriteSkipped, { ...entry, reason: DEV_REASON });
+  const missing = missingTarget(rw, next.filter((p): p is string => typeof p === "string"));
+  if (missing !== null) return pushUnique(st.deferred, { ...entry, reason: `${missing} does not exist yet` });
+  const holds = (t: string) => JSON.stringify(read(t)) === JSON.stringify(next);
+  const managed = join(burrowRoot("data", env), "openclaw", "node_modules", ".bin", "openclaw");
+  const bin = d.fs.kindOf(managed) === "file" ? managed : "openclaw";
+  const childEnv = harnessChildEnv(env, { OPENCLAW_STATE_DIR: stateDir, OPENCLAW_CONFIG_PATH: file, OPENCLAW_HOME: root });
+  const r = d.run([bin, "config", "set", key, JSON.stringify(next), "--strict-json"], { cwd: root, env: childEnv });
+  if (r === null) {
+    // No openclaw to write through: only that key, by hand.
+    const doc = JSON.parse(text) as { plugins: { load: { paths: unknown[] } } };
+    doc.plugins.load.paths = next;
+    const failed = editByHand(rw, file, `${JSON.stringify(doc, null, 2)}\n`, holds);
+    if (failed !== null) return pushUnique(st.deferred, { ...entry, reason: failed });
+    st.rewritten.push({ ...entry, reason: `edited by hand (openclaw not found); backup ${file}${BACKUP_SUFFIX}${rw.ts}` });
+    return;
+  }
+  if (r.exitCode !== 0) return pushUnique(st.deferred, { ...entry, reason: `openclaw config set exited ${r.exitCode}: ${firstLine(r.stderr || r.stdout)}` });
+  const back = d.fs.readText(file);
+  if (back === null || !holds(back)) return pushUnique(st.deferred, { ...entry, reason: "openclaw config set exited 0 but openclaw.json does not hold the value" });
+  st.rewritten.push({ ...entry, reason: "openclaw config set" });
+}
+
+/** `<root>/.dsh/*.yml|yaml|json`: the deepseek verb renders suite.patch.yml naming `<data>/.../deepseek`. */
+function rewriteDsh(rw: Rw, root: string, dev: boolean): void {
+  const { d, st } = rw;
+  const env = d.env;
+  const dir = join(root, ".dsh");
+  const oldHarness = resolve(legacyRoot("data", env), "deepseek");
+  const newHarness = resolve(burrowRoot("data", env), "deepseek");
+  for (const name of d.fs.readdir(dir) ?? []) {
+    if (!/\.(ya?ml|json)$/.test(name)) continue;
+    const file = join(dir, name);
+    if (d.fs.kindOf(file) !== "file") continue;
+    const text = d.fs.readText(file);
+    if (text === null || !boundedRe(oldHarness).test(text)) continue;
+    const next = text.replace(boundedRe(oldHarness, "g"), newHarness);
+    const entry = { step: "dsh" as const, path: file, from: oldHarness, to: newHarness };
+    if (dev) {
+      pushUnique(st.rewriteSkipped, { ...entry, reason: DEV_REASON });
+      continue;
+    }
+    const missing = missingTarget(rw, [next]);
+    if (missing !== null) {
+      pushUnique(st.deferred, { ...entry, reason: `${missing} does not exist yet` });
+      continue;
+    }
+    // No tool writes it but the verb's own renderer, which needs the agent's
+    // connection; only the harness path changes, by hand.
+    const failed = editByHand(rw, file, next, (t) => t === next);
+    if (failed !== null) pushUnique(st.deferred, { ...entry, reason: failed });
+    else st.rewritten.push({ ...entry, reason: `edited by hand; backup ${file}${BACKUP_SUFFIX}${rw.ts}` });
+  }
+}
+
+type YamlDoc = { errors: unknown[]; setIn(path: unknown[], value: unknown): void; toJS(): unknown; toString(): string };
+
+/** Every string in a parsed YAML tree that names an old data path, with its key path. */
+function legacyStrings(node: unknown, env: Env, at: (string | number)[] = []): Array<{ path: (string | number)[]; value: string }> {
+  if (typeof node === "string") return namesLegacyData(node, env) ? [{ path: at, value: node }] : [];
+  if (Array.isArray(node)) return node.flatMap((v, i) => legacyStrings(v, env, [...at, i]));
+  if (node !== null && typeof node === "object") return Object.entries(node).flatMap(([k, v]) => legacyStrings(v, env, [...at, k]));
+  return [];
+}
+
+function lookupIn(node: unknown, path: (string | number)[]): unknown {
+  let n: unknown = node;
+  for (const p of path) {
+    if (n === null || typeof n !== "object") return undefined;
+    n = (n as Record<string | number, unknown>)[p];
+  }
+  return n;
+}
+
+/**
+ * `<HERMES_HOME>/config.yaml`. The keys that can name a data path are written
+ * by the channel installer, not by `hermes config set`, so there is no tool to
+ * write them through: only those values change, through yaml's document model
+ * so every other line keeps its formatting.
+ */
+function rewriteHermes(rw: Rw, hermesHome: string, dev: boolean): void {
+  const { d, st } = rw;
+  const env = d.env;
+  const file = join(hermesHome, "config.yaml");
+  const text = d.fs.readText(file);
+  if (text === null || !namesLegacyData(text, env)) return;
+  const yaml = requireLazy("yaml") as { parseDocument(t: string): YamlDoc; parse(t: string): unknown };
+  const doc = yaml.parseDocument(text);
+  if (doc.errors.length > 0) return pushUnique(st.deferred, { step: "hermes", path: file, reason: "config.yaml does not parse" });
+  const hits = legacyStrings(doc.toJS(), env);
+  if (hits.length === 0) return;
+  const changes = hits.map((h) => ({ ...h, next: rewriteManagedPath(h.value, env) }));
+  const entries = changes.map((c) => ({ step: "hermes" as const, path: `${file}:${c.path.join(".")}`, from: c.value, to: c.next }));
+  if (dev) {
+    for (const e of entries) pushUnique(st.rewriteSkipped, { ...e, reason: DEV_REASON });
+    return;
+  }
+  const missing = missingTarget(rw, changes.map((c) => c.next));
+  if (missing !== null) {
+    for (const e of entries) pushUnique(st.deferred, { ...e, reason: `${missing} does not exist yet` });
+    return;
+  }
+  for (const c of changes) doc.setIn(c.path, c.next);
+  const holds = (t: string) => {
+    try {
+      const parsed = yaml.parse(t);
+      return changes.every((c) => lookupIn(parsed, c.path) === c.next);
+    } catch {
+      return false;
+    }
+  };
+  const failed = editByHand(rw, file, String(doc), holds);
+  for (const e of entries) {
+    if (failed !== null) pushUnique(st.deferred, { ...e, reason: failed });
+    else st.rewritten.push({ ...e, reason: `edited by hand; backup ${file}${BACKUP_SUFFIX}${rw.ts}` });
+  }
+}
+
+/* ---- 3. units and plists -------------------------------------------------- */
+
+type Which = "watch" | "agents";
+
+/** The binary, interval, PATH and LANG a 0.8 unit or plist was written with, so the new one keeps them. */
+export function unitInputFrom(text: string, platform: NodeJS.Platform, home: string, env: Env): SupervisorInput {
+  let binary: string | undefined;
+  let interval: number | undefined;
+  let path: string | undefined;
+  let lang: string | undefined;
+  if (platform === "darwin") {
+    const args = /<key>ProgramArguments<\/key>\s*<array>([\s\S]*?)<\/array>/.exec(text)?.[1] ?? "";
+    const strings = [...args.matchAll(/<string>([^<]*)<\/string>/g)].map((m) => m[1] as string);
+    binary = strings[0];
+    const i = strings.indexOf("--interval");
+    if (i >= 0) interval = Number(strings[i + 1]);
+    path = /<key>PATH<\/key><string>([^<]*)<\/string>/.exec(text)?.[1];
+    lang = /<key>LANG<\/key><string>([^<]*)<\/string>/.exec(text)?.[1];
+  } else {
+    const exec = /^ExecStart=(.*)$/m.exec(text)?.[1]?.trim().split(/\s+/) ?? [];
+    binary = exec[0];
+    const i = exec.indexOf("--interval");
+    if (i >= 0) interval = Number(exec[i + 1]);
+    path = /^Environment=PATH=(.*)$/m.exec(text)?.[1];
+    lang = /^Environment=LANG=(.*)$/m.exec(text)?.[1];
+  }
+  return {
+    platform,
+    home,
+    binary: binary !== undefined && binary.startsWith("/") ? binary : `${home}/.local/bin/suite`,
+    intervalSeconds: interval !== undefined && Number.isFinite(interval) && interval >= 10 ? interval : 60,
+    inheritedPath: path,
+    inheritedLocale: lang,
+    env,
+  };
+}
+
+function beside(rw: Rw, legacy: string, lines: string[]): void {
+  try {
+    rw.d.fs.writeAtomic(`${legacy}${BESIDE_BREADCRUMB_SUFFIX}`, `${lines.join("\n")}\n`, 0o644);
+  } catch {}
+}
+
+function swapSupervisorUnits(rw: Rw): void {
+  const { d } = rw;
+  if (d.platform !== "linux" && d.platform !== "darwin") return;
+  const home = homeOf(d.env);
+  const legacy = legacySupervisorPaths(d.platform, home);
+  for (const which of ["watch", "agents"] as const) {
+    const path = legacy[which];
+    if (path === null) continue;
+    if (d.platform === "linux") swapSystemdUnit(rw, which, path);
+    else swapPlist(rw, which, path);
+  }
+  swapTmuxFallback(rw, legacy.watch as string);
+}
+
+/** `systemctl --user show -p <prop> --value <unit>`, trimmed; null when it cannot be read. */
+function unitProperty(d: MigrateDeps, unit: string, prop: string): string | null {
+  const r = d.run(["systemctl", "--user", "show", "-p", prop, "--value", unit], { env: d.env });
+  if (r === null || r.exitCode !== 0) return null;
+  return r.stdout.trim().replace(new RegExp(`^${prop}=`), "");
+}
+
+/**
+ * GUARD B: the unit this process runs inside is never stopped from inside it.
+ * A daemon that stops its own unit dies mid-migration.
+ */
+function selfInUnit(d: MigrateDeps, unit: string, which: Which): string | null {
+  if (which === "watch" && isSupervised(d.env)) return "this process is the watch daemon";
+  const inv = d.env.INVOCATION_ID;
+  if (inv !== undefined && inv !== "" && unitProperty(d, unit, "InvocationID") === inv) return `this process runs inside ${unit}`;
+  const cg = unitProperty(d, unit, "ControlGroup");
+  const mine = d.cgroupOf("self");
+  if (cg !== null && cg !== "" && mine !== null && mine.some((p) => under(cg, p))) return `this process runs inside ${unit}'s cgroup ${cg}`;
+  return null;
+}
+
+/** Every tmux server pid and pane pid on the default socket; [] when there is no server. */
+function tmuxPids(d: MigrateDeps): number[] {
+  const pids = new Set<number>();
+  for (const argv of [
+    ["tmux", "list-sessions", "-F", "#{pid}"],
+    ["tmux", "list-panes", "-a", "-F", "#{pane_pid}"],
+  ]) {
+    const r = d.run(argv, { env: d.env });
+    if (r === null || r.exitCode !== 0) continue;
+    for (const l of r.stdout.split("\n")) {
+      const n = Number.parseInt(l.trim(), 10);
+      if (Number.isFinite(n) && n > 0) pids.add(n);
+    }
+  }
+  return [...pids].sort((a, b) => a - b);
+}
+
+/**
+ * GUARD A: stopping a unit kills its whole cgroup by default, so a unit that
+ * holds a tmux server or an agent pane is never stopped. Anything that cannot
+ * be read counts as held.
+ */
+function tmuxInUnit(d: MigrateDeps, unit: string): string | null {
+  const cg = unitProperty(d, unit, "ControlGroup");
+  if (cg === null || cg === "") return `the control group of ${unit} could not be read`;
+  for (const pid of tmuxPids(d)) {
+    const groups = d.cgroupOf(pid);
+    if (groups === null) return `the cgroup of tmux pid ${pid} could not be read`;
+    if (groups.some((p) => under(cg, p))) return `tmux pid ${pid} is inside ${unit}'s cgroup ${cg}`;
+  }
+  return null;
+}
+
+function writeUnitFile(rw: Rw, path: string, text: string): void {
+  rw.d.fs.mkdirp(dirname(path));
+  rw.d.fs.writeAtomic(path, text, 0o644);
+}
+
+function swapSystemdUnit(rw: Rw, which: Which, legacy: string): void {
+  const { d, st } = rw;
+  const text = d.fs.readText(legacy);
+  if (text === null) return;
+  const oldUnit = basename(legacy);
+  const newUnit = `${which === "watch" ? SERVICE_NAME : RESTORE_SERVICE_NAME}.service`;
+  const newPath = join(dirname(legacy), newUnit);
+  const input = unitInputFrom(text, "linux", homeOf(d.env), d.env);
+  const newText = which === "watch" ? systemdUnit(input) : restoreUnit(input);
+  const sc = (...args: string[]) => d.run(["systemctl", "--user", ...args], { env: d.env });
+  const retired = `${legacy}${RETIRED_SUFFIX}${rw.ts}`;
+  const entry = { step: "unit" as const, path: legacy, from: oldUnit, to: newUnit };
+  const defer = (reason: string) => {
+    pushUnique(st.deferred, { ...entry, reason });
+    beside(rw, legacy, [
+      `burrow 0.9 has not swapped ${oldUnit} for ${newUnit} yet: ${reason}.`,
+      `${newPath} is written and NOT enabled; ${oldUnit} is untouched. Every later burrow run retries.`,
+    ]);
+  };
+
+  const en = sc("is-enabled", oldUnit);
+  if (en === null) {
+    // No systemctl at all: the unit is a file no service manager runs.
+    writeUnitFile(rw, newPath, newText);
+    d.fs.rename(legacy, retired);
+    st.rewritten.push({ ...entry, reason: `no systemctl, so nothing ran it; written ${newUnit}, retired the old file to ${retired}` });
+    return;
+  }
+  const enabled = /^enabled/.test(en.stdout.trim());
+  const act = sc("is-active", oldUnit);
+  const active = act !== null && ["active", "activating", "reloading"].includes(act.stdout.trim());
+
+  if (active) {
+    const self = selfInUnit(d, oldUnit, which);
+    const held = self === null ? tmuxInUnit(d, oldUnit) : null;
+    const reason = self ?? held;
+    if (reason !== null) {
+      writeUnitFile(rw, newPath, newText);
+      sc("daemon-reload");
+      defer(self !== null ? `${reason}; it cannot stop its own unit, so the next burrow run outside it swaps it` : `${reason}; stopping it would take tmux down`);
+      if (self !== null) d.stderr(`${PREFIX}: left ${oldUnit} running (${self}); the next burrow run outside it swaps it for ${newUnit}`);
+      return;
+    }
+  }
+
+  writeUnitFile(rw, newPath, newText);
+  sc("daemon-reload");
+  if (enabled) {
+    const e = sc("enable", newUnit);
+    if (e === null || e.exitCode !== 0) return defer(`systemctl enable ${newUnit} exited ${e?.exitCode ?? "unstartable"}: ${firstLine(e?.stderr ?? "")}`);
+  }
+  if (active) {
+    // Stop first, start second: the two never run at once.
+    const stop = sc("stop", oldUnit);
+    if (stop === null || stop.exitCode !== 0) return defer(`systemctl stop ${oldUnit} exited ${stop?.exitCode ?? "unstartable"}: ${firstLine(stop?.stderr ?? "")}`);
+    const start = sc("start", newUnit);
+    if (start === null || start.exitCode !== 0) {
+      const back = sc("start", oldUnit);
+      return defer(
+        `systemctl start ${newUnit} exited ${start?.exitCode ?? "unstartable"}: ${firstLine(start?.stderr ?? "")}; ${oldUnit} was ${back !== null && back.exitCode === 0 ? "started again" : "NOT started again"}`,
+      );
+    }
+  }
+  if (enabled) sc("disable", oldUnit);
+  d.fs.rename(legacy, retired);
+  sc("daemon-reload");
+  st.rewritten.push({ ...entry, reason: `was ${enabled ? "enabled" : "disabled"} and ${active ? "active" : "inactive"}; old file retired to ${retired}` });
+}
+
+function swapPlist(rw: Rw, which: Which, legacy: string): void {
+  const { d, st } = rw;
+  const text = d.fs.readText(legacy);
+  if (text === null) return;
+  const oldLabel = which === "watch" ? LEGACY_LAUNCHD_LABEL : LEGACY_RESTORE_LAUNCHD_LABEL;
+  const newLabel = which === "watch" ? LAUNCHD_LABEL : RESTORE_LAUNCHD_LABEL;
+  const newPath = join(dirname(legacy), `${newLabel}.plist`);
+  const input = unitInputFrom(text, "darwin", homeOf(d.env), d.env);
+  const newText = which === "watch" ? launchdPlist(input) : restoreLaunchdPlist(input);
+  const domain = `gui/${d.uid}`;
+  const lc = (...args: string[]) => d.run(["launchctl", ...args], { env: d.env });
+  const retired = `${legacy}${RETIRED_SUFFIX}${rw.ts}`;
+  const entry = { step: "plist" as const, path: legacy, from: oldLabel, to: newLabel };
+  const defer = (reason: string) => {
+    pushUnique(st.deferred, { ...entry, reason });
+    beside(rw, legacy, [`burrow 0.9 has not swapped ${oldLabel} for ${newLabel} yet: ${reason}.`, "Every later burrow run retries."]);
+  };
+  const pr = lc("print", `${domain}/${oldLabel}`);
+  const loaded = pr !== null && pr.exitCode === 0;
+  if (loaded && which === "watch" && isSupervised(d.env)) {
+    // GUARD B. Not even the new plist is written: launchd would load both at the next login.
+    d.stderr(`${PREFIX}: left ${oldLabel} running (this process is the watch daemon); the next burrow run outside it swaps it for ${newLabel}`);
+    return defer("this process is the watch daemon; it cannot boot out its own job");
+  }
+  writeUnitFile(rw, newPath, newText);
+  if (loaded) {
+    const out = lc("bootout", `${domain}/${oldLabel}`);
+    if (out === null || out.exitCode !== 0) {
+      d.fs.remove(newPath);
+      return defer(`launchctl bootout exited ${out?.exitCode ?? "unstartable"}: ${firstLine(out?.stderr ?? "")}`);
+    }
+    // The restore job is not bootstrapped now: its RunAtLoad would run a
+    // restore unattended. Its plist loads at the next login, as the old one did.
+    if (which === "watch") {
+      const boot = lc("bootstrap", domain, newPath);
+      if (boot === null || boot.exitCode !== 0) {
+        const back = lc("bootstrap", domain, legacy);
+        d.fs.remove(newPath);
+        return defer(
+          `launchctl bootstrap ${newLabel} exited ${boot?.exitCode ?? "unstartable"}: ${firstLine(boot?.stderr ?? "")}; ${oldLabel} was ${back !== null && back.exitCode === 0 ? "bootstrapped again" : "NOT bootstrapped again"}`,
+        );
+      }
+    }
+  }
+  d.fs.rename(legacy, retired);
+  st.rewritten.push({ ...entry, reason: `was ${loaded ? "loaded" : "not loaded"}; old plist retired to ${retired}` });
+}
+
+/**
+ * The no-GUI / no-user-systemd fallback: a tmux session named for the unit.
+ * Only on a host where 0.8 installed a watchdog (its unit or plist file, live
+ * or retired, is there), so a throwaway HOME never reaches the real tmux. Only
+ * the watcher's own session is killed, and it is killed before the new one is
+ * created.
+ */
+function swapTmuxFallback(rw: Rw, legacyWatch: string): void {
+  const { d, st } = rw;
+  const dir = dirname(legacyWatch);
+  const name = basename(legacyWatch);
+  const retired = (d.fs.readdir(dir) ?? []).filter((n) => n.startsWith(`${name}${RETIRED_SUFFIX}`)).sort();
+  const source = d.fs.kindOf(legacyWatch) === "file" ? legacyWatch : retired.length > 0 ? join(dir, retired[retired.length - 1] as string) : null;
+  if (source === null) return;
+  const tmux = (...args: string[]) => d.run(["tmux", ...args], { env: d.env });
+  const has = tmux("has-session", "-t", `=${LEGACY_SERVICE_NAME}`);
+  if (has === null || has.exitCode !== 0) return;
+  const entry = { step: "tmux" as const, path: `tmux session ${LEGACY_SERVICE_NAME}`, from: LEGACY_SERVICE_NAME, to: SERVICE_NAME };
+  if (isSupervised(d.env)) {
+    d.stderr(`${PREFIX}: left tmux session ${LEGACY_SERVICE_NAME} running (this process is the watch daemon); the next burrow run outside it swaps it for ${SERVICE_NAME}`);
+    return pushUnique(st.deferred, { ...entry, reason: "this process is the watch daemon" });
+  }
+  const input = unitInputFrom(d.fs.readText(source) ?? "", d.platform, homeOf(d.env), d.env);
+  const [, create] = tmuxSupervisorArgv(input.binary, input.intervalSeconds) as [string[], string[]];
+  const managed =
+    d.platform === "linux"
+      ? d.run(["systemctl", "--user", "is-active", `${SERVICE_NAME}.service`], { env: d.env })?.stdout.trim() === "active"
+      : d.run(["launchctl", "print", `gui/${d.uid}/${LAUNCHD_LABEL}`], { env: d.env })?.exitCode === 0;
+  const kill = tmux("kill-session", "-t", `=${LEGACY_SERVICE_NAME}`);
+  if (kill === null || kill.exitCode !== 0) return pushUnique(st.deferred, { ...entry, reason: `tmux kill-session exited ${kill?.exitCode ?? "unstartable"}` });
+  if (managed) {
+    st.rewritten.push({ ...entry, reason: `killed; ${SERVICE_NAME} already runs under the service manager` });
+    return;
+  }
+  if (tmux("has-session", "-t", `=${SERVICE_NAME}`)?.exitCode === 0) {
+    st.rewritten.push({ ...entry, reason: `killed; tmux session ${SERVICE_NAME} already exists` });
+    return;
+  }
+  const made = d.run(create, { env: d.env });
+  if (made === null || made.exitCode !== 0) {
+    const old = create.map((a) => (a === SERVICE_NAME ? LEGACY_SERVICE_NAME : a));
+    const back = d.run(old, { env: d.env });
+    return pushUnique(st.deferred, {
+      ...entry,
+      reason: `tmux new-session ${SERVICE_NAME} exited ${made?.exitCode ?? "unstartable"}; ${LEGACY_SERVICE_NAME} was ${back !== null && back.exitCode === 0 ? "started again" : "NOT started again"}`,
+    });
+  }
+  st.rewritten.push({ ...entry, reason: "killed, then created" });
 }

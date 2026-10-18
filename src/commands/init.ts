@@ -570,11 +570,23 @@ export function channelAddArgs(entry: ChannelEntry): string[] {
     ["TOKEN", entry.tokenLiteral],
     ["ALLOW_PERMISSION_RELAY", "0"],
   ];
-  const envArgs: string[] = [];
+  const env: Array<[string, string]> = [];
   for (const [suffix, value] of pairs) {
-    for (const [name, v] of Object.entries(bothNames(suffix, value))) envArgs.push("-e", `${name}=${v}`);
+    for (const [name, v] of Object.entries(bothNames(suffix, value))) env.push([name, v]);
   }
-  return ["claude", "mcp", "add", CHANNEL_SERVER, "-s", MCP_SCOPE, ...envArgs, "--", "bun", entry.indexPath];
+  return stdioAddArgs(CHANNEL_SERVER, MCP_SCOPE, env, ["bun", entry.indexPath]);
+}
+
+/**
+ * argv for `claude mcp add NAME -s SCOPE -e K=V ... -- COMMAND...`: the shape
+ * {@link channelAddArgs} writes, for any stdio entry. migrate.ts uses it to
+ * re-add an entry with only its path changed when the installed claude has no
+ * `mcp add-json`. Carries env values (a token, often): never log the result.
+ */
+export function stdioAddArgs(name: string, scope: string, env: Array<[string, string]>, command: string[]): string[] {
+  const envArgs: string[] = [];
+  for (const [k, v] of env) envArgs.push("-e", `${k}=${v}`);
+  return ["claude", "mcp", "add", name, "-s", scope, ...envArgs, "--", ...command];
 }
 
 /**
@@ -1314,7 +1326,9 @@ export async function runInit(deps: InitDeps, options: InitOptions = {}): Promis
     say(
       supervisor.installed
         ? `watchdog: ${supervisor.summary}`
-        : `watchdog NOT running: ${supervisor.summary}`,
+        : supervisor.deferred === true
+          ? `watchdog deferred: ${supervisor.summary}`
+          : `watchdog NOT running: ${supervisor.summary}`,
     );
 
     // Agent restore-on-boot: written, deliberately NOT enabled. An operator
@@ -1329,8 +1343,7 @@ export async function runInit(deps: InitDeps, options: InitOptions = {}): Promis
       intervalSeconds: 60,
       env: deps.env,
     });
-    if (restore) {
-      writeRestoreUnit(deps.supervisorIo, restore);
+    if (restore && writeRestoreUnit(deps.supervisorIo, restore)) {
       say(`agent restore-on-boot written (NOT enabled). To turn it on:`);
       say(`  ${restore.enableHint}`);
     }

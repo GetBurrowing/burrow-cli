@@ -159,6 +159,12 @@ function deps(env: Env, over: Partial<MigrateDeps> & { snapshot?: ProcessSnapsho
     env,
     fs: over.fs ?? liveMigrateFs(),
     probe: () => EMPTY,
+    // Stage 2's rewrites: no claude, systemctl or tmux here (an empty HOME has
+    // nothing for them to rewrite; test/migrate_rewrites.test.ts covers them).
+    platform: "linux",
+    uid: 1000,
+    run: () => null,
+    cgroupOf: () => null,
     pid: process.pid,
     pidAlive: () => false,
     now: () => new Date("2026-10-18T03:00:00.000Z"),

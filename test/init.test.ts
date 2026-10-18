@@ -239,8 +239,8 @@ describe("init on a machine where nothing is installed", () => {
     const result = await runInit(deps);
 
     expect(result.supervisor?.installed).toBe(true);
-    expect(calls.some((c) => c.startsWith("write ") && c.includes("suite-watch.service"))).toBe(true);
-    expect(calls).toContain("systemctl --user enable --now suite-watch.service");
+    expect(calls.some((c) => c.startsWith("write ") && c.includes("burrow-watch.service"))).toBe(true);
+    expect(calls).toContain("systemctl --user enable --now burrow-watch.service");
     expect(deps.lines.some((l) => l.includes("watchdog:"))).toBe(true);
   });
 
@@ -266,11 +266,11 @@ describe("init on a machine where nothing is installed", () => {
 
     await runInit(deps);
 
-    expect(calls.some((c) => c === "write /home/q/.config/systemd/user/suite-agents.service" ||
-      c.endsWith("suite-agents.service"))).toBe(true);
+    expect(calls.some((c) => c === "write /home/q/.config/systemd/user/burrow-agents.service" ||
+      c.endsWith("burrow-agents.service"))).toBe(true);
     // The watchdog IS enabled; the agent restore is NOT. Assert the absence
     // specifically, or "we enabled everything" would pass this test.
-    expect(calls.some((c) => c.includes("enable") && c.includes("suite-agents"))).toBe(false);
+    expect(calls.some((c) => c.includes("enable") && c.includes("burrow-agents"))).toBe(false);
     expect(deps.lines.some((l) => l.includes("NOT enabled"))).toBe(true);
   });
 

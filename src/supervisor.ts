@@ -1,8 +1,9 @@
-import { mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { webUrl, type Env } from "./repo_source.ts";
 import { burrowName, envValue, suiteName } from "./env_names.ts";
 import { CLI_NAME } from "./version.ts";
-import { configEntry } from "./paths.ts";
+import { configEntry, stateBase } from "./paths.ts";
+import { legacySupervisorPaths } from "./migrate.ts";
 
 /**
  * Keeping `suite watch` running without anyone remembering to start it.
@@ -98,8 +99,12 @@ export function tmuxSupervisorArgv(binary: string, intervalSeconds: number): str
   ];
 }
 
-// Not renamed to burrow in 0.8.0: a new unit name would install a second watchdog beside the live one.
-export const SERVICE_NAME = "suite-watch";
+/**
+ * The watchdog unit (systemd) and tmux fallback session. The 0.8 `suite-watch`
+ * is swapped for it once, by migrate.ts, which stops the old one before it
+ * starts this one: the two never run at once.
+ */
+export const SERVICE_NAME = "burrow-watch";
 
 /**
  * Set in the unit, read by the command.
@@ -132,8 +137,7 @@ export const isSupervised = (env: Record<string, string | undefined>): boolean =
  * equally protected by the unit files alone.
  */
 export const RSS_CEILING_BYTES = 512 * 1024 * 1024;
-// Not renamed to burrow in 0.8.0: a new label would load a second launchd job beside the live one.
-export const LAUNCHD_LABEL = "technology.milvenan.suite-watch";
+export const LAUNCHD_LABEL = "technology.milvenan.burrow-watch";
 
 /**
  * PATH given to the service.
@@ -191,15 +195,26 @@ export function serviceLocale(inherited?: string): string {
     : "en_US.UTF-8";
 }
 
+/** `<state>/<name>.log`: a service's log, beside the burrow state directory rather than in it. */
+export function serviceLogPath(home: string, name: string, env: Record<string, string | undefined> = process.env): string {
+  return `${stateBase({ ...env, HOME: home === "" ? "/" : home })}/${name}.log`;
+}
+
 /** `<config>/burrow/watch.env`. `home` wins over env.HOME; the XDG variables come from `env`. */
 export function envFilePath(home: string, env: Record<string, string | undefined> = process.env): string {
   return configEntry("watch.env", { ...env, HOME: home === "" ? "/" : home });
 }
 
+/**
+ * In both units: a stop kills the unit's main process and nothing else. The
+ * default (control-group) kills the whole cgroup, and a tmux server started
+ * from a unit lives in that unit's cgroup.
+ */
+export const KILL_MODE_LINE = "KillMode=process";
+
 export function systemdUnit(input: SupervisorInput): string {
-  // Unit text unchanged in 0.8.0 (Description says Suite): new text rewrites every live unit.
   return `[Unit]
-Description=Suite agent session watchdog
+Description=Burrow agent session watchdog
 Documentation=${webUrl("suite-cli", input.env)}
 After=default.target
 
@@ -210,10 +225,15 @@ Environment=HOME=${input.home}
 Environment=LANG=${serviceLocale(input.inheritedLocale)}
 Environment=${SUPERVISED_ENV_BURROW}=1
 Environment=${SUPERVISED_ENV}=1
-EnvironmentFile=-${envFilePath(input.home)}
+EnvironmentFile=-${envFilePath(input.home, input.env)}
 ExecStart=${input.binary} watch --interval ${input.intervalSeconds}
 Restart=always
 RestartSec=30
+# Stopping the watchdog stops the watchdog and nothing else. The default
+# (control-group) kills every process in the unit's cgroup, and a tmux server
+# the sweep happened to start lives there: one systemctl stop would take
+# every agent on the host down with it.
+${KILL_MODE_LINE}
 
 # A watchdog must be incapable of harming the host it watches. Without these a
 # leak in the sweep is indistinguishable from a leak anywhere else on the box,
@@ -253,8 +273,8 @@ export function launchdPlist(input: SupervisorInput): string {
   <key>ProcessType</key><string>Background</string>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
-  <key>StandardOutPath</key><string>${input.home}/.local/state/suite-watch.log</string>
-  <key>StandardErrorPath</key><string>${input.home}/.local/state/suite-watch.log</string>
+  <key>StandardOutPath</key><string>${serviceLogPath(input.home, SERVICE_NAME, input.env)}</string>
+  <key>StandardErrorPath</key><string>${serviceLogPath(input.home, SERVICE_NAME, input.env)}</string>
 </dict>
 </plist>
 `;
@@ -322,12 +342,38 @@ export interface SupervisorIo {
   mkdirp(dir: string): void;
   writeFile(path: string, contents: string): void;
   run(argv: string[]): Promise<{ exitCode: number }>;
+  /**
+   * Whether a path exists. Used for one question: is a pre-0.9 unit or plist
+   * still installed? An io without it (a test's fake) is taken to have none.
+   */
+  exists?(path: string): boolean;
 }
 
 export interface SupervisorResult {
   kind: SupervisorKind;
   installed: boolean;
   summary: string;
+  /**
+   * True when nothing was written because the 0.8 unit is still installed and
+   * migrate.ts has not swapped it yet. Not "not running": the old one may be.
+   */
+  deferred?: boolean;
+}
+
+/**
+ * The pre-0.9 unit or plist this plan's kind would sit beside, when it is
+ * still installed. While it is, installing ours would run two watchdogs (or,
+ * for launchd, load two at the next login), so the swap is left to
+ * migrate.ts, which stops the old one first.
+ */
+function legacyStillInstalled(io: SupervisorIo, kind: SupervisorKind, unitPath: string, which: "watch" | "agents"): string | null {
+  if (io.exists === undefined || (kind !== "systemd" && kind !== "launchd")) return null;
+  // Every unit path this module writes is `<home>/.config/systemd/user/...` or `<home>/Library/LaunchAgents/...`.
+  const marker = kind === "launchd" ? "/Library/LaunchAgents/" : "/.config/systemd/user/";
+  const at = unitPath.indexOf(marker);
+  if (at < 0) return null;
+  const legacy = legacySupervisorPaths(kind === "launchd" ? "darwin" : "linux", unitPath.slice(0, at))[which];
+  return legacy !== null && io.exists(legacy) ? legacy : null;
 }
 
 /**
@@ -345,6 +391,15 @@ export async function installSupervisor(
 ): Promise<SupervisorResult> {
   if (plan.kind === "unsupported") {
     return { kind: plan.kind, installed: false, summary: plan.summary };
+  }
+  const legacy = legacyStillInstalled(io, plan.kind, plan.path, "watch");
+  if (legacy !== null) {
+    return {
+      kind: plan.kind,
+      installed: false,
+      deferred: true,
+      summary: `${legacy} is still installed; the next burrow run outside the watch daemon swaps it for ${plan.summary}`,
+    };
   }
   const dir = plan.path.slice(0, plan.path.lastIndexOf("/"));
   io.mkdirp(dir);
@@ -435,6 +490,7 @@ export function liveSupervisorIo(): SupervisorIo {
   return {
     mkdirp: (dir) => void mkdirSync(dir, { recursive: true }),
     writeFile: (path, contents) => void writeFileSync(path, contents),
+    exists: (path) => existsSync(path),
     async run(argv) {
       const proc = Bun.spawn(argv, { stdout: "pipe", stderr: "pipe" });
       return { exitCode: await proc.exited };
@@ -446,9 +502,8 @@ export function liveSupervisorIo(): SupervisorIo {
 /* Agent restore on boot — written, never enabled                             */
 /* ------------------------------------------------------------------------- */
 
-// Not renamed to burrow in 0.8.0: a new unit/label would leave a second restore job beside the first.
-export const RESTORE_SERVICE_NAME = "suite-agents";
-export const RESTORE_LAUNCHD_LABEL = "technology.milvenan.suite-agents";
+export const RESTORE_SERVICE_NAME = "burrow-agents";
+export const RESTORE_LAUNCHD_LABEL = "technology.milvenan.burrow-agents";
 
 /**
  * Unit that brings recorded agents back after a reboot.
@@ -464,7 +519,7 @@ export const RESTORE_LAUNCHD_LABEL = "technology.milvenan.suite-agents";
  */
 export function restoreUnit(input: SupervisorInput): string {
   return `[Unit]
-Description=Restore Suite agent sessions after boot
+Description=Restore Burrow agent sessions after boot
 Documentation=${webUrl("suite-cli", input.env)}
 After=default.target
 
@@ -475,6 +530,9 @@ Environment=PATH=${servicePath(input.home, input.inheritedPath)}
 Environment=HOME=${input.home}
 Environment=LANG=${serviceLocale(input.inheritedLocale)}
 ExecStart=${input.binary} restore
+# restore starts tmux, so the tmux server it forks lands in THIS unit's cgroup.
+# Under the default KillMode a stop of this unit would kill every agent.
+${KILL_MODE_LINE}
 
 [Install]
 WantedBy=default.target
@@ -499,7 +557,7 @@ export function restoreLaunchdPlist(input: SupervisorInput): string {
     <key>LANG</key><string>${serviceLocale(input.inheritedLocale)}</string>
   </dict>
   <key>RunAtLoad</key><true/>
-  <key>StandardErrorPath</key><string>${input.home}/.local/state/suite-agents.log</string>
+  <key>StandardErrorPath</key><string>${serviceLogPath(input.home, RESTORE_SERVICE_NAME, input.env)}</string>
 </dict>
 </plist>
 `;
@@ -534,10 +592,17 @@ export function restoreUnitPlan(input: SupervisorInput): RestoreUnitPlan | null 
   return null;
 }
 
-/** Write the unit only. Enabling is the operator's, by construction. */
-export function writeRestoreUnit(io: SupervisorIo, plan: RestoreUnitPlan): void {
+/**
+ * Write the unit only. Enabling is the operator's, by construction. Not
+ * beside a 0.8 restore unit that is still installed: migrate.ts swaps that
+ * one, carrying its enablement across, and two would both run at boot.
+ * Returns whether it wrote.
+ */
+export function writeRestoreUnit(io: SupervisorIo, plan: RestoreUnitPlan): boolean {
+  if (legacyStillInstalled(io, plan.kind, plan.path, "agents") !== null) return false;
   io.mkdirp(plan.path.slice(0, plan.path.lastIndexOf("/")));
   io.writeFile(plan.path, plan.contents);
+  return true;
 }
 
 /**
@@ -560,7 +625,7 @@ export async function ensureSupervision(
   let watchdog: string;
   try {
     const res = await installSupervisor(io, supervisorPlan(input));
-    watchdog = res.installed ? res.summary : `NOT running: ${res.summary}`;
+    watchdog = res.installed ? res.summary : res.deferred === true ? `deferred: ${res.summary}` : `NOT running: ${res.summary}`;
   } catch (err) {
     watchdog = `NOT running: ${(err as Error).message}`;
   }
@@ -571,10 +636,7 @@ export async function ensureSupervision(
   let restore: string | null = null;
   try {
     const plan = restoreUnitPlan(input);
-    if (plan) {
-      writeRestoreUnit(io, plan);
-      restore = plan.enableHint;
-    }
+    if (plan && writeRestoreUnit(io, plan)) restore = plan.enableHint;
   } catch {
     restore = null;
   }

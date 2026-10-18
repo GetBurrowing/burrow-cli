@@ -741,11 +741,11 @@ describe("supervision on session create", () => {
       binary: "/home/q/.local/bin/suite",
       intervalSeconds: 60,
     });
-    expect(res.watchdog).toContain("suite-watch");
-    expect(calls.some((c) => c.includes("suite-watch.service"))).toBe(true);
+    expect(res.watchdog).toContain("burrow-watch");
+    expect(calls.some((c) => c.includes("burrow-watch.service"))).toBe(true);
     // Restore unit written but NOT enabled — the operator opts in.
-    expect(calls.some((c) => c.includes("suite-agents.service"))).toBe(true);
-    expect(calls.some((c) => c.includes("enable") && c.includes("suite-agents"))).toBe(false);
+    expect(calls.some((c) => c.includes("burrow-agents.service"))).toBe(true);
+    expect(calls.some((c) => c.includes("enable") && c.includes("burrow-agents"))).toBe(false);
   });
 
   /** Supervision is insurance; the agent is the point. A failure must not throw. */

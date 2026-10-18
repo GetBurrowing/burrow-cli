@@ -123,7 +123,7 @@ describe("installing", () => {
     const { io, calls } = recordingIo();
     await installSupervisor(io, supervisorPlan({ ...base, platform: "linux" }));
     expect(calls[0]).toBe("mkdirp /home/q/.config/systemd/user");
-    expect(calls[1]).toBe("write /home/q/.config/systemd/user/suite-watch.service");
+    expect(calls[1]).toBe("write /home/q/.config/systemd/user/burrow-watch.service");
   });
 
   /**
