@@ -1155,7 +1155,7 @@ describe("the source names the suite binary only in the legacy mapping", () => {
   const ALLOWED: ReadonlyArray<{ file: string; text: string; reason: string }> = [
     {
       file: "src/supervisor.ts",
-      text: " * alias, e.g. ~/.local/bin/suite) maps to its sibling `burrow`. Anything else",
+      text: " * installed, e.g. ~/.local/bin/suite) maps to its sibling `burrow`. Anything else",
       reason: "burrowBinaryFor's comment: the legacy mapping",
     },
   ];
