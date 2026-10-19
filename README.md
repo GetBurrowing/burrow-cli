@@ -246,6 +246,7 @@ again from the same place and you are back in the same session.
 | `burrow doctor` | Diagnoses a broken setup in two halves, **install connection** (`→ burrow init`) and **claude harness** (mostly `→ burrow claude`), with one runnable remedy per failure. A stale session is never reported green. The `agents` check reports any cross-wired agent folder on the machine |
 | `burrow status` | Shows every agent folder with its runtime and install (and a legacy machine connection, if any), the state and age of each session, and each stamped agent's kind, root, state and last verdict |
 | `burrow status --json [--dir PATH]` | One JSON document on stdout for every agent on the machine. See [the status contract](#status-contract-status---json) |
+| `burrow pane-status --session NAME [--answer]` | One JSON document on stdout, also written to `<state>/burrow/sessions/NAME.status.json` (0600): `state` is `ready`, `dialog`, `needs_login` (with `login.step` and, on the sign-in screen, the `login.url` Claude Code printed), `unknown_dialog`, `starting`, `stuck` or `gone`. `--answer` first answers one known launch dialog or the first-run theme picker. **Login screens are reported, never answered**: logging in is Anthropic's flow, done by the person. For supervisors with no terminal, such as Burrow's agent host |
 | `burrow --version`, `burrow --help` | Version, and the verb list |
 
 ### What `burrow doctor` checks that nothing else does

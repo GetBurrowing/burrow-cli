@@ -10,6 +10,30 @@ that matters in the field: is this one newer than what I had?
 Minor for a new capability or a changed default; patch for a fix that changes no
 behaviour anyone was relying on.
 
+## 0.10.1
+
+The agent-host features from core task 01a10322, which shipped only on the
+`task/01a10322-…-pane-status` branch (pinned by core's agent host at
+`3f80728`, 0.8.0), are now on main.
+
+- **`burrow pane-status --session NAME [--answer]`**: one look at an agent's
+  Claude Code pane as JSON, for a supervisor with no terminal. It prints one
+  document and writes it to `<state>/burrow/sessions/<session>.status.json`
+  (0600, atomic). The states are `ready`, `dialog`, `needs_login`,
+  `unknown_dialog`, `starting`, `stuck` and `gone`. Login screens are
+  recognised and reported, never answered.
+- **The API-key confirmation is answered for the agent's own
+  `ANTHROPIC_API_KEY` only.** Any other key, or no key, reads `needs_login`.
+- **Unattended launches skip Claude Code 2.1.295's onboarding.**
+  `BURROW_UNATTENDED=1` (set by the agent host's unit) seeds
+  `hasCompletedOnboarding` before launch. A launch record beside the session
+  log carries the `stuck` and `auth_error` states.
+- **`needs_login`** is reported for a key rejected at startup and for no key
+  at all.
+- Ported to 0.10: the status file and launch record resolve through
+  `<state>/burrow` like the session log; the env name is `BURROW_UNATTENDED`
+  (was `SUITE_UNATTENDED`); messages say `burrow`.
+
 ## 0.10.0
 
 The `suite` command alias is removed. `burrow` is the only command.
