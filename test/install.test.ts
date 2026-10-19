@@ -10,7 +10,7 @@
  * All fixture values are invented. Nothing here is a real host, id or token.
  */
 import { describe, expect, test, beforeAll, afterAll } from "bun:test";
-import { spawnSync } from "node:child_process";
+import { spawnSync, type SpawnSyncReturns } from "node:child_process";
 import { mkdtempSync, mkdirSync, rmSync, existsSync, writeFileSync, chmodSync, readFileSync, symlinkSync, lstatSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
@@ -100,15 +100,102 @@ function ghlessPath(): string {
   return bin;
 }
 
+/*
+ * EVERY install.sh run goes through runInstallSh, under a watchdog.
+ *
+ * A run takes ~0.7 s. CI run 39327111099 (2026-10-19) had one block for 361 s
+ * with no output, cause unknown; the test then failed as a bare `status -1`.
+ * The watchdog bounds a run at STALL_SECONDS (~80x normal) and, if it fires,
+ * records what was STILL RUNNING under the installer before killing that whole
+ * tree, so the failure names the stalled step (e.g. `bun install
+ * --production`, curl, tar) along with the tail of the installer's own output.
+ *
+ * stdin is handed to the installer through fd 3: a non-interactive sh points a
+ * background job's stdin at /dev/null before any `<&0` is applied.
+ */
+const STALL_SECONDS = 60;
+const WATCHDOG = [
+  'installer=$1 log=$2 secs=$3 dogpath=$4',
+  'exec 3<&0',
+  'sh "$installer" <&3 3<&- &',
+  'child=$!',
+  '(',
+  '  PATH=$dogpath',
+  '  desc() { for c in $(ps -A -o pid= -o ppid= | awk -v p="$1" \'$2 == p { print $1 }\'); do echo "$c"; desc "$c"; done; }',
+  '  trap \'kill "$s" 2>/dev/null; exit 0\' TERM',
+  '  sleep "$secs" & s=$!',
+  '  wait "$s"',
+  '  if kill -0 "$child" 2>/dev/null; then',
+  '    tree=$(desc "$child")',
+  '    { echo "child $child"; ps -A -o pid= -o ppid= -o etime= -o args=; } > "$log"',
+  '    kill -9 $tree "$child" 2>/dev/null',
+  '  fi',
+  ') </dev/null >/dev/null 2>&1 &',
+  'dog=$!',
+  'exec 3<&-',
+  'wait "$child"; rc=$?',
+  'kill "$dog" 2>/dev/null',
+  'exit "$rc"',
+].join("\n");
+
+/** The processes under `root` in a `ps -o pid= -o ppid= -o etime= -o args=` listing, as "etime args" lines. */
+function descendants(listing: string, root: number): string[] {
+  const rows = listing
+    .split("\n")
+    .map((l) => /^\s*(\d+)\s+(\d+)\s+(\S+)\s+(.*)$/.exec(l))
+    .filter((m): m is RegExpExecArray => m !== null)
+    .map((m) => ({ pid: Number(m[1]), ppid: Number(m[2]), etime: m[3], args: m[4] }));
+  const out: string[] = [];
+  const walk = (pid: number): void => {
+    for (const r of rows.filter((x) => x.ppid === pid)) {
+      out.push(`${r.etime}  ${r.args}`);
+      walk(r.pid);
+    }
+  };
+  walk(root);
+  return out;
+}
+
+function runInstallSh(
+  env: Record<string, string | undefined>,
+  input = "",
+  { script = INSTALL_SH, stallSeconds = STALL_SECONDS }: { script?: string; stallSeconds?: number } = {},
+): SpawnSyncReturns<string> {
+  const log = join(mkdtempSync(join(tmpdir(), "install-stall.")), "stall.txt");
+  const r = spawnSync("sh", ["-c", WATCHDOG, "install-watchdog", script, log, String(stallSeconds), "/usr/bin:/bin"], {
+    input,
+    encoding: "utf8",
+    env,
+    // Backstop only: the watchdog fires first and says why.
+    timeout: (stallSeconds + 30) * 1000,
+    killSignal: "SIGKILL",
+  });
+  if (existsSync(log)) {
+    const text = readFileSync(log, "utf8");
+    const child = Number(/^child (\d+)/.exec(text)?.[1] ?? "-1");
+    const tail = (t: string | null | undefined): string => (t ?? "").split("\n").slice(-15).join("\n");
+    throw new Error(
+      [
+        `install.sh stalled: still running after ${stallSeconds}s, killed. Still running under it:`,
+        ...descendants(text, child).map((l) => `  ${l}`),
+        "--- installer stdout (tail) ---",
+        tail(r.stdout),
+        "--- installer stderr (tail) ---",
+        tail(r.stderr),
+      ].join("\n"),
+    );
+  }
+  if (r.error !== undefined) throw r.error;
+  return r;
+}
+
 function runInstaller(
   home: string,
   opts: { url?: string; stdin?: string; path?: string; urlVar?: string; env?: Record<string, string> } = {},
 ): RunResult {
   const url = opts.url ?? `file://${tarball}`;
-  const result = spawnSync("sh", [INSTALL_SH], {
-    input: opts.stdin ?? "",
-    encoding: "utf8",
-    env: {
+  const result = runInstallSh(
+    {
       // A deliberately minimal environment: no inherited XDG_* or PATH
       // surprises from the developer's shell.
       PATH: opts.path ?? process.env.PATH ?? "/usr/bin:/bin",
@@ -120,7 +207,8 @@ function runInstaller(
       [opts.urlVar ?? "SUITE_CLI_TARBALL_URL"]: url,
       ...opts.env,
     },
-  });
+    opts.stdin ?? "",
+  );
   return {
     status: result.status ?? -1,
     stdout: result.stdout ?? "",
@@ -132,6 +220,34 @@ function runInstaller(
 }
 
 describe("install.sh", () => {
+  test("the watchdog: a stalled installer fails fast and names what was still running", () => {
+    // A stand-in installer that prints, then hangs in a child the way a stuck
+    // `bun install` would. Stall bound 2 s instead of 60.
+    const dir = mkdtempSync(join(tmpdir(), "install-stall-control."));
+    const fake = join(dir, "install.sh");
+    writeFileSync(fake, '#!/bin/sh\nprintf "staging\\n"\nsh -c "sleep 300; :" \nprintf "never\\n"\n');
+    const started = Date.now();
+    let message = "";
+    try {
+      runInstallSh({ PATH: process.env.PATH ?? "/usr/bin:/bin" }, "", { script: fake, stallSeconds: 2 });
+    } catch (e) {
+      message = e instanceof Error ? e.message : String(e);
+    }
+    expect(Date.now() - started).toBeLessThan(15_000);
+    expect(message).toContain("install.sh stalled: still running after 2s");
+    expect(message).toContain("sleep 300");
+    expect(message).toContain("staging");
+    expect(message).not.toContain("never");
+    // Direction control: a run that finishes is returned, not reported, and
+    // stdin still reaches the installer.
+    const echo = join(dir, "echo.sh");
+    writeFileSync(echo, '#!/bin/sh\nIFS= read -r line; printf "got:%s\\n" "$line"\n');
+    const ok = runInstallSh({ PATH: process.env.PATH ?? "/usr/bin:/bin" }, "y\n", { script: echo, stallSeconds: 2 });
+    expect(ok.status).toBe(0);
+    expect(ok.stdout).toBe("got:y\n");
+    rmSync(dir, { recursive: true, force: true });
+  }, 30_000);
+
   test("installs the entrypoint into a scratch HOME and exits 0", () => {
     const r = runInstaller(makeHome());
     expect(r.status).toBe(0);
@@ -272,7 +388,7 @@ describe("install.sh", () => {
       XDG_DATA_HOME: join(home, ".local", "share"),
       ...extra,
     };
-    const r = spawnSync("sh", [INSTALL_SH], { input: "", encoding: "utf8", env });
+    const r = runInstallSh(env);
     return {
       status: r.status ?? -1,
       stderr: r.stderr ?? "",
@@ -326,15 +442,12 @@ describe("install.sh", () => {
     const stub = join(stubDir, "uname");
     writeFileSync(stub, '#!/bin/sh\nprintf "MINGW64_NT-10.0\\n"\n');
     chmodSync(stub, 0o755);
-    const result = spawnSync("sh", [INSTALL_SH], {
-      encoding: "utf8",
-      env: {
-        PATH: `${stubDir}:${process.env.PATH ?? "/usr/bin:/bin"}`,
-        HOME: home,
-        XDG_BIN_HOME: join(home, ".local", "bin"),
-        XDG_DATA_HOME: join(home, ".local", "share"),
-        SUITE_CLI_TARBALL_URL: `file://${tarball}`,
-      },
+    const result = runInstallSh({
+      PATH: `${stubDir}:${process.env.PATH ?? "/usr/bin:/bin"}`,
+      HOME: home,
+      XDG_BIN_HOME: join(home, ".local", "bin"),
+      XDG_DATA_HOME: join(home, ".local", "share"),
+      SUITE_CLI_TARBALL_URL: `file://${tarball}`,
     });
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain("Windows is not supported");
@@ -552,18 +665,14 @@ describe("install.sh: refs and the repo name", () => {
       ].join("\n"),
     );
     chmodSync(join(stubDir, "curl"), 0o755);
-    const r = spawnSync("sh", [INSTALL_SH], {
-      input: "",
-      encoding: "utf8",
-      env: {
-        PATH: `${stubDir}:${ghlessPath()}`,
-        HOME: home,
-        XDG_BIN_HOME: join(home, ".local", "bin"),
-        XDG_DATA_HOME: join(home, ".local", "share"),
-        STUB_SERVE: serve.join(" "),
-        STUB_ARCHIVE: archive,
-        ...env,
-      },
+    const r = runInstallSh({
+      PATH: `${stubDir}:${ghlessPath()}`,
+      HOME: home,
+      XDG_BIN_HOME: join(home, ".local", "bin"),
+      XDG_DATA_HOME: join(home, ".local", "share"),
+      STUB_SERVE: serve.join(" "),
+      STUB_ARCHIVE: archive,
+      ...env,
     });
     return {
       status: r.status ?? -1,
