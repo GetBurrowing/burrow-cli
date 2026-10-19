@@ -188,7 +188,7 @@ describe.if(HAVE_TMUX)("an UNATTENDED launch (core task 01a10322 stage 7)", () =
       const errs: string[] = [];
       const deps: ClaudeDeps = {
         ...depsFor(cwd),
-        env: { ...ENV, SUITE_UNATTENDED: "1" },
+        env: { ...ENV, BURROW_UNATTENDED: "1" },
         err: (l) => void errs.push(l),
         seedOnboarding,
         writeLaunch: writeLaunchRecord,
@@ -198,14 +198,14 @@ describe.if(HAVE_TMUX)("an UNATTENDED launch (core task 01a10322 stage 7)", () =
 
       expect(JSON.parse(readFileSync(resolve(HOME, ".claude.json"), "utf8")).hasCompletedOnboarding).toBe(true);
       expect(errs.some((l) => l.startsWith("onboarding: set hasCompletedOnboarding"))).toBe(true);
-      const record = readLaunchRecord(launchRecordPath(HOME, session));
+      const record = readLaunchRecord(launchRecordPath(HOME, session, ENV));
       expect(record).toMatchObject({ version: 1, session, outcome: "ready", baseline: null });
       expect(record?.answered).toEqual(["trust-folder", "trust-folder", "dev-channels", "dev-channels"]);
     },
     45_000,
   );
 
-  test("POSITIVE CONTROL: without SUITE_UNATTENDED nothing is seeded", async () => {
+  test("POSITIVE CONTROL: without BURROW_UNATTENDED nothing is seeded", async () => {
     const cwd = resolve(ROOT, "agent-attended");
     mkdirSync(cwd);
     writeFakeClaude(resolve(ROOT, "keys-attended.log"), resolve(ROOT, "ready-attended"));

@@ -1,15 +1,15 @@
 /**
- * `suite pane-status --session NAME [--answer]` — one look at an agent's
+ * `burrow pane-status --session NAME [--answer]` — one look at an agent's
  * Claude Code pane, as JSON.
  *
- * For a supervisor with no terminal (Suite's agent host), which needs to know
+ * For a supervisor with no terminal (Burrow's agent host), which needs to know
  * whether the agent is up, parked at a dialog, or waiting for a person to log
  * in, without classifying panes itself. Prints ONE JSON document on stdout and
  * writes the same document to the session's status file
  * (`sessionStatusPath`).
  *
  * `--answer` additionally answers ONE known launch dialog (the same answers
- * `suite claude` and `suite watch` give, through `answerOnce`) before
+ * `burrow claude` and `burrow watch` give, through `answerOnce`) before
  * reporting. It never answers a login screen: logging in is the person's,
  * through Anthropic's own flow. The one confirmation it does answer is "use
  * this ANTHROPIC_API_KEY?", and only for the key in this process's own
@@ -22,6 +22,7 @@ import { launchRecordPath, readLaunchRecord, writeLaunchRecord, type LaunchRecor
 import { authRejected, paneStatus, sessionStatusPath, writePaneStatus, type PaneStatus } from "../claude_login.ts";
 import { resolveTmux } from "../halt.ts";
 import { liveTmuxDeps, type TmuxDeps } from "../tmux.ts";
+import { CLI_NAME } from "../version.ts";
 
 export interface PaneStatusOptions {
   session?: string;
@@ -62,7 +63,7 @@ export interface PaneStatusDeps {
 export async function runPaneStatus(deps: PaneStatusDeps, args: string[]): Promise<number> {
   const parsed = parsePaneStatusArgs(args);
   if ("error" in parsed) {
-    deps.err(`suite pane-status: ${parsed.error}`);
+    deps.err(`${CLI_NAME} pane-status: ${parsed.error}`);
     return 2;
   }
   const session = parsed.session!;
@@ -80,14 +81,14 @@ export async function runPaneStatus(deps: PaneStatusDeps, args: string[]): Promi
     try {
       deps.writeLaunch?.(launchPath, launch);
     } catch (error) {
-      deps.err(`suite pane-status: could not write the launch record: ${error instanceof Error ? error.message : String(error)}`);
+      deps.err(`${CLI_NAME} pane-status: could not write the launch record: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
   const status = paneStatus(session, cap.exitCode === 0 ? cap.stdout : null, { cwd: deps.cwd, home, apiKey }, deps.now(), launch);
   try {
     deps.write(sessionStatusPath(home, session), status);
   } catch (error) {
-    deps.err(`suite pane-status: could not write the status file: ${error instanceof Error ? error.message : String(error)}`);
+    deps.err(`${CLI_NAME} pane-status: could not write the status file: ${error instanceof Error ? error.message : String(error)}`);
   }
   deps.out(JSON.stringify(status));
   return status.state === "gone" ? 1 : 0;

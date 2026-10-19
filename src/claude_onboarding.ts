@@ -5,7 +5,7 @@
  * pane-status branch for core task 01a10322 stage 7 on 2.1.295).
  *
  * WHEN: only when the launching process says it is unattended,
- * `SUITE_UNATTENDED=1` in the environment (Suite's agent host sets it in
+ * `BURROW_UNATTENDED=1` in the environment (Burrow's agent host sets it in
  * `suite-agent@.service`). A person running `suite claude` at a terminal still
  * sees Claude's own first run.
  *
@@ -51,7 +51,7 @@ import { dirname, join } from "node:path";
 export const ONBOARDING_KEY = "hasCompletedOnboarding";
 
 /** The environment variable that marks a launch as unattended. */
-export const UNATTENDED_ENV = "SUITE_UNATTENDED";
+export const UNATTENDED_ENV = "BURROW_UNATTENDED";
 
 export function isUnattended(env: Record<string, string | undefined>): boolean {
   return env[UNATTENDED_ENV] === "1";

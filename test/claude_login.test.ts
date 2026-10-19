@@ -126,8 +126,8 @@ describe("paneStatus", () => {
 describe("the status file", () => {
   test("is written atomically at 0600 next to the session log", () => {
     const home = mkdtempSync(resolve(tmpdir(), "pane-status-"));
-    const path = sessionStatusPath(home, "suite-agent");
-    expect(path).toBe(`${home}/.local/state/suite/sessions/suite-agent.status.json`);
+    const path = sessionStatusPath(home, "suite-agent", {});
+    expect(path).toBe(`${home}/.local/state/burrow/sessions/suite-agent.status.json`);
     const status = paneStatus("suite-agent", oldFixture("ready.120"), CTX, NOW);
     writePaneStatus(path, status);
     expect(JSON.parse(readFileSync(path, "utf8"))).toEqual(status);
@@ -198,9 +198,9 @@ describe("suite pane-status", () => {
 });
 
 /*
- * The API-key confirmation (core task 01a10322 stage 6). A Suite native agent
+ * The API-key confirmation (core task 01a10322 stage 6). A Burrow native agent
  * gets ANTHROPIC_API_KEY in its environment only because a person who manages
- * it saved that key in Suite, so the CLI says "Yes" for them, and only for
+ * it saved that key in Burrow, so the CLI says "Yes" for them, and only for
  * THAT key. The fixture's key is shown as `sk-ant-...` plus 20 `A`s.
  */
 describe("api-key-confirm: answered only for the agent's own key", () => {

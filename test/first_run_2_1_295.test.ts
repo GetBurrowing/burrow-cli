@@ -1,11 +1,11 @@
 /**
  * Claude Code 2.1.295 first run, unattended (core task 01a10322 stage 7).
  *
- * The behavioural gate found Suite native agents parked on 2.1.295's
+ * The behavioural gate found Burrow native agents parked on 2.1.295's
  * first-run "Security notes" screen for ten minutes, read as `starting`. Three
  * fixes, each pinned here:
  *
- *   1. `SUITE_UNATTENDED=1` seeds `hasCompletedOnboarding` before launch, so
+ *   1. `BURROW_UNATTENDED=1` seeds `hasCompletedOnboarding` before launch, so
  *      the onboarding screens never appear (claude_onboarding.ts);
  *   2. the security notes are recognised and answered (Enter) as a fallback;
  *   3. a launch that timed out with the pane still unusable reads `stuck`,
@@ -16,7 +16,7 @@
  * Fixtures: real `tmux capture-pane -p` output of 2.1.295 on Linux (moon,
  * node:22 container, fresh HOME, a well-formed FAKE ANTHROPIC_API_KEY),
  * under test/fixtures/claude-code-2.1.295-onboarding/. Unedited. The two
- * `agent-host-*` fixtures are panes of real native agents in Suite's agent
+ * `agent-host-*` fixtures are panes of real native agents in Burrow's agent
  * host image (contained profile, rig 01a10322-s7): one with a well-formed
  * invalid key, one with no key at all.
  */
@@ -125,9 +125,9 @@ describe("seedOnboarding", () => {
     expect(readFileSync(path, "utf8")).toBe("[1,2]");
   });
 
-  test("only SUITE_UNATTENDED=1 is unattended", () => {
-    expect(isUnattended({ SUITE_UNATTENDED: "1" })).toBe(true);
-    expect(isUnattended({ SUITE_UNATTENDED: "true" })).toBe(false);
+  test("only BURROW_UNATTENDED=1 is unattended", () => {
+    expect(isUnattended({ BURROW_UNATTENDED: "1" })).toBe(true);
+    expect(isUnattended({ BURROW_UNATTENDED: "true" })).toBe(false);
     expect(isUnattended({})).toBe(false);
   });
 });
@@ -214,7 +214,7 @@ describe("a launch that timed out with the pane still unusable is stuck", () => 
 describe("the launch record", () => {
   test("is written 0600 and read back; anything else reads as none", () => {
     const home = mkdtempSync(resolve(tmpdir(), "suite-launch-01a10322-s7-"));
-    const path = launchRecordPath(home, "suite-agent");
+    const path = launchRecordPath(home, "suite-agent", {});
     writeLaunchRecord(path, launch("timeout"));
     expect(statSync(path).mode & 0o777).toBe(0o600);
     expect(readLaunchRecord(path)).toEqual(launch("timeout"));

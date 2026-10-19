@@ -625,7 +625,7 @@ export interface ClaudeDeps {
   dialogs?: DialogIo;
   /**
    * Seeds Claude Code's `hasCompletedOnboarding` before an UNATTENDED launch
-   * (`SUITE_UNATTENDED=1`, see claude_onboarding.ts). Optional for the same
+   * (`BURROW_UNATTENDED=1`, see claude_onboarding.ts). Optional for the same
    * reason `dialogs` is: a caller that supplies nothing seeds nothing, so the
    * launch tests never write a ~/.claude.json.
    */
@@ -875,7 +875,7 @@ export async function runClaude(deps: ClaudeDeps, options: ClaudeOptions): Promi
       try {
         deps.writeLaunch?.(recordPath, r);
       } catch (error) {
-        deps.err(`suite: could not write ${recordPath}: ${error instanceof Error ? error.message : String(error)}`);
+        deps.err(`${CLI_NAME}: could not write ${recordPath}: ${error instanceof Error ? error.message : String(error)}`);
       }
     };
     record({ version: 1, session, outcome: "pending", started_at: startedAt });

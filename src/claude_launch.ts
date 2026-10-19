@@ -27,6 +27,7 @@
  */
 import { chmodSync, lstatSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
+import { stateEntry } from "./paths.ts";
 
 export type LaunchOutcome = "pending" | "ready" | "timeout" | "gone";
 
@@ -48,9 +49,9 @@ export interface LaunchRecord {
   auth_rejected?: boolean;
 }
 
-/** `~/.local/state/suite/sessions/<session>.launch.json`. */
-export function launchRecordPath(home: string, session: string): string {
-  return `${home}/.local/state/suite/sessions/${session}.launch.json`;
+/** `<state>/burrow/sessions/<session>.launch.json`, beside the session log (claude_dialogs.ts sessionLogPath). */
+export function launchRecordPath(home: string, session: string, env: Record<string, string | undefined> = process.env): string {
+  return `${stateEntry("sessions", { ...env, HOME: home === "" ? "/" : home })}/${session}.launch.json`;
 }
 
 export function writeLaunchRecord(path: string, record: LaunchRecord): void {

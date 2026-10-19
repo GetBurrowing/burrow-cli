@@ -2,7 +2,7 @@
  * Reading where a Claude Code pane stands — ready, at a dialog, or waiting for
  * a login — and writing that down as a machine-readable STATUS FILE.
  *
- * WHO READS IT. Suite's agent host runs native agents with no terminal
+ * WHO READS IT. Burrow's agent host runs native agents with no terminal
  * attached. It cannot look at a pane, and it must not have its own pane
  * classifier: there is ONE, and it is this CLI's (`claude_dialogs.ts` for the
  * dialogs, this module for the login screens). The host runs
@@ -26,6 +26,7 @@
  */
 import { chmodSync, mkdirSync, renameSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
+import { stateEntry } from "./paths.ts";
 import { classifyPane, type DialogContext, type DialogName } from "./claude_dialogs.ts";
 import type { LaunchRecord } from "./claude_launch.ts";
 
@@ -175,7 +176,7 @@ export function authError(pane: string): AuthError | null {
 
 /**
  * The input box's status line when Claude has no credential at all (measured
- * on 2.1.295 in Suite's agent host, `hasCompletedOnboarding` seeded, no key:
+ * on 2.1.295 in Burrow's agent host, `hasCompletedOnboarding` seeded, no key:
  * the onboarding's login-method step is skipped, so this is where it shows).
  */
 export const NOT_LOGGED_IN_MARK = "Not logged in · Run /login";
@@ -183,7 +184,7 @@ export const NOT_LOGGED_IN_MARK = "Not logged in · Run /login";
 /**
  * The startup notice 2.1.295 shows when the credential it was given is
  * REJECTED: its remote managed-settings fetch gets a 401 (measured on moon with
- * a well-formed invalid ANTHROPIC_API_KEY, in Suite's agent host). Claude then
+ * a well-formed invalid ANTHROPIC_API_KEY, in Burrow's agent host). Claude then
  * holds the development channel "waiting for your organization's policy" and
  * DROPS every inbound message, so no turn ever runs and the per-turn error
  * below never appears. This notice is the only sign. It belongs to the running
@@ -323,9 +324,9 @@ export function paneStatus(
   }
 }
 
-/** Next to the session log: `~/.local/state/suite/sessions/<session>.status.json`. */
-export function sessionStatusPath(home: string, session: string): string {
-  return `${home}/.local/state/suite/sessions/${session}.status.json`;
+/** Next to the session log: `<state>/burrow/sessions/<session>.status.json` (claude_dialogs.ts sessionLogPath). */
+export function sessionStatusPath(home: string, session: string, env: Record<string, string | undefined> = process.env): string {
+  return `${stateEntry("sessions", { ...env, HOME: home === "" ? "/" : home })}/${session}.status.json`;
 }
 
 /**

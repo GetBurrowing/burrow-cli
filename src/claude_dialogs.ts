@@ -137,8 +137,8 @@ function folderMatches(shown: string, ctx: DialogContext): boolean {
  *    it found in its environment, and the cursor starts on "No (recommended)".
  *    Up moves it to "Yes"; Enter confirms only once it is there. Answered ONLY
  *    when the key it shows is the one this agent was launched with
- *    (`DialogContext.apiKey`): on a Suite native agent that key reached the
- *    environment because a person who manages the agent saved it in Suite for
+ *    (`DialogContext.apiKey`): on a Burrow native agent that key reached the
+ *    environment because a person who manages the agent saved it in Burrow for
  *    exactly this, so "Yes" carries out their choice rather than making one.
  *    It is an API key, not a Claude account login: nothing here ever touches
  *    the subscription login screens, which stay the person's, in Anthropic's
@@ -307,7 +307,7 @@ export function classifyPane(pane: string, ctx: DialogContext = {}): DialogStep 
  * The text-style picker Claude Code shows on the very FIRST launch under a
  * home it has not seen, before the login screens. It has no
  * "Enter to confirm" footer, so the dialog table above cannot see it, and an
- * agent nobody can type into (a native agent run by Suite's agent host) would
+ * agent nobody can type into (a native agent run by Burrow's agent host) would
  * sit on it forever.
  *
  * Choosing a colour scheme grants nothing and consents to nothing, so it is
@@ -362,7 +362,7 @@ function classifyThemePicker(lines: string[]): DialogStep | null {
 /**
  * The last step of Claude Code 2.1.295's first-run onboarding, pushed with no
  * condition after theme / api-key / oauth. An unattended launch never sees it,
- * because `SUITE_UNATTENDED=1` seeds `hasCompletedOnboarding` first
+ * because `BURROW_UNATTENDED=1` seeds `hasCompletedOnboarding` first
  * (claude_onboarding.ts). This is the FALLBACK for a Claude Code that shows it
  * anyway (a seed that did not take, or a future CLI).
  *
