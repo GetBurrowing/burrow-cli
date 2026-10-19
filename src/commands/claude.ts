@@ -34,7 +34,7 @@ import { ensureConnection, ensureToken, loadSavedSecrets } from "../connection.t
 import { ensureClaudeWiring, localEntries, needsRegistration, planMcp } from "../claude_wiring.ts";
 import { type RestoreDeps, liveRestoreDeps, recordLaunch } from "./restore.ts";
 import type { RosterEntry } from "../roster.ts";
-import { type SupervisorIo, ensureSupervision, liveSupervisorIo } from "../supervisor.ts";
+import { type SupervisorIo, ensureSupervision, installedBinary, liveSupervisorIo } from "../supervisor.ts";
 import { CHANNEL_SERVER, TOOLS_SERVER, confirm, defaultCheckout, type InstallPlan, type Runner } from "./init.ts";
 import { CLAUDE_CODE_URL } from "./doctor.ts";
 import { colorEnabled } from "../ui.ts";
@@ -420,6 +420,17 @@ export async function readState(path: string): Promise<ClaudeState> {
   return parseState(await file.text());
 }
 
+/** The one line `runClaude` prints when the notice-seen flag cannot be written. */
+export function noticeWriteFailedLine(path: string, error: unknown): string {
+  const code =
+    typeof error === "object" && error !== null && typeof (error as { code?: unknown }).code === "string"
+      ? (error as { code: string }).code
+      : error instanceof Error
+        ? error.message
+        : String(error);
+  return `burrow: could not record that the notice was shown (${code} on ${path}); it will show again next launch`;
+}
+
 export async function writeState(path: string, state: ClaudeState): Promise<void> {
   await mkdir(dirname(path), { recursive: true, mode: 0o700 });
   await Bun.write(path, serializeState(state));
@@ -645,7 +656,16 @@ export async function runClaude(deps: ClaudeDeps, options: ClaudeOptions): Promi
   const state = await readState(deps.statePath);
   if (!state.noticeSeen) {
     for (const line of noticeLines(deps.color)) deps.out(line);
-    await writeState(deps.statePath, { noticeSeen: true });
+    // A refused write must not cost the user the launch: the flag only spares
+    // them a repeat of the notice. A read-only config dir (a refused 0.9
+    // migration leaves exactly that) crashed here with an uncaught EACCES and
+    // Claude never ran. Report it once per run and carry on; nothing else in
+    // the launch path swallows errors.
+    try {
+      await writeState(deps.statePath, { noticeSeen: true });
+    } catch (e) {
+      deps.err(noticeWriteFailedLine(deps.statePath, e));
+    }
   }
 
   // The agent must exist before EITHER path execs it. Placed here, above the
@@ -798,8 +818,7 @@ export async function runClaude(deps: ClaudeDeps, options: ClaudeOptions): Promi
         // and treats anything else as unsupported, so narrowing here is safe.
         platform: deps.platform as NodeJS.Platform,
         home,
-        // Still `suite`, not `burrow`: the path is baked into installed units, and        // changing it rewrites every live host\'s watchdog unit (see supervisor.ts).
-        binary: `${home}/.local/bin/suite`,
+        binary: installedBinary(home),
         inheritedPath: deps.env.PATH,
         inheritedLocale: deps.env.LANG ?? deps.env.LC_ALL,
         intervalSeconds: 60,

@@ -34,6 +34,8 @@
  *    in {@link CONFIG_ALLOWLIST}; everything else is left and listed.
  */
 import {
+  accessSync,
+  constants as fsConstants,
   cpSync,
   existsSync,
   lstatSync,
@@ -58,6 +60,8 @@ import {
   RESTORE_LAUNCHD_LABEL,
   RESTORE_SERVICE_NAME,
   SERVICE_NAME,
+  burrowBinaryFor,
+  installedBinary,
   isSupervised,
   launchdPlist,
   restoreLaunchdPlist,
@@ -172,7 +176,7 @@ export interface MigrationEntry {
  * or deferred: an MCP entry in ~/.claude.json, an agent's openclaw/dsh/hermes
  * config key, a systemd unit, a LaunchAgent, or the tmux fallback watcher.
  */
-export type RewriteStep = "claude-mcp" | "openclaw" | "dsh" | "hermes" | "unit" | "plist" | "tmux";
+export type RewriteStep = "claude-mcp" | "openclaw" | "dsh" | "hermes" | "unit" | "plist" | "tmux" | "unit-binary";
 
 export interface RewriteEntry {
   step: RewriteStep;
@@ -183,8 +187,12 @@ export interface RewriteEntry {
   reason?: string;
 }
 
-/** The rewrite steps run as three groups; a deferred entry re-runs its whole group. */
-type RewriteGroup = "claude" | "configs" | "units";
+/**
+ * The rewrite steps run in groups; a deferred entry re-runs its whole group.
+ * `unit-binary` also runs once on a host whose state predates
+ * {@link MigrationState.unitBinaryAt}.
+ */
+type RewriteGroup = "claude" | "configs" | "units" | "unit-binary";
 const STEP_GROUP: Readonly<Record<RewriteStep, RewriteGroup>> = {
   "claude-mcp": "claude",
   openclaw: "configs",
@@ -193,6 +201,7 @@ const STEP_GROUP: Readonly<Record<RewriteStep, RewriteGroup>> = {
   unit: "units",
   plist: "units",
   tmux: "units",
+  "unit-binary": "unit-binary",
 };
 
 export interface MigrationState {
@@ -212,6 +221,12 @@ export interface MigrationState {
   rewriteSkipped: RewriteEntry[];
   /** Could not be done safely yet (a guard held, a tool failed). Retried on every run. */
   deferred: RewriteEntry[];
+  /**
+   * Set once the burrow units' ExecStart / ProgramArguments[0] has been moved
+   * off the `suite` alias. Absent from a state file 0.9.0 wrote, so such a
+   * host re-enters the migration exactly once to run that step.
+   */
+  unitBinaryAt: string | null;
 }
 
 function emptyState(): MigrationState {
@@ -227,6 +242,7 @@ function emptyState(): MigrationState {
     rewritten: [],
     rewriteSkipped: [],
     deferred: [],
+    unitBinaryAt: null,
   };
 }
 
@@ -269,6 +285,7 @@ export function parseMigrationState(text: string): MigrationState | null {
     rewritten: rewriteList(o.rewritten),
     rewriteSkipped: rewriteList(o.rewriteSkipped),
     deferred: rewriteList(o.deferred),
+    unitBinaryAt: typeof o.unitBinaryAt === "string" ? o.unitBinaryAt : null,
   };
 }
 
@@ -276,9 +293,16 @@ export function serializeMigrationState(s: MigrationState): string {
   return `${JSON.stringify(s, null, 2)}\n`;
 }
 
-/** Done means: the full scan and every rewrite step ran, and nothing is waiting to be retried. */
+/** Done means: the full scan and every rewrite step ran (the unit rebind included), and nothing is waiting to be retried. */
 export function migrationDone(s: MigrationState | null): boolean {
-  return s !== null && s.completedAt !== null && s.refused.length === 0 && s.rewritesAt !== null && s.deferred.length === 0;
+  return (
+    s !== null &&
+    s.completedAt !== null &&
+    s.refused.length === 0 &&
+    s.rewritesAt !== null &&
+    s.deferred.length === 0 &&
+    s.unitBinaryAt !== null
+  );
 }
 
 /* ------------------------------------------------------------------------- */
@@ -459,6 +483,8 @@ export interface MigrateFs {
   writeAtomic(path: string, text: string, mode: number): void;
   /** Permission bits, or null. */
   mode(path: string): number | null;
+  /** True when `path` is a file this user may execute. */
+  isExecutable(path: string): boolean;
 }
 
 function code(err: unknown): string {
@@ -520,6 +546,15 @@ export function liveMigrateFs(): MigrateFs {
         return statSync(path).mode & 0o777;
       } catch {
         return null;
+      }
+    },
+    isExecutable(path) {
+      try {
+        if (!statSync(path).isFile()) return false;
+        accessSync(path, fsConstants.X_OK);
+        return true;
+      } catch {
+        return false;
       }
     },
   };
@@ -1016,10 +1051,13 @@ function migrate(d: MigrateDeps): MigrateResult {
     // has run, only the groups holding a deferred entry run again.
     const firstRewrites = st.rewritesAt === null;
     const groups = new Set<RewriteGroup>(firstRewrites ? ["claude", "configs", "units"] : st.deferred.map((e) => STEP_GROUP[e.step]));
+    // A 0.9.0 host's done state has no unitBinaryAt: this is its one re-entry.
+    if (st.unitBinaryAt === null) groups.add("unit-binary");
     st.deferred = st.deferred.filter((e) => !groups.has(STEP_GROUP[e.step]));
     const rewritesBefore = st.rewritten.length;
     runRewrites(d, st, groups);
     if (st.rewritesAt === null) st.rewritesAt = d.now().toISOString();
+    if (st.unitBinaryAt === null) st.unitBinaryAt = d.now().toISOString();
     run.writeBreadcrumbs();
     d.fs.writeAtomic(migrationStatePath(d.env), serializeMigrationState(st), 0o644);
     report(d, st, fullScan);
@@ -1149,6 +1187,8 @@ export function runRewrites(d: MigrateDeps, st: MigrationState, groups: Readonly
   fenced("claude", "claude-mcp", () => rewriteClaudeEntries(rw));
   fenced("configs", "openclaw", () => rewriteAgentConfigs(rw));
   fenced("units", "unit", () => swapSupervisorUnits(rw));
+  // After the swap, so a unit it just wrote is already looked at here.
+  fenced("unit-binary", "unit-binary", () => rebindUnitBinaries(rw));
 }
 
 function reportRewrites(d: MigrateDeps, st: MigrationState, rewrittenBefore: number): void {
@@ -1532,8 +1572,19 @@ function rewriteHermes(rw: Rw, hermesHome: string, dev: boolean): void {
 
 type Which = "watch" | "agents";
 
-/** The binary, interval, PATH and LANG a 0.8 unit or plist was written with, so the new one keeps them. */
-export function unitInputFrom(text: string, platform: NodeJS.Platform, home: string, env: Env): SupervisorInput {
+/**
+ * The binary, interval, PATH and LANG a 0.8 unit or plist was written with, so
+ * the new one keeps them. A carried `suite` binary becomes its `burrow` sibling
+ * when that sibling is executable; otherwise the carried path is kept, since a
+ * unit naming a missing file would not start at all.
+ */
+export function unitInputFrom(
+  text: string,
+  platform: NodeJS.Platform,
+  home: string,
+  env: Env,
+  isExecutable: (path: string) => boolean,
+): SupervisorInput {
   let binary: string | undefined;
   let interval: number | undefined;
   let path: string | undefined;
@@ -1554,10 +1605,12 @@ export function unitInputFrom(text: string, platform: NodeJS.Platform, home: str
     path = /^Environment=PATH=(.*)$/m.exec(text)?.[1];
     lang = /^Environment=LANG=(.*)$/m.exec(text)?.[1];
   }
+  const carried = binary !== undefined && binary.startsWith("/") ? binary : installedBinary(home);
+  const sibling = burrowBinaryFor(carried);
   return {
     platform,
     home,
-    binary: binary !== undefined && binary.startsWith("/") ? binary : `${home}/.local/bin/suite`,
+    binary: sibling !== carried && isExecutable(sibling) ? sibling : carried,
     intervalSeconds: interval !== undefined && Number.isFinite(interval) && interval >= 10 ? interval : 60,
     inheritedPath: path,
     inheritedLocale: lang,
@@ -1651,7 +1704,7 @@ function swapSystemdUnit(rw: Rw, which: Which, legacy: string): void {
   const oldUnit = basename(legacy);
   const newUnit = `${which === "watch" ? SERVICE_NAME : RESTORE_SERVICE_NAME}.service`;
   const newPath = join(dirname(legacy), newUnit);
-  const input = unitInputFrom(text, "linux", homeOf(d.env), d.env);
+  const input = unitInputFrom(text, "linux", homeOf(d.env), d.env, (p) => d.fs.isExecutable(p));
   const newText = which === "watch" ? systemdUnit(input) : restoreUnit(input);
   const sc = (...args: string[]) => d.run(["systemctl", "--user", ...args], { env: d.env });
   const retired = `${legacy}${RETIRED_SUFFIX}${rw.ts}`;
@@ -1720,7 +1773,7 @@ function swapPlist(rw: Rw, which: Which, legacy: string): void {
   const oldLabel = which === "watch" ? LEGACY_LAUNCHD_LABEL : LEGACY_RESTORE_LAUNCHD_LABEL;
   const newLabel = which === "watch" ? LAUNCHD_LABEL : RESTORE_LAUNCHD_LABEL;
   const newPath = join(dirname(legacy), `${newLabel}.plist`);
-  const input = unitInputFrom(text, "darwin", homeOf(d.env), d.env);
+  const input = unitInputFrom(text, "darwin", homeOf(d.env), d.env, (p) => d.fs.isExecutable(p));
   const newText = which === "watch" ? launchdPlist(input) : restoreLaunchdPlist(input);
   const domain = `gui/${d.uid}`;
   const lc = (...args: string[]) => d.run(["launchctl", ...args], { env: d.env });
@@ -1781,7 +1834,7 @@ function swapTmuxFallback(rw: Rw, legacyWatch: string): void {
   if (isSupervised(d.env)) {
     return pushUnique(st.deferred, { ...entry, reason: "this process is the watch daemon; the next burrow run outside it swaps it" });
   }
-  const input = unitInputFrom(d.fs.readText(source) ?? "", d.platform, homeOf(d.env), d.env);
+  const input = unitInputFrom(d.fs.readText(source) ?? "", d.platform, homeOf(d.env), d.env, (p) => d.fs.isExecutable(p));
   const [, create] = tmuxSupervisorArgv(input.binary, input.intervalSeconds) as [string[], string[]];
   const managed =
     d.platform === "linux"
@@ -1807,4 +1860,65 @@ function swapTmuxFallback(rw: Rw, legacyWatch: string): void {
     });
   }
   st.rewritten.push({ ...entry, reason: "killed, then created" });
+}
+
+/* ---- 4. the burrow units' binary ------------------------------------------ */
+
+/**
+ * Where the binary a unit or plist runs sits in its text: ExecStart's first
+ * token, or ProgramArguments[0]. Null when the file has neither.
+ */
+export function unitBinarySpan(text: string, platform: NodeJS.Platform): { start: number; value: string } | null {
+  const m =
+    platform === "darwin"
+      ? /<key>ProgramArguments<\/key>\s*<array>\s*<string>([^<]*)<\/string>/.exec(text)
+      : /^ExecStart=([^\s]+)/m.exec(text);
+  if (m === null || m[1] === undefined) return null;
+  const close = platform === "darwin" ? "</string>".length : 0;
+  return { start: m.index + m[0].length - close - m[1].length, value: m[1] };
+}
+
+/**
+ * Move the burrow units off the `suite` alias. 0.9.0 wrote burrow-watch and
+ * burrow-agents with the binary its 0.8 units carried (the `suite` alias in ~/.local/bin),
+ * so on such a host they run through the alias. Only that one token changes,
+ * every other byte is kept (a hand edit survives), and a `.bak-burrow-<ts>`
+ * copy is left beside it. Nothing is stopped, started, enabled or booted out:
+ * the running process already exec'd, and the new path takes effect at the
+ * unit's next natural restart. A unit whose `burrow` sibling is missing keeps
+ * its binary and is recorded as skipped, not deferred, so it is not retried on
+ * every run.
+ */
+function rebindUnitBinaries(rw: Rw): void {
+  const { d, st } = rw;
+  if (d.platform !== "linux" && d.platform !== "darwin") return;
+  const home = homeOf(d.env);
+  const files =
+    d.platform === "linux"
+      ? [SERVICE_NAME, RESTORE_SERVICE_NAME].map((n) => `${home}/.config/systemd/user/${n}.service`)
+      : [LAUNCHD_LABEL, RESTORE_LAUNCHD_LABEL].map((l) => `${home}/Library/LaunchAgents/${l}.plist`);
+  let edited = 0;
+  for (const file of files) {
+    const text = d.fs.readText(file);
+    if (text === null) continue;
+    const span = unitBinarySpan(text, d.platform);
+    if (span === null) continue;
+    const to = burrowBinaryFor(span.value);
+    // Already burrow, or a binary this CLI did not name: left exactly as it is.
+    if (to === span.value) continue;
+    const entry = { step: "unit-binary" as const, path: file, from: span.value, to };
+    if (!d.fs.isExecutable(to)) {
+      pushUnique(st.rewriteSkipped, { ...entry, reason: `${to} is missing or not executable; the unit keeps ${span.value}` });
+      continue;
+    }
+    const next = `${text.slice(0, span.start)}${to}${text.slice(span.start + span.value.length)}`;
+    const failed = editByHand(rw, file, next, (t) => t === next);
+    if (failed !== null) {
+      pushUnique(st.deferred, { ...entry, reason: failed });
+      continue;
+    }
+    edited++;
+    st.rewritten.push({ ...entry, reason: `edited by hand; backup ${file}${BACKUP_SUFFIX}${rw.ts}; takes effect at the next restart` });
+  }
+  if (edited > 0 && d.platform === "linux") d.run(["systemctl", "--user", "daemon-reload"], { env: d.env });
 }

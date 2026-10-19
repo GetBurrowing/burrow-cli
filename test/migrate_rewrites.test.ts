@@ -10,9 +10,9 @@
  */
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   BACKUP_SUFFIX,
@@ -20,12 +20,14 @@ import {
   RETIRED_SUFFIX,
   liveMigrateFs,
   migrateLegacyState,
+  migrationDone,
   migrationStatePath,
   parseCgroupFile,
   parseMigrationState,
   unitInputFrom,
   type CommandResult,
   type MigrateDeps,
+  type MigrateFs,
   type MigrationState,
 } from "../src/migrate.ts";
 import {
@@ -623,7 +625,7 @@ describe("the unit text", () => {
   });
 
   test("the new unit keeps the old one's binary, interval, PATH and LANG", () => {
-    const i = unitInputFrom(OLD_WATCH, "linux", "/home/q", { HOME: "/home/q" });
+    const i = unitInputFrom(OLD_WATCH, "linux", "/home/q", { HOME: "/home/q" }, () => false);
     expect(i.binary).toBe("/home/q/.local/bin/suite");
     expect(i.intervalSeconds).toBe(90);
     const unit = systemdUnit(i);
@@ -919,5 +921,256 @@ describe("the probe helpers", () => {
   test("cgroup v2 and v1 lines parse to their paths", () => {
     expect(parseCgroupFile("0::/user.slice/app.slice/suite-watch.service\n")).toEqual(["/user.slice/app.slice/suite-watch.service"]);
     expect(parseCgroupFile("12:pids:/user.slice\n1:name=systemd:/user.slice/session-3.scope\n")).toEqual(["/user.slice", "/user.slice/session-3.scope"]);
+  });
+});
+
+/* ------------------------------------------------------------------------- */
+/* 4. the burrow units invoke burrow, not the suite alias                     */
+/* ------------------------------------------------------------------------- */
+
+/** Put an executable `burrow` beside where the 0.8 units say `suite` lives. */
+function installBurrowBinary(h: Host): string {
+  const bin = join(h.home, ".local", "bin");
+  mkdirSync(bin, { recursive: true });
+  const burrow = join(bin, "burrow");
+  writeFileSync(burrow, "#!/bin/sh\n");
+  chmodSync(burrow, 0o755);
+  return burrow;
+}
+
+/** An fs that records every call. */
+function countingFs(base: MigrateFs = liveMigrateFs()): MigrateFs & { calls: string[] } {
+  const calls: string[] = [];
+  const out = { calls } as MigrateFs & { calls: string[] };
+  for (const k of Object.keys(base) as (keyof MigrateFs)[]) {
+    (out as any)[k] = (...a: unknown[]) => {
+      calls.push(`${k} ${String(a[0])}`);
+      return (base[k] as (...x: unknown[]) => unknown)(...a);
+    };
+  }
+  return out;
+}
+
+const VERBS = /\b(stop|start|restart|enable|disable|bootout|bootstrap|kill|reload-or-restart|try-restart)\b/;
+
+describe("0.8 -> 0.9 swap: the new unit names burrow when it is there", () => {
+  function seedOld(h: Host, w: World): void {
+    seedUnits(h, w);
+    for (const n of ["suite-watch.service", "suite-agents.service"]) {
+      const f = join(h.units, n);
+      writeFileSync(f, readFileSync(f, "utf8").replaceAll("/home/q", h.home));
+    }
+  }
+
+  test("bin/burrow present: burrow-watch and burrow-agents say bin/burrow, written once by the swap", () => {
+    const h = host();
+    const w = world();
+    seedOld(h, w);
+    installBurrowBinary(h);
+    migrateLegacyState(deps(h, w));
+    const watch = readFileSync(join(h.units, "burrow-watch.service"), "utf8");
+    expect(watch).toContain(`ExecStart=${h.home}/.local/bin/burrow watch --interval 90`);
+    expect(readFileSync(join(h.units, "burrow-agents.service"), "utf8")).toContain(`ExecStart=${h.home}/.local/bin/burrow restore`);
+    // The swap itself wrote the right binary: the rebind had nothing to do.
+    const st = readState(h);
+    expect(st.rewritten.filter((e) => e.step === "unit-binary")).toEqual([]);
+    expect(readdirSync(h.units).filter((n) => n.includes(BACKUP_SUFFIX))).toEqual([]);
+    expect(st.unitBinaryAt).not.toBeNull();
+  });
+
+  test("positive control: bin/burrow ABSENT keeps bin/suite, and the rebind skips it rather than deferring", () => {
+    const h = host();
+    const w = world();
+    seedOld(h, w);
+    migrateLegacyState(deps(h, w));
+    expect(readFileSync(join(h.units, "burrow-watch.service"), "utf8")).toContain(`ExecStart=${h.home}/.local/bin/suite watch --interval 90`);
+    const st = readState(h);
+    expect(st.rewriteSkipped.filter((e) => e.step === "unit-binary").map((e) => basename(e.path)).sort()).toEqual([
+      "burrow-agents.service",
+      "burrow-watch.service",
+    ]);
+    expect(st.deferred).toEqual([]);
+    expect(migrationDone(st)).toBe(true);
+  });
+});
+
+/** A migration.json exactly as 0.9.0 wrote it: done, and no unitBinaryAt key. */
+function seedDone090(h: Host): void {
+  const path = migrationStatePath(h.env);
+  mkdirSync(dirname(path), { recursive: true });
+  const st = {
+    version: 1,
+    completedAt: "2026-10-18T02:00:00.000Z",
+    moved: [],
+    copiedLive: [],
+    foreignLeft: [],
+    refused: [],
+    skipped: [],
+    rewritesAt: "2026-10-18T02:00:00.000Z",
+    rewritten: [],
+    rewriteSkipped: [],
+    deferred: [],
+  };
+  writeFileSync(path, `${JSON.stringify(st, null, 2)}\n`);
+}
+
+describe("a host that already ran 0.9.0: the burrow units are rebound once, and nothing is restarted", () => {
+  const HAND_EDIT = "# a hand edit the rebind must keep\n";
+
+  function seed090Units(h: Host, binary: string): { watch: string; agents: string } {
+    mkdirSync(h.units, { recursive: true });
+    const input = { platform: "linux" as const, home: h.home, binary, intervalSeconds: 90, env: h.env };
+    const watch = join(h.units, "burrow-watch.service");
+    const agents = join(h.units, "burrow-agents.service");
+    writeFileSync(watch, `${HAND_EDIT}${systemdUnit(input)}`);
+    writeFileSync(agents, restoreUnit(input));
+    chmodSync(watch, 0o640);
+    return { watch, agents };
+  }
+
+  test("parsing a 0.9.0 state file: unitBinaryAt defaults to null, so it is not done", () => {
+    const h = host();
+    seedDone090(h);
+    const st = readState(h);
+    expect(st.unitBinaryAt).toBeNull();
+    expect(migrationDone(st)).toBe(false);
+    // Positive control: the same state stamped is done.
+    expect(migrationDone({ ...st, unitBinaryAt: "x" })).toBe(true);
+  });
+
+  test("systemd: run 1 edits only the ExecStart token, keeps a backup and the mode, one daemon-reload; run 2 is one read", () => {
+    const h = host();
+    const w = world();
+    seedDone090(h);
+    const old = `${h.home}/.local/bin/suite`;
+    const neu = `${h.home}/.local/bin/burrow`;
+    const { watch, agents } = seed090Units(h, old);
+    const before = { watch: readFileSync(watch, "utf8"), agents: readFileSync(agents, "utf8") };
+    installBurrowBinary(h);
+
+    const r1 = migrateLegacyState(deps(h, w));
+    expect(r1.outcome).toBe("ran");
+    // Every other byte unchanged: the whole file equals the old one with that one token swapped.
+    expect(readFileSync(watch, "utf8")).toBe(before.watch.replace(`ExecStart=${old} `, `ExecStart=${neu} `));
+    expect(readFileSync(agents, "utf8")).toBe(before.agents.replace(`ExecStart=${old} `, `ExecStart=${neu} `));
+    expect(readFileSync(watch, "utf8")).toStartWith(HAND_EDIT);
+    expect(readFileSync(watch, "utf8")).not.toContain("/bin/suite");
+    expect(statSync(watch).mode & 0o777).toBe(0o640);
+    expect(readFileSync(`${watch}${BACKUP_SUFFIX}20261018T030000Z`, "utf8")).toBe(before.watch);
+    expect(readFileSync(`${agents}${BACKUP_SUFFIX}20261018T030000Z`, "utf8")).toBe(before.agents);
+    // Positive control: the log is not empty. Exactly one daemon-reload, nothing stopped or started.
+    expect(w.calls.map((c) => c.join(" "))).toEqual(["systemctl --user daemon-reload"]);
+    expect(w.calls.some((c) => VERBS.test(c.join(" ")))).toBe(false);
+    const st = readState(h);
+    expect(st.unitBinaryAt).toBe("2026-10-18T03:00:00.000Z");
+    expect(st.rewritten.map((e) => [e.step, basename(e.path), e.from, e.to])).toEqual([
+      ["unit-binary", "burrow-watch.service", old, neu],
+      ["unit-binary", "burrow-agents.service", old, neu],
+    ]);
+    expect(migrationDone(st)).toBe(true);
+
+    const w2 = world();
+    const fs2 = countingFs();
+    const r2 = migrateLegacyState(deps(h, w2, { fs: fs2 }));
+    expect(r2.outcome).toBe("done-already");
+    expect(fs2.calls).toEqual([`readText ${migrationStatePath(h.env)}`]);
+    expect(w2.calls).toEqual([]);
+  });
+
+  test("launchd: both plists rebound at ProgramArguments[0], launchctl never called on either run", () => {
+    const h = host();
+    const w = world();
+    seedDone090(h);
+    const old = `${h.home}/.local/bin/suite`;
+    const neu = `${h.home}/.local/bin/burrow`;
+    const dir = join(h.home, "Library", "LaunchAgents");
+    mkdirSync(dir, { recursive: true });
+    const input = { platform: "darwin" as const, home: h.home, binary: old, intervalSeconds: 60, env: h.env };
+    const watch = join(dir, `${LAUNCHD_LABEL}.plist`);
+    const agents = join(dir, `${RESTORE_LAUNCHD_LABEL}.plist`);
+    writeFileSync(watch, launchdPlist(input));
+    writeFileSync(agents, restoreLaunchdPlist(input));
+    const before = { watch: readFileSync(watch, "utf8"), agents: readFileSync(agents, "utf8") };
+    installBurrowBinary(h);
+
+    migrateLegacyState(deps(h, w, { platform: "darwin" }));
+    expect(readFileSync(watch, "utf8")).toBe(before.watch.replace(`<string>${old}</string>`, `<string>${neu}</string>`));
+    expect(readFileSync(agents, "utf8")).toBe(before.agents.replace(`<string>${old}</string>`, `<string>${neu}</string>`));
+    expect(readFileSync(watch, "utf8")).not.toContain("/bin/suite");
+    expect(existsSync(`${watch}${BACKUP_SUFFIX}20261018T030000Z`)).toBe(true);
+    expect(callsOf(w, "launchctl")).toEqual([]);
+    expect(w.calls).toEqual([]);
+    expect(readState(h).rewritten.filter((e) => e.step === "unit-binary").length).toBe(2);
+
+    const w2 = world();
+    const fs2 = countingFs();
+    expect(migrateLegacyState(deps(h, w2, { platform: "darwin", fs: fs2 })).outcome).toBe("done-already");
+    expect(fs2.calls).toEqual([`readText ${migrationStatePath(h.env)}`]);
+    expect(w2.calls).toEqual([]);
+  });
+
+  test("units that already say bin/burrow: zero writes to them, no command run, unitBinaryAt still stamped", () => {
+    const h = host();
+    const w = world();
+    seedDone090(h);
+    const { watch, agents } = seed090Units(h, `${h.home}/.local/bin/burrow`);
+    const before = { watch: readFileSync(watch, "utf8"), agents: readFileSync(agents, "utf8") };
+    installBurrowBinary(h);
+    const fs1 = countingFs();
+    expect(migrateLegacyState(deps(h, w, { fs: fs1 })).outcome).toBe("ran");
+    // Positive control: run 1 did read the units.
+    expect(fs1.calls).toContain(`readText ${watch}`);
+    expect(fs1.calls.filter((c) => /^(writeAtomic|copyTree|rename|remove) /.test(c) && c.includes(h.units))).toEqual([]);
+    expect(readFileSync(watch, "utf8")).toBe(before.watch);
+    expect(readFileSync(agents, "utf8")).toBe(before.agents);
+    expect(readdirSync(h.units).sort()).toEqual(["burrow-agents.service", "burrow-watch.service"]);
+    expect(w.calls).toEqual([]);
+    const st = readState(h);
+    expect(st.unitBinaryAt).not.toBeNull();
+    expect(st.rewritten).toEqual([]);
+    expect(st.rewriteSkipped).toEqual([]);
+  });
+
+  test("bin/burrow missing: the units are left, recorded as skipped (not deferred), and the gate closes", () => {
+    const h = host();
+    const w = world();
+    seedDone090(h);
+    const { watch } = seed090Units(h, `${h.home}/.local/bin/suite`);
+    const before = readFileSync(watch, "utf8");
+    migrateLegacyState(deps(h, w));
+    expect(readFileSync(watch, "utf8")).toBe(before);
+    expect(w.calls).toEqual([]);
+    const st = readState(h);
+    expect(st.rewriteSkipped.filter((e) => e.step === "unit-binary").length).toBe(2);
+    expect(st.deferred).toEqual([]);
+    expect(migrationDone(st)).toBe(true);
+  });
+});
+
+describe("the source names the suite binary only in the legacy mapping", () => {
+  /**
+   * RAW on purpose: each allowed line, by file and text. A new `bin/suite`
+   * anywhere in src fails this, and so does an entry that no longer matches.
+   */
+  const ALLOWED: ReadonlyArray<{ file: string; text: string; reason: string }> = [
+    {
+      file: "src/supervisor.ts",
+      text: " * alias, e.g. ~/.local/bin/suite) maps to its sibling `burrow`. Anything else",
+      reason: "burrowBinaryFor's comment: the legacy mapping",
+    },
+  ];
+
+  test("git grep -n 'bin/suite' -- src hits only burrowBinaryFor's comment", () => {
+    const r = spawnSync("git", ["grep", "-n", "bin/suite", "--", "src"], { cwd: ROOT, encoding: "utf8" });
+    // Exit 1 is "no match"; anything else is a broken grep, not a clean tree.
+    expect([0, 1]).toContain(r.status ?? -1);
+    const hits = r.stdout
+      .split("\n")
+      .filter((l) => l !== "")
+      .map((l) => {
+        const m = /^([^:]+):\d+:(.*)$/.exec(l) as RegExpExecArray;
+        return { file: m[1], text: m[2] };
+      });
+    expect(hits).toEqual(ALLOWED.map(({ file, text }) => ({ file, text })));
   });
 });

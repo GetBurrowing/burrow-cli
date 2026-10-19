@@ -281,7 +281,12 @@ describe("self-installation", () => {
 
 describe("locating the binary to bake into the unit", () => {
   test("prefers an absolute argv path over the assumed install location", () => {
-    expect(resolveSelfBinary({ HOME: "/h" }, ["bun", "/opt/x/suite"])).toBe("/opt/x/suite");
+    expect(resolveSelfBinary({ HOME: "/h" }, ["bun", "/opt/x/burrow"])).toBe("/opt/x/burrow");
+  });
+
+  /** The `suite` alias is never baked into a unit: its burrow sibling is. */
+  test("an argv naming the suite alias bakes its burrow sibling", () => {
+    expect(resolveSelfBinary({ HOME: "/h" }, ["bun", "/opt/x/suite"])).toBe("/opt/x/burrow");
   });
 
   /**
@@ -291,7 +296,7 @@ describe("locating the binary to bake into the unit", () => {
    */
   test("falls back to the install path, absolute, for a source-run invocation", () => {
     const b = resolveSelfBinary({ HOME: "/h" }, ["bun", "src/cli.ts"]);
-    expect(b).toBe("/h/.local/bin/suite");
+    expect(b).toBe("/h/.local/bin/burrow");
     expect(b.startsWith("/")).toBe(true);
   });
 });

@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { createStore } from "../src/secrets.ts";
@@ -38,7 +38,7 @@ import { CONTINUE_WRAPPER_NAME, isContinueWrapper, looksLikeAgent, parseProcesse
 import { CLAUDE_CODE_URL } from "../src/commands/doctor.ts";
 import type { Prompter } from "../src/secrets.ts";
 import { sessionNameFromConfig } from "../src/tmux.ts";
-import { ensureSupervision } from "../src/supervisor.ts";
+import { ensureSupervision, installedBinary } from "../src/supervisor.ts";
 
 /* ------------------------------------------------------------------------- */
 /* Scratch HOME. Nothing in this file touches the real config dir.            */
@@ -51,7 +51,14 @@ function tempHome(): string {
   return dir;
 }
 afterAll(() => {
-  for (const dir of scratch) rmSync(dir, { recursive: true, force: true });
+  for (const dir of scratch) {
+    // A test below makes a dir read-only; give the write bit back so it can go.
+    try {
+      chmodSync(dir, 0o700);
+      chmodSync(resolve(dir, "ro"), 0o700);
+    } catch {}
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 /* ------------------------------------------------------------------------- */
@@ -716,6 +723,76 @@ describe("runClaude", () => {
   });
 });
 
+/* ------------------------------------------------------------------------- */
+/* A refused notice-seen write does not cost the launch                       */
+/* ------------------------------------------------------------------------- */
+
+describe("a notice-seen write that is refused", () => {
+  /** The err lines that are the notice-write report, and nothing else. */
+  const reportLines = (err: string[], path: string) =>
+    err.filter((l) => l.includes("could not record that the notice was shown") && l.includes(path));
+
+  // The contract test, because it holds for root too: CI runs bun test as root
+  // (ci.yml), where chmod cannot make a file unwritable. A regular file where
+  // the state dir should be makes mkdir/write fail ENOTDIR whoever you are.
+  test("a state path under a regular file: the launch continues, one err line names the path", async () => {
+    const home = tempHome();
+    const blocker = resolve(home, "not-a-dir");
+    writeFileSync(blocker, "x");
+    const statePath = resolve(blocker, "state.json");
+    const r = recorder({ statePath });
+    const code = await runClaude(r.deps, { userArgs: ["-p", "hi"], force: false });
+    expect(code).toBe(0);
+    expect(r.execed).toEqual([[...HEAD, "-p", "hi"]]);
+    expect(r.out.filter((l) => l.includes(NOTICE_BODY)).length).toBe(1);
+    expect(reportLines(r.err, statePath).length).toBe(1);
+    expect(r.err.length).toBe(1);
+  });
+
+  // Root ignores the mode bits, so this runs only as non-root; the ENOTDIR case
+  // above is the one that holds under CI's root container.
+  test.skipIf(process.getuid?.() === 0)(
+    "a read-only state.json lacking the flag: exit 0, exec called, one err line (non-root only)",
+    async () => {
+      const home = tempHome();
+      const dir = resolve(home, "ro");
+      const statePath = resolve(dir, "state.json");
+      await writeState(statePath, { noticeSeen: false });
+      writeFileSync(statePath, "{}\n");
+      chmodSync(statePath, 0o444);
+      chmodSync(dir, 0o555);
+      // Positive control: if the fixture does not refuse a write, this test
+      // proves nothing, so it FAILS rather than passing on a writable file.
+      let refused: string | undefined;
+      try {
+        await Bun.write(statePath, "probe");
+      } catch (e) {
+        refused = (e as { code?: string }).code;
+      }
+      expect(refused).toBe("EACCES");
+      expect(readFileSync(statePath, "utf8")).toBe("{}\n");
+
+      const r = recorder({ statePath });
+      const code = await runClaude(r.deps, { userArgs: ["-p", "hi"], force: false });
+      expect(code).toBe(0);
+      expect(r.execed).toEqual([[...HEAD, "-p", "hi"]]);
+      expect(reportLines(r.err, statePath).length).toBe(1);
+      expect(r.err.length).toBe(1);
+      expect(r.err[0]).toContain("EACCES");
+      expect(readFileSync(statePath, "utf8")).toBe("{}\n");
+    },
+  );
+
+  test("regression: a writable state path records the flag and prints no err line", async () => {
+    const statePath = resolve(tempHome(), "state.json");
+    const r = recorder({ statePath });
+    expect(await runClaude(r.deps, { userArgs: ["-p", "hi"], force: false })).toBe(0);
+    expect(JSON.parse(readFileSync(statePath, "utf8"))).toEqual({ claudeNoticeSeen: true });
+    expect(r.err).toEqual([]);
+    expect(r.execed).toEqual([[...HEAD, "-p", "hi"]]);
+  });
+});
+
 describe("supervision on session create", () => {
   /**
    * A session started on an unsupervised box is the one that dies quietly
@@ -727,9 +804,13 @@ describe("supervision on session create", () => {
    */
   test("ensureSupervision writes a unit and activates it", async () => {
     const calls: string[] = [];
+    const written = new Map<string, string>();
     const io = {
       mkdirp: (d: string) => calls.push(`mkdirp ${d}`),
-      writeFile: (p: string) => calls.push(`write ${p}`),
+      writeFile: (p: string, contents: string) => {
+        calls.push(`write ${p}`);
+        written.set(p, contents);
+      },
       run: async (argv: string[]) => {
         calls.push(argv.join(" "));
         return { exitCode: 0 };
@@ -738,9 +819,12 @@ describe("supervision on session create", () => {
     const res = await ensureSupervision(io, {
       platform: "linux",
       home: "/home/q",
-      binary: "/home/q/.local/bin/suite",
+      binary: installedBinary("/home/q"),
       intervalSeconds: 60,
     });
+    // The units name burrow, never the suite alias.
+    expect(written.get("/home/q/.config/systemd/user/burrow-watch.service")).toContain("ExecStart=/home/q/.local/bin/burrow watch");
+    expect(written.get("/home/q/.config/systemd/user/burrow-agents.service")).toContain("ExecStart=/home/q/.local/bin/burrow restore");
     expect(res.watchdog).toContain("burrow-watch");
     expect(calls.some((c) => c.includes("burrow-watch.service"))).toBe(true);
     // Restore unit written but NOT enabled — the operator opts in.

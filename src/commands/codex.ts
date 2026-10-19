@@ -44,7 +44,7 @@ import { nameDigest, type TmuxDeps } from "../tmux.ts";
 import { channelWsUrl, toolsHttpUrl } from "./init.ts";
 import { agentNameFromRuntimeId, liveDeepseekDeps, loadCredentials, runInSession, selfArgv, sessionNameForAgent, type DeepseekDeps } from "./deepseek.ts";
 import { liveRestoreDeps, loadRoster, recordLaunch, type RestoreDeps } from "./restore.ts";
-import { ensureSupervision, liveSupervisorIo, type SupervisorIo } from "../supervisor.ts";
+import { ensureSupervision, installedBinary, liveSupervisorIo, type SupervisorIo } from "../supervisor.ts";
 import { VERSION, CLI_NAME } from "../version.ts";
 import { AppServerClient, processTransport } from "../codex/app_server.ts";
 import { CodexBridge, type ApprovalPolicy } from "../codex/bridge.ts";
@@ -341,8 +341,7 @@ export async function runCodex(args: string[], deps: CodexDeps): Promise<number>
         void ensureSupervision(deps.supervisorIo, {
           platform: deps.platform as NodeJS.Platform,
           home,
-          // Still `suite`, not `burrow`: the path is baked into installed units, and          // changing it rewrites every live host\'s watchdog unit (see supervisor.ts).
-          binary: `${home}/.local/bin/suite`,
+          binary: installedBinary(home),
           inheritedPath: deps.env.PATH,
           inheritedLocale: deps.env.LANG ?? deps.env.LC_ALL,
           intervalSeconds: 60,
