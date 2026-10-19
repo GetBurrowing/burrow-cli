@@ -113,10 +113,23 @@ function installAgentStub(): void {
 }
 installAgentStub();
 
+/**
+ * A shell probe that exits 0 iff `pid` is alive. `kill -0` asks the kernel
+ * whether the pid exists and is signalable (it sends no signal), and it also
+ * succeeds for a ZOMBIE: dead, but not yet reaped by its parent. A pane killed
+ * with -9 is a zombie until the tmux server reaps it, which a loaded runner can
+ * delay past any timeout. So on Linux, state `Z` in /proc/<pid>/stat (the field
+ * after the parenthesised comm) is dead. Without /proc, `kill -0` alone.
+ */
+function aliveProbe(pid: number): string {
+  return (
+    `kill -0 ${pid} 2>/dev/null || exit 1; [ -e /proc/${pid}/stat ] || exit 0; ` +
+    `s=$(cat /proc/${pid}/stat 2>/dev/null) || exit 1; s=\${s##*) }; [ "\${s%% *}" != Z ]`
+  );
+}
+
 function running(pid: number): boolean {
-  // `kill -0` asks the kernel whether the pid exists and is signalable. It
-  // sends no signal.
-  return Bun.spawnSync(["kill", "-0", String(pid)], { stderr: "ignore" }).exitCode === 0;
+  return Bun.spawnSync(["/bin/sh", "-c", aliveProbe(pid)], { stderr: "ignore" }).exitCode === 0;
 }
 
 /** `ps` identity of a pid, or null. Used to CHECK a target before signalling it. */
@@ -175,6 +188,30 @@ afterAll(async () => {
  */
 test("the persistence tests below are not silently skipped", () => {
   expect(HAVE_TMUX || envValue(process.env, "CLI_ALLOW_NO_TMUX") === "1").toBe(true);
+});
+
+describe.if(process.platform === "linux")("the liveness probe", () => {
+  test("a deliberately unreaped child (a zombie) is dead; a live process is alive", async () => {
+    // The parent execs into `sleep`, which never waits: its backgrounded
+    // child exits and stays a zombie until the parent is killed.
+    const parent = Bun.spawn(["/bin/sh", "-c", "sleep 0.2 & echo $!; exec sleep 30"], { stdout: "pipe", stderr: "ignore" });
+    spawned.add(parent.pid);
+    const reader = parent.stdout.getReader();
+    const first = new TextDecoder().decode((await reader.read()).value);
+    const child = Number.parseInt(first.trim(), 10);
+    expect(Number.isInteger(child)).toBe(true);
+    const state = () => {
+      const r = Bun.spawnSync(["/bin/sh", "-c", `s=$(cat /proc/${child}/stat) && s=\${s##*) } && echo "\${s%% *}"`], { stdout: "pipe", stderr: "ignore" });
+      return new TextDecoder().decode(r.stdout).trim();
+    };
+    expect(await until(state, (v) => v === "Z", 5_000)).toBe("Z");
+    // The case under test: kill -0 still says yes, the probe says dead.
+    expect(Bun.spawnSync(["kill", "-0", String(child)], { stderr: "ignore" }).exitCode).toBe(0);
+    expect(running(child)).toBe(false);
+    // Direction control: the live parent is alive.
+    expect(running(parent.pid)).toBe(true);
+    parent.kill(9);
+  });
 });
 
 describe.if(HAVE_TMUX)("the agent outlives the shell that started it", () => {
@@ -257,7 +294,7 @@ describe.if(HAVE_TMUX)("the agent outlives the shell that started it", () => {
       expect(Bun.spawnSync(["kill", "-9", String(agent)]).exitCode).toBe(0);
       const died = await until(() => !running(agent), (v) => v, 10_000);
       expect(died).toBe(true);
-      expect(Bun.spawnSync(["/bin/sh", "-c", `kill -0 ${agent}`], { stderr: "ignore" }).exitCode).not.toBe(0);
+      expect(Bun.spawnSync(["/bin/sh", "-c", aliveProbe(agent)], { stderr: "ignore" }).exitCode).not.toBe(0);
 
       await tmuxDeps.run(killSessionArgv(session));
       created.delete(session);

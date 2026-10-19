@@ -10,6 +10,24 @@ that matters in the field: is this one newer than what I had?
 Minor for a new capability or a changed default; patch for a fix that changes no
 behaviour anyone was relying on.
 
+## 0.10.0
+
+The `suite` command alias is removed. `burrow` is the only command.
+
+- **install.sh renders one launcher, `burrow`.** It no longer writes
+  `<bin>/suite`, no longer announces an existing `suite` as the install it
+  replaces, and its report has no `suite (alias)` row. A `suite` an earlier
+  install left behind is not deleted: remove it once nothing invokes it.
+- **The launcher and `cli.ts` drop the alias plumbing**: `BURROW_INVOKED_AS`,
+  the stderr notice (`suite: this command is now burrow; ...`) and
+  `BURROW_NO_DEPRECATION` are gone. The launcher's bun-bootstrap messages say
+  `burrow:` instead of `suite:`.
+- **`package.json` has one bin entry, `burrow`.** `--help` no longer mentions
+  the alias.
+- Unchanged: the `SUITE_*` environment fallbacks, the one-shot state migration
+  (which still rebinds units that name `suite` to `burrow`), and the `suite`
+  MCP server and `suite-*` tmux session names.
+
 ## 0.9.0
 
 Burrow rename B2: what 0.8.0 left under the old names moves, once, on the first

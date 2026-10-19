@@ -45,8 +45,6 @@ interface Sandbox {
   libDir: string;
   /** The launcher rendered as `burrow`; most tests drive this one. */
   suite: string;
-  /** The same template rendered as `suite`, the alias. */
-  alias: string;
   bunInstall: string;
   stubBin: string;
   /** A curated dir of only the tools the launcher needs -- see tool-free-path.ts. */
@@ -68,18 +66,16 @@ function makeSandbox(): Sandbox {
   const render = (name: string): string => {
     const rendered = readFileSync(TEMPLATE, "utf8")
       .replaceAll("@BURROW_LIB_DIR@", libDir)
-      .replaceAll("@BURROW_VERSION@", FIXTURE_VERSION)
-      .replaceAll("@BURROW_INVOKED_AS@", name);
+      .replaceAll("@BURROW_VERSION@", FIXTURE_VERSION);
     const path = join(binDir, name);
     writeFileSync(path, rendered);
     chmodSync(path, 0o755);
     return path;
   };
   const suite = render("burrow");
-  const alias = render("suite");
 
   const bunInstall = join(home, "bun-home");
-  return { home, libDir, suite, alias, bunInstall, stubBin, leanBin, installedBun: join(bunInstall, "bin", "bun") };
+  return { home, libDir, suite, bunInstall, stubBin, leanBin, installedBun: join(bunInstall, "bin", "bun") };
 }
 
 /**
@@ -279,55 +275,42 @@ describe("suite launcher with bun absent", () => {
     expect(r.stderr).toBe("");
   });
 
-  test("--version: `suite` and `burrow` print byte-identical stdout; only `suite` adds the notice, on stderr", () => {
+  test("--version is answered by the launcher alone: version on stdout, nothing on stderr", () => {
     const sandbox = makeSandbox();
     const burrow = runSuite(sandbox, ["--version"]);
-    const suite = runSuite(sandbox, ["--version"], "", { launcher: sandbox.alias });
     expect(burrow.status).toBe(0);
-    expect(suite.status).toBe(0);
-    expect(suite.stdout).toBe(burrow.stdout);
     expect(burrow.stdout).toBe(`${FIXTURE_VERSION}\n`);
     expect(burrow.stderr).toBe("");
-    expect(suite.stderr).toBe("suite: this command is now burrow; suite keeps working as an alias\n");
     // -V is the same path.
-    expect(runSuite(sandbox, ["-V"], "", { launcher: sandbox.alias }).stdout).toBe(burrow.stdout);
+    expect(runSuite(sandbox, ["-V"]).stdout).toBe(burrow.stdout);
   });
 
-  test("BURROW_NO_DEPRECATION=1 silences the alias notice; any other value does not", () => {
-    const sandbox = makeSandbox();
-    const quiet = runSuite(sandbox, ["--version"], "", { launcher: sandbox.alias, env: { BURROW_NO_DEPRECATION: "1" } });
-    expect(quiet.stderr).toBe("");
-    expect(quiet.stdout).toBe(`${FIXTURE_VERSION}\n`);
-    const loud = runSuite(sandbox, ["--version"], "", { launcher: sandbox.alias, env: { BURROW_NO_DEPRECATION: "0" } });
-    expect(loud.stderr).toContain("now burrow");
+  test("the template carries no alias plumbing (0.10.0 removed the suite alias)", () => {
+    const source = readFileSync(TEMPLATE, "utf8");
+    expect(source).not.toContain("BURROW_INVOKED_AS");
+    expect(source).not.toContain("BURROW_NO_DEPRECATION");
+    expect(source).not.toContain("now burrow");
   });
 
-  test("each launcher hands the CLI its own name and BOTH generations of lib dir and version", () => {
+  test("the launcher hands the CLI BOTH generations of lib dir and version", () => {
     // An older library reached through a pinned-ref update reads only
     // SUITE_LIB_DIR / SUITE_VERSION, so the launcher keeps exporting them.
     const sandbox = makeSandbox();
     mkdirSync(join(sandbox.bunInstall, "bin"), { recursive: true });
     writeFileSync(
       sandbox.installedBun,
-      '#!/bin/sh\nprintf "as=%s blib=%s slib=%s bver=%s sver=%s argv=%s\\n" ' +
-        '"$BURROW_INVOKED_AS" "$BURROW_LIB_DIR" "$SUITE_LIB_DIR" "$BURROW_VERSION" "$SUITE_VERSION" "$*"\n',
+      '#!/bin/sh\nprintf "blib=%s slib=%s bver=%s sver=%s argv=%s\\n" ' +
+        '"$BURROW_LIB_DIR" "$SUITE_LIB_DIR" "$BURROW_VERSION" "$SUITE_VERSION" "$*"\n',
     );
     chmodSync(sandbox.installedBun, 0o755);
     const lib = sandbox.libDir;
     const cli = join(lib, "src", "cli.ts");
-    for (const [launcher, name] of [
-      [sandbox.suite, "burrow"],
-      [sandbox.alias, "suite"],
-    ] as const) {
-      const r = runSuite(sandbox, ["status", "--json"], "", { launcher });
-      expect(r.status).toBe(0);
-      expect(r.stdout).toBe(
-        `as=${name} blib=${lib} slib=${lib} bver=${FIXTURE_VERSION} sver=${FIXTURE_VERSION} argv=${cli} status --json\n`,
-      );
-      // On a dispatch path the launcher says nothing itself: src/cli.ts owns
-      // the notice there, so it is printed once, not twice.
-      expect(r.stderr).toBe("");
-    }
+    const r = runSuite(sandbox, ["status", "--json"], "");
+    expect(r.status).toBe(0);
+    expect(r.stdout).toBe(
+      `blib=${lib} slib=${lib} bver=${FIXTURE_VERSION} sver=${FIXTURE_VERSION} argv=${cli} status --json\n`,
+    );
+    expect(r.stderr).toBe("");
   });
 
   test("the launcher is ASCII only and never invokes sudo", () => {

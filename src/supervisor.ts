@@ -435,8 +435,8 @@ export function installedBinary(home: string): string {
 
 /**
  * The legacy mapping, and the only place a `suite` executable is named: a
- * path whose basename is exactly `suite` (the 0.8 binary, now the installer's
- * alias, e.g. ~/.local/bin/suite) maps to its sibling `burrow`. Anything else
+ * path whose basename is exactly `suite` (the 0.8 binary, and the alias 0.8-0.9
+ * installed, e.g. ~/.local/bin/suite) maps to its sibling `burrow`. Anything else
  * is returned unchanged.
  */
 export function burrowBinaryFor(binary: string): string {

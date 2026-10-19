@@ -91,9 +91,9 @@ curl -fsSL https://raw.githubusercontent.com/Startup-Suite/burrow-cli/main/insta
 
 The installer never uses `sudo`. It installs to `$XDG_BIN_HOME`, or
 `~/.local/bin` when that is unset, tells you if that directory is not on your
-`PATH`, and prints the exact `export PATH=` line to add. It installs two
-launchers, `burrow` and `suite` (the pre-0.8.0 name, kept as an alias; see
-[Compatibility](#compatibility)). If either is already installed it names the
+`PATH`, and prints the exact `export PATH=` line to add. It installs one
+launcher, `burrow` (the `suite` alias was removed in 0.10.0; see
+[Compatibility](#compatibility)). If `burrow` is already installed it names the
 version it would replace and asks first. Its last line is the next command,
 `burrow init`.
 
@@ -762,16 +762,15 @@ than left to be inferred from behaviour:
 
 ## Compatibility
 
-0.8.0 renamed the command from `suite` to `burrow`. Nothing an existing host
-depends on moved, and nothing was deleted.
+0.8.0 renamed the command from `suite` to `burrow`.
 
-**`suite` keeps working.** The installer writes two launchers, `burrow` and
-`suite`, as two rendered files (no symlink). `suite` runs the same command and
-prints one line on **stderr**:
-`suite: this command is now burrow; suite keeps working as an alias`.
-Its stdout is the same bytes as `burrow`'s, because `suite --version`,
-`suite status --json` and `--stamp-only` are read by machines.
-`BURROW_NO_DEPRECATION=1` silences the line.
+**The `suite` command is gone (0.10.0).** 0.8.0 and 0.9.0 installed `suite` as
+an alias of `burrow`; 0.10.0 installs only `burrow`. The installer does not
+delete a `suite` launcher an earlier version left in the bin directory, so
+remove it yourself (`rm "$(command -v suite)"`) once nothing on the host still
+runs `suite`: a systemd unit, a launchd plist, a cron entry or a script. The
+burrow-watch and burrow-agents units the CLI writes already invoke `burrow`,
+and the one-shot migration rebinds any that still name `suite`.
 
 **Environment variables: `BURROW_*` first, then `SUITE_*`.** Each name below is
 read as `BURROW_<NAME>`; if that is unset or empty, `SUITE_<NAME>` is read, and

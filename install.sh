@@ -257,11 +257,11 @@ ask() {
 platform="$(detect_platform)"
 bin_dir="$(resolve_bin_dir)"
 lib_dir="$(resolve_lib_dir)"
-# Two launchers, both RENDERED from one template (never a symlink): `burrow`,
-# and `suite`, the old name kept as an alias. A `suite` left by an earlier
-# install is overwritten by the alias, never left behind as the old launcher.
+# One launcher, RENDERED from the template (never a symlink): `burrow`.
+# 0.10.0 stopped installing the `suite` alias. A `suite` an earlier install
+# left in $bin_dir is not touched here: removing it is the operator's call,
+# once nothing on the host still invokes it.
 dest="$bin_dir/burrow"
-alias_dest="$bin_dir/suite"
 
 TMPDIR_SUITE="$(mktemp -d "${TMPDIR:-/tmp}/suite-install.XXXXXX")" ||
 	die "could not create a temporary directory"
@@ -318,17 +318,11 @@ version="$(
 [ -n "$version" ] || die "could not read the version from the downloaded package.json"
 
 # --- an existing install is named and announced, never clobbered silently ---
-# `burrow` first, then `suite`: a host installed before the rename has only
-# `suite`, and is announced under that name. stderr is discarded because the
-# `suite` alias prints its notice there; stdout is the version alone.
 existing_name=""
 existing_path=""
 if [ -e "$dest" ]; then
 	existing_name="burrow"
 	existing_path="$dest"
-elif [ -e "$alias_dest" ]; then
-	existing_name="suite"
-	existing_path="$alias_dest"
 fi
 if [ -n "$existing_path" ]; then
 	existing="$("$existing_path" --version 2>/dev/null || echo "unknown version")"
@@ -382,18 +376,11 @@ fi
 cp -R "$src_root/assets" "$staged_lib/assets" ||
 	die "could not stage assets/ — suite deepseek needs the bundled plugin"
 
-# render_launcher <name> <output>: one template, rendered per name.
-render_launcher() {
-	sed -e "s|@BURROW_LIB_DIR@|$lib_dir|g" -e "s|@BURROW_VERSION@|$version|g" \
-		-e "s|@BURROW_INVOKED_AS@|$1|g" \
-		"$src_root/bin/burrow.template" >"$2" ||
-		die "could not render the $1 entrypoint"
-	chmod 0755 "$2" || die "could not make the $1 entrypoint executable"
-}
 staged_bin="$TMPDIR_SUITE/burrow"
-staged_alias="$TMPDIR_SUITE/suite"
-render_launcher burrow "$staged_bin"
-render_launcher suite "$staged_alias"
+sed -e "s|@BURROW_LIB_DIR@|$lib_dir|g" -e "s|@BURROW_VERSION@|$version|g" \
+	"$src_root/bin/burrow.template" >"$staged_bin" ||
+	die "could not render the burrow entrypoint"
+chmod 0755 "$staged_bin" || die "could not make the burrow entrypoint executable"
 
 mkdir -p "$bin_dir" || die "could not create the install directory $bin_dir"
 [ -w "$bin_dir" ] || die "$bin_dir is not writable. burrow never uses sudo; set XDG_BIN_HOME to a directory you own."
@@ -409,12 +396,10 @@ mv "$lib_dir.incoming" "$lib_dir" || die "could not install the burrow-cli libra
 rm -rf "$lib_dir.previous"
 
 mv "$staged_bin" "$dest" || die "could not install the burrow entrypoint to $dest"
-mv "$staged_alias" "$alias_dest" || die "could not install the suite alias to $alias_dest"
 
 # ---------------------------------------------------------------- report ----
 printf '\n'
 row "burrow $version" "$(pretty_path "$dest")"
-row "suite (alias)" "$(pretty_path "$alias_dest")"
 row "platform" "$platform"
 if on_path "$bin_dir"; then
 	row "PATH" "$(pretty_path "$bin_dir") is already on PATH"
