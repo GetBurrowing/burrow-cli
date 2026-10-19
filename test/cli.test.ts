@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { ALIAS_NOTICE, aliasNotice, parse, parseClaudeOptions, run, usage } from "../src/cli.ts";
+import { parse, parseClaudeOptions, run, usage } from "../src/cli.ts";
 import { emptyConfig } from "../src/config.ts";
 import { sessionNameFromConfig } from "../src/tmux.ts";
 import { row, nextCommand, colorEnabled, LABEL_WIDTH } from "../src/ui.ts";
@@ -116,29 +116,20 @@ describe("suite claude --session", () => {
 });
 
 /* ------------------------------------------------------------------------- */
-/* The `suite` alias: one stderr line, stdout untouched                       */
+/* The `suite` alias is gone (0.10.0)                                         */
 /* ------------------------------------------------------------------------- */
 
-describe("the suite alias notice", () => {
+describe("no suite alias", () => {
   const CLI = join(dirname(fileURLToPath(import.meta.url)), "..", "src", "cli.ts");
 
-  test("aliasNotice: only for BURROW_INVOKED_AS=suite, silenced by BURROW_NO_DEPRECATION=1 exactly", () => {
-    expect(aliasNotice({ BURROW_INVOKED_AS: "suite" })).toBe(ALIAS_NOTICE);
-    expect(aliasNotice({ BURROW_INVOKED_AS: "burrow" })).toBeNull();
-    expect(aliasNotice({})).toBeNull();
-    expect(aliasNotice({ BURROW_INVOKED_AS: "suite", BURROW_NO_DEPRECATION: "1" })).toBeNull();
-    expect(aliasNotice({ BURROW_INVOKED_AS: "suite", BURROW_NO_DEPRECATION: "0" })).toBe(ALIAS_NOTICE);
-    expect(ALIAS_NOTICE).toBe("suite: this command is now burrow; suite keeps working as an alias");
-  });
-
-  /** Run the real CLI as each launcher would, in a scratch HOME with no agents. */
-  function invoke(as: string, args: string[], extra: Record<string, string> = {}) {
-    const home = mkdtempSync(join(tmpdir(), "burrow-cli-alias."));
+  /** Run the real CLI in a scratch HOME with no agents. */
+  function invoke(args: string[], extra: Record<string, string> = {}) {
+    const home = mkdtempSync(join(tmpdir(), "burrow-cli-noalias."));
     try {
       const r = spawnSync(process.execPath, [CLI, ...args], {
         encoding: "utf8",
         cwd: home,
-        env: { PATH: process.env.PATH ?? "/usr/bin:/bin", HOME: home, BURROW_INVOKED_AS: as, NO_COLOR: "1", ...extra },
+        env: { PATH: process.env.PATH ?? "/usr/bin:/bin", HOME: home, NO_COLOR: "1", ...extra },
       });
       return { status: r.status, stdout: r.stdout ?? "", stderr: r.stderr ?? "" };
     } finally {
@@ -146,30 +137,19 @@ describe("the suite alias notice", () => {
     }
   }
 
+  test("--help does not mention a suite alias", () => {
+    expect(usage()).not.toMatch(/alias/i);
+    expect(usage()).not.toMatch(/\bsuite\b/);
+  });
+
+  // A 0.9.0 `suite` launcher left on disk still exports BURROW_INVOKED_AS=suite
+  // into this library. It is ignored: same bytes on both streams as without it.
   for (const args of [["--version"], ["status", "--json"], ["--help"], ["nope"]]) {
-    test(`\`${args.join(" ")}\`: stdout is byte-identical between suite and burrow; the notice is stderr-only`, () => {
-      const burrow = invoke("burrow", args);
-      const suite = invoke("suite", args);
-      expect(suite.status).toBe(burrow.status);
-      expect(Buffer.from(suite.stdout).equals(Buffer.from(burrow.stdout))).toBe(true);
-      expect(burrow.stdout).not.toContain("now burrow");
-      expect(burrow.stderr).not.toContain("now burrow");
-      // Exactly one notice line, and it is the FIRST thing on stderr.
-      expect(suite.stderr.split("\n").filter((l) => l === ALIAS_NOTICE)).toHaveLength(1);
-      expect(suite.stderr.startsWith(`${ALIAS_NOTICE}\n`)).toBe(true);
-      expect(suite.stderr.slice(ALIAS_NOTICE.length + 1)).toBe(burrow.stderr);
+    test(`\`${args.join(" ")}\`: a stale BURROW_INVOKED_AS=suite changes nothing`, () => {
+      const plain = invoke(args);
+      const stale = invoke(args, { BURROW_INVOKED_AS: "suite" });
+      expect(stale).toEqual(plain);
+      expect(stale.stderr).not.toContain("now burrow");
     });
   }
-
-  test("`status --json` stdout still parses as one JSON document under the alias", () => {
-    const suite = invoke("suite", ["status", "--json"]);
-    expect(suite.status).toBe(0);
-    expect(() => JSON.parse(suite.stdout)).not.toThrow();
-  });
-
-  test("BURROW_NO_DEPRECATION=1 removes the line and nothing else", () => {
-    const quiet = invoke("suite", ["--version"], { BURROW_NO_DEPRECATION: "1" });
-    const burrow = invoke("burrow", ["--version"]);
-    expect(quiet).toEqual(burrow);
-  });
 });

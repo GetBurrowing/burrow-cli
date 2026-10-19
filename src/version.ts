@@ -13,7 +13,7 @@ export const VERSION: string = (pkg as { version: string }).version;
  * The command's name, for every user-facing hint and error prefix.
  *
  * One constant so the `suite` -> `burrow` rename (0.8.0) is a single edit the
- * next time it moves. The installed `suite` launcher is an alias of this
- * command (install.sh renders both); messages always name `burrow`.
+ * next time it moves. 0.10.0 dropped the `suite` alias launcher; install.sh
+ * renders only `burrow`.
  */
 export const CLI_NAME = "burrow";

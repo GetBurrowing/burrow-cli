@@ -1,45 +1,32 @@
 #!/bin/sh
-# Rendered by install.sh: @BURROW_LIB_DIR@, @BURROW_VERSION@ and
-# @BURROW_INVOKED_AS@ are substituted at install time. POSIX sh, because this
-# file must answer --version even on a machine where bun is not installed yet.
+# Rendered by install.sh: @BURROW_LIB_DIR@ and @BURROW_VERSION@ are
+# substituted at install time. POSIX sh, because this file must answer
+# --version even on a machine where bun is not installed yet.
 #
-# install.sh renders this file TWICE: once as `burrow` and once as `suite`, the
-# old name kept as an alias. Two rendered files, never a symlink, so each one
-# knows the name it was installed under (BURROW_INVOKED_AS) without reading $0.
+# install.sh renders this file once, as `burrow`. (Before 0.10.0 it also
+# rendered a `suite` alias; that is gone.)
 set -eu
 
 BURROW_LIB_DIR="@BURROW_LIB_DIR@"
 BURROW_VERSION="@BURROW_VERSION@"
-BURROW_INVOKED_AS="@BURROW_INVOKED_AS@"
 # The SUITE_* names are exported too: `burrow update` to an older pinned ref
 # installs a library that reads only SUITE_LIB_DIR / SUITE_VERSION.
 SUITE_LIB_DIR="$BURROW_LIB_DIR"
 SUITE_VERSION="$BURROW_VERSION"
-export BURROW_LIB_DIR BURROW_VERSION BURROW_INVOKED_AS SUITE_LIB_DIR SUITE_VERSION
-
-# The alias notice, on STDERR only. --version is answered here without bun, so
-# the launcher says it on that path itself; every other path reaches src/cli.ts,
-# which says it there (once, never both). stdout stays byte-identical between
-# `suite` and `burrow`: install.sh and core's agent-host read it.
-alias_notice() {
-	if [ "$BURROW_INVOKED_AS" = "suite" ] && [ "${BURROW_NO_DEPRECATION:-}" != "1" ]; then
-		printf 'suite: this command is now burrow; suite keeps working as an alias\n' >&2
-	fi
-}
+export BURROW_LIB_DIR BURROW_VERSION SUITE_LIB_DIR SUITE_VERSION
 
 case "${1:-}" in
 --version | -V)
-	alias_notice
 	printf '%s\n' "$BURROW_VERSION"
 	exit 0
 	;;
 esac
 
 # ---------------------------------------------------------------- bun ------
-# `suite init` is the one verb whose whole job is to set a cold machine up, and
+# `burrow init` is the one verb whose whole job is to set a cold machine up, and
 # the CLI it lives in is written in TypeScript. Refusing to run it because bun
 # is missing makes its own bun-detect-and-offer path unreachable on exactly the
-# machine state it exists for -- and `suite init` is the next command install.sh
+# machine state it exists for -- and `burrow init` is the next command install.sh
 # prints. So when bun is absent AND the verb is `init`, this POSIX bootstrap
 # makes the same offer in shell, then re-execs the real CLI.
 #
@@ -50,7 +37,7 @@ bun_bin_dir() {
 }
 
 # Reads one line, preferring the controlling terminal: stdin may be a pipe.
-suite_ask() {
+burrow_ask() {
 	_reply=""
 	if [ -r /dev/tty ] && [ -t 0 ]; then
 		IFS= read -r _reply </dev/tty || _reply=""
@@ -61,14 +48,14 @@ suite_ask() {
 }
 
 bootstrap_bun() {
-	printf 'suite: bun is not installed, and suite init needs it.\n' >&2
+	printf 'burrow: bun is not installed, and burrow init needs it.\n' >&2
 	printf 'install bun now with the official installer from https://bun.sh? [y/N] ' >&2
-	reply="$(suite_ask)"
+	reply="$(burrow_ask)"
 	printf '\n' >&2
 	case "$reply" in
 	y | Y | yes | YES | Yes) : ;;
 	*)
-		printf 'suite: not installing bun. Install it from https://bun.sh, then re-run suite init.\n' >&2
+		printf 'burrow: not installing bun. Install it from https://bun.sh, then re-run burrow init.\n' >&2
 		exit 1
 		;;
 	esac
@@ -83,8 +70,8 @@ bootstrap_bun() {
 	# what is missing and stop.
 	for tool in curl bash unzip; do
 		if ! command -v "$tool" >/dev/null 2>&1; then
-			printf 'suite: %s is needed to install bun, and is not on PATH.\n' "$tool" >&2
-			printf 'suite: install %s yourself (suite never runs a package manager, and never sudo), then re-run suite init.\n' \
+			printf 'burrow: %s is needed to install bun, and is not on PATH.\n' "$tool" >&2
+			printf 'burrow: install %s yourself (burrow never runs a package manager, and never sudo), then re-run burrow init.\n' \
 				"$tool" >&2
 			exit 127
 		fi
@@ -93,15 +80,15 @@ bootstrap_bun() {
 	# Downloaded to a file and then run, rather than piped straight into bash:
 	# in POSIX sh a pipeline reports only the LAST command's status, so
 	# `curl ... | bash` exits 0 when the download fails and bash reads nothing.
-	installer="$(mktemp "${TMPDIR:-/tmp}/suite-bun-install.XXXXXX")" ||
+	installer="$(mktemp "${TMPDIR:-/tmp}/burrow-bun-install.XXXXXX")" ||
 		{
-			printf 'suite: could not create a temporary file for the bun installer.\n' >&2
+			printf 'burrow: could not create a temporary file for the bun installer.\n' >&2
 			exit 1
 		}
 	# Installs under $BUN_INSTALL (default ~/.bun), which the user owns. Never sudo.
 	if ! curl -fsSL https://bun.sh/install -o "$installer" || ! bash "$installer"; then
 		rm -f "$installer"
-		printf 'suite: installing bun failed. See https://bun.sh for manual instructions.\n' >&2
+		printf 'burrow: installing bun failed. See https://bun.sh for manual instructions.\n' >&2
 		exit 1
 	fi
 	rm -f "$installer"
@@ -109,11 +96,11 @@ bootstrap_bun() {
 	PATH="$(bun_bin_dir):$PATH"
 	export PATH
 	if ! command -v bun >/dev/null 2>&1; then
-		printf 'suite: bun was installed but is still not on PATH. Add %s to PATH and re-run.\n' \
+		printf 'burrow: bun was installed but is still not on PATH. Add %s to PATH and re-run.\n' \
 			"$(bun_bin_dir)" >&2
 		exit 127
 	fi
-	printf 'suite: bun installed.\n' >&2
+	printf 'burrow: bun installed.\n' >&2
 }
 
 if ! command -v bun >/dev/null 2>&1; then
@@ -131,8 +118,8 @@ if ! command -v bun >/dev/null 2>&1; then
 		bootstrap_bun
 		;;
 	*)
-		printf 'suite: bun is not installed or not on PATH.\n' >&2
-		printf 'suite needs bun to run. Install it from https://bun.sh, then re-run this command.\n' >&2
+		printf 'burrow: bun is not installed or not on PATH.\n' >&2
+		printf 'burrow needs bun to run. Install it from https://bun.sh, then re-run this command.\n' >&2
 		exit 127
 		;;
 	esac

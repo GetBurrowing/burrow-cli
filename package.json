@@ -1,13 +1,12 @@
 {
   "name": "burrow-cli",
-  "version": "0.9.0",
+  "version": "0.10.0",
   "description": "Connects a machine to a Burrow install, then sets up and runs its agent harness",
   "license": "MIT",
   "type": "module",
   "private": true,
   "bin": {
-    "burrow": "./src/cli.ts",
-    "suite": "./src/cli.ts"
+    "burrow": "./src/cli.ts"
   },
   "scripts": {
     "test": "bun test",

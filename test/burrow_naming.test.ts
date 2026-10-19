@@ -35,8 +35,9 @@ describe("the package says burrow", () => {
   test("name, version and description", () => {
     const pkg = JSON.parse(readFileSync(join(REPO, "package.json"), "utf8"));
     expect(pkg.name).toBe("burrow-cli");
-    expect(pkg.version).toBe("0.9.0");
-    expect(VERSION).toBe("0.9.0");
+    expect(pkg.version).toBe("0.10.0");
+    expect(VERSION).toBe("0.10.0");
+    expect(pkg.bin).toEqual({ burrow: "./src/cli.ts" });
     expect(pkg.description).toBe("Connects a machine to a Burrow install, then sets up and runs its agent harness");
     expect(CLI_NAME).toBe("burrow");
   });
@@ -62,12 +63,11 @@ describe("help names burrow", () => {
     expect(lines[lines.length - 1]).toBe("burrow init");
   });
 
-  test("`suite` appears only as the alias line", () => {
+  test("`suite` appears on no line (the alias was removed in 0.10.0)", () => {
     const suiteLines = usage()
       .split("\n")
       .filter((l) => /\bsuite\b/i.test(l));
-    expect(suiteLines).toHaveLength(1);
-    expect(suiteLines[0]).toContain("alias");
+    expect(suiteLines).toEqual([]);
   });
 });
 
@@ -86,7 +86,7 @@ describe("no user-facing string in src names the command `suite`", () => {
     expect('"suite.json"').not.toMatch(hint);
   });
 
-  test("no file in src carries one, except the alias's own notice", () => {
+  test("no file in src carries one", () => {
     const files: string[] = [];
     const walk = (dir: string): void => {
       for (const e of readdirSync(dir, { withFileTypes: true })) {
@@ -103,7 +103,6 @@ describe("no user-facing string in src names the command `suite`", () => {
         .split("\n")
         .forEach((line, i) => {
           if (/^\s*(\/\*|\*|\/\/)/.test(line)) return; // comments
-          if (line.includes("this command is now burrow")) return; // ALIAS_NOTICE, printed BY the suite alias
           if (hint.test(line)) hits.push(`${f.slice(REPO.length + 1)}:${i + 1}: ${line.trim()}`);
         });
     }
@@ -199,7 +198,7 @@ describe("README", () => {
     expect(readme).toContain("burrow init && burrow claude");
   });
 
-  test("Compatibility lists every SUITE_* fallback pair, the alias, the one-shot move and its breadcrumbs, and the repo rename", () => {
+  test("Compatibility lists every SUITE_* fallback pair, the alias removal, the one-shot move and its breadcrumbs, and the repo rename", () => {
     const start = readme.indexOf("## Compatibility");
     expect(start).toBeGreaterThan(0);
     const section = readme.slice(start, readme.indexOf("\n## ", start + 1));
@@ -207,7 +206,8 @@ describe("README", () => {
     for (const s of FALLBACK_SUFFIXES) {
       expect(section).toContain(`| \`BURROW_${s}\` | \`SUITE_${s}\` |`);
     }
-    expect(section).toContain("suite: this command is now burrow; suite keeps working as an alias");
+    expect(section).toContain("**The `suite` command is gone (0.10.0).**");
+    expect(section).not.toContain("suite keeps working");
     expect(section).toContain("`startup-suite` and `suite-channel`");
     // The one-shot migration, named by the files it leaves (from the code, not retyped).
     expect(section).toContain("State moves once, on the first 0.9 run.");
