@@ -10,6 +10,54 @@ that matters in the field: is this one newer than what I had?
 Minor for a new capability or a changed default; patch for a fix that changes no
 behaviour anyone was relying on.
 
+## Unreleased
+
+(The release stage gives this section its version number and bumps
+`package.json`.)
+
+**A failed `burrow hermes` start no longer leaves a pre-0.12.0 home
+half-moved.** In 0.12.0 the start renamed the home's Hermes names (MCP entry,
+plugin, token) before cloning the channel and running its installer, so any
+later failure left `plugins.enabled` empty, the old plugin deleted, the new one
+not installed, and `mcp_servers.burrow` naming the deleted plugin and the old
+token path.
+
+- The channel checkout is now brought to its pin BEFORE the rename, so a clone,
+  fetch or checkout failure writes nothing in the home.
+- From the rename to the end of the start, the home runs against a snapshot. A
+  failure anywhere in that span (the rename itself, the installer, the mcp SDK
+  install, the second installer run, the token-mode check, the managed
+  config.yaml keys) restores it and then reports the original error. If the
+  restore fails too, both errors are reported, with the paths not restored and
+  where the snapshot was kept.
+- **What the restore covers, and nothing else:** config.yaml, .env,
+  plugins/.install-metadata.json and each installs/<key>/facts.json (bytes,
+  mode, mtime); the plugin trees plugins/<old>/ and plugins/burrow-platform/
+  (every file's inode, bytes, mode and mtime, and every directory's mode and
+  mtime); and the token file under its old and its new name (the same inode,
+  bytes, mode and mtime; its value is never read). A covered path that did not
+  exist before the start is removed. It does NOT undo what Hermes writes beside
+  those as a side effect of the same commands, measured at hermes-agent
+  fdec926e: a new dependency-environment generation under
+  installs/<key>/environments/ (both `plugins remove` and `plugins install`
+  commit one; restoring facts.json makes Hermes select the old one again),
+  backups/config/ rotation, cache/, lock files, the channel installer's
+  .suite-channel/ record, and directory mtimes above the restored paths.
+- A start whose post-write validation fails (`hermes config check`,
+  `hermes mcp test`) is NOT rolled back: by then the home is fully moved to
+  consistent new names, and the stamp records `fail`.
+- **A shared channel checkout with local edits to tracked files is refused**
+  (exit 2, `plugin_checkout_dirty`) before anything is written, naming the
+  directory and each modified file. `git checkout --detach <ref>` aborts only
+  when a modified file differs between HEAD and the ref, and otherwise carries
+  the edit into the pinned ref silently. Untracked files do not refuse. The edit
+  is never reset, stashed or discarded.
+- **A start that cannot tell whether the agent is running renames nothing.**
+  With tmux off the CLI's PATH, or a tmux probe failing for any reason other
+  than "no server running", a root still holding old names is refused with
+  exit 7 and nothing is written. If the agent is stopped, start it with
+  `--no-session`. A root holding no old names starts as before.
+
 ## 0.12.1
 
 **The default GitHub org is `GetBurrowing`.** The org was renamed in place on

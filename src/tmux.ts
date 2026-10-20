@@ -493,6 +493,57 @@ export async function detectState(
 }
 
 /**
+ * What `tmux list-panes` prints when NO server is running, so no session can
+ * exist. MEASURED: tmux 3.7b prints `error connecting to <socket> (No such
+ * file or directory)` and exits 1; a socket whose server died answers
+ * `(Connection refused)`; older releases print `no server running on <socket>`.
+ */
+export const NO_TMUX_SERVER = /no server running on |error connecting to .*\((No such file or directory|Connection refused)\)/;
+
+/** Whether an agent is running, or that this machine cannot tell. */
+export type Liveness = { state: "live" | "none" } | { state: "unknown"; reason: string };
+
+/**
+ * The strict liveness question a caller asks before a write it must never make
+ * under a running agent. {@link detectState} answers `none` whenever tmux is
+ * absent or fails, which is right for "should I create a session" and wrong
+ * for "may I rename this agent's files": an agent can be running where this
+ * process cannot see it (started from a PATH that has tmux, or a probe that
+ * failed). So this answers `unknown`, with the reason, when:
+ *  - tmux is not on PATH;
+ *  - `tmux list-panes -a` fails for any reason other than {@link NO_TMUX_SERVER};
+ *  - a candidate session exists and `ps` fails, so its agent cannot be looked for.
+ * `none` only when tmux answered that no candidate session exists (or no
+ * server runs), or every candidate session is stale.
+ */
+export async function sessionLiveness(candidates: string[], deps: TmuxDeps, agentName: string = AGENT_NAME): Promise<Liveness> {
+  if (deps.which(TMUX) === null) return { state: "unknown", reason: "tmux is not on PATH" };
+  const last = (s: string): string => s.trim().split("\n").pop() ?? "";
+  let panes: RunResult;
+  try {
+    panes = await deps.run([TMUX, "list-panes", "-a", "-F", PANE_FORMAT]);
+  } catch (e) {
+    return { state: "unknown", reason: `tmux list-panes could not run: ${e instanceof Error ? e.message : String(e)}` };
+  }
+  if (panes.exitCode !== 0) {
+    if (NO_TMUX_SERVER.test(panes.stderr)) return { state: "none" };
+    return { state: "unknown", reason: `tmux list-panes exited ${panes.exitCode}: ${last(panes.stderr || panes.stdout)}` };
+  }
+  const rows = parsePanes(panes.stdout);
+  const present = candidates.filter((c) => rows.some((r) => r.session === c));
+  if (present.length === 0) return { state: "none" };
+  let ps: RunResult;
+  try {
+    ps = await deps.run(["ps", "-Ao", "pid=,ppid=,comm=,args="]);
+  } catch (e) {
+    return { state: "unknown", reason: `ps could not run: ${e instanceof Error ? e.message : String(e)}` };
+  }
+  if (ps.exitCode !== 0) return { state: "unknown", reason: `ps exited ${ps.exitCode}, so the agent in ${present.join(", ")} cannot be looked for` };
+  const procs = parseProcesses(ps.stdout);
+  return present.some((c) => classify(rows, procs, c, agentName) === "live") ? { state: "live" } : { state: "none" };
+}
+
+/**
  * Which of the candidate names a launch should use, and in what state.
  *
  * NEVER ORPHAN A RUNNING AGENT. A host upgraded to 0.9 still runs agents in

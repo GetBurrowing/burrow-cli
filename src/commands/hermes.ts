@@ -34,7 +34,10 @@
  *     Hermes plugin has no keychain resolver yet (follow-up).
  *  3. config.yaml IS READ BY PARSING IT, never with `hermes config get --raw`,
  *     which expands `${VAR}` from the environment. Writes go through
- *     `hermes config set`, and only for keys whose value differs.
+ *     `hermes config set`, and only for keys whose value differs. The one
+ *     exception: a start that fails after renaming a pre-0.12.0 home writes
+ *     config.yaml's snapshot bytes back (hermes_home_snapshot.ts), putting
+ *     back bytes Hermes itself wrote.
  *  4. NEVER `hermes setup` (its --non-interactive only prints guidance), and
  *     NEVER `hermes gateway start|restart|install` (they install systemd
  *     units; systemd --user is per UID, not per HOME).
@@ -103,14 +106,13 @@ import {
   type StdinState,
   type TokenRef,
 } from "../token_ref.ts";
-import type { TmuxDeps } from "../tmux.ts";
+import { derivedCandidates, liveTmuxDeps, sessionLiveness, type TmuxDeps } from "../tmux.ts";
 import { httpsCloneUrl } from "../repo_source.ts";
 import { classifyPullFailure, noGitPrompt, pullRemedyLines } from "./init.ts";
 import { loadRoster, recordLaunch, liveRestoreDeps, type RestoreDeps } from "./restore.ts";
 import {
   liveDeepseekDeps,
   runInSession,
-  sessionIsLive,
   runtimeWsUrl,
   selfArgv,
   sessionNameForAgent,
@@ -118,7 +120,16 @@ import {
 } from "./deepseek.ts";
 import { CLI_NAME } from "../version.ts";
 import { legacyNamesIn, migrateAgentRootOrSay } from "../agent_root_names.ts";
-import { LegacyNameConflict, hermesLegacyNames, pendingHermesRenames, renameHermesHome, type HermesRename } from "../legacy_names.ts";
+import {
+  HERMES_PLUGIN_RENAME,
+  HERMES_TOKEN_RENAME,
+  LegacyNameConflict,
+  hermesLegacyNames,
+  pendingHermesRenames,
+  renameHermesHome,
+  type HermesRename,
+} from "../legacy_names.ts";
+import { snapshotHermesHome, type HermesHomeSnapshot } from "../hermes_home_snapshot.ts";
 import { RENAME_REFUSED_EXIT } from "./claude.ts";
 
 type Env = Record<string, string | undefined>;
@@ -907,9 +918,45 @@ export function hermesWriter(ctx: { opts: HermesOptions | null }, deps: HermesDe
     return r.exitCode === 0 ? r.stdout.trim() : "";
   }
 
+  /**
+   * Refuse a shared channel checkout holding an edit to a TRACKED file.
+   * `git checkout --detach <ref>` is not a dirty check: it aborts only when a
+   * modified file DIFFERS between HEAD and the ref, and otherwise silently
+   * carries the edit into the new ref. Untracked files (an installer's or
+   * pip's __pycache__, egg-info) are not an edit and do not refuse. The edit
+   * is never reset, stashed or discarded: refusing is the whole behaviour.
+   */
+  async function refuseDirtyCheckout(): Promise<void> {
+    const dir = checkout();
+    if (!existsSync(join(dir, ".git"))) return;
+    const r = await spawn(["git", "-C", dir, "status", "--porcelain", "--untracked-files=no"], { env: gitEnv(deps) });
+    if (r.exitCode !== 0) {
+      throw refused(
+        "plugin_checkout_unreadable",
+        `could not tell whether the channel checkout ${dir} holds local edits (git status exited ${r.exitCode}: ${lastLine(r.stderr || r.stdout)}); nothing was written`,
+      );
+    }
+    const modified = r.stdout
+      .split("\n")
+      .filter((l) => l.trim() !== "")
+      .map((l) => l.slice(3));
+    if (modified.length === 0) return;
+    throw refused(
+      "plugin_checkout_dirty",
+      [
+        `the shared channel checkout ${dir} has local edits to tracked files, which \`git checkout\` would carry into the pinned ref:`,
+        ...modified.map((p) => `  ${p}`),
+        `Nothing was written. Inspect them with: git -C ${dir} diff`,
+        `then commit, move or discard them yourself (this command never does), and run it again.`,
+      ].join("\n"),
+    );
+  }
+
   async function ensureCheckout(): Promise<void> {
     const dir = checkout();
     const env = gitEnv(deps);
+    // plan() refused a dirty checkout already; plan and apply are separate steps, so ask again.
+    await refuseDirtyCheckout();
     if (!existsSync(join(dir, ".git"))) {
       mkdirSync(dirname(dir), { recursive: true });
       const r = await spawn(["git", "clone", "--quiet", channelRepo, dir], { env });
@@ -1103,6 +1150,8 @@ export function hermesWriter(ctx: { opts: HermesOptions | null }, deps: HermesDe
         actions.push(a);
       }
 
+      // Read-only: a checkout holding an operator's edit refuses before anything is written.
+      await refuseDirtyCheckout();
       const head = await gitHead();
       actions.push(planned("plugin_checkout", `${checkout()}@${channelRef}`, head === null ? "written" : head === channelRef ? "unchanged" : "repaired"));
 
@@ -1160,147 +1209,56 @@ export function hermesWriter(ctx: { opts: HermesOptions | null }, deps: HermesDe
       const bin = state.bin as string;
       mkdirSync(home, { recursive: true, mode: 0o700 });
 
-      // Move a pre-0.12.0 home's names BEFORE the installer, which writes only
-      // the new ones: left in place, the old generation would run beside the new.
-      if (state.renames.length > 0) await renameLegacyNames(home, bin);
-
+      // The checkout first (0.12.1): it writes nothing in the home, so a
+      // clone, fetch or checkout that fails leaves the home untouched.
       const co = actions.find((a) => a.kind === "plugin_checkout");
       if (co !== undefined && co.outcome !== "unchanged") {
         await ensureCheckout();
         co.applied = true;
       }
 
-      // Always run: the installer is idempotent, and it IS the repair path
-      // for a deleted MCP entry or a changed runtime id. Its parts are
-      // MEASURED afterwards, and also when it fails part-way: a part it did
-      // change is reported as changed, and a part it never reached as not
-      // applied.
-      const measureParts = (): void => {
-        const after = channelFingerprints(home);
-        const before = state.before as Record<ChannelPart, string | null>;
-        for (const part of CHANNEL_PARTS) {
-          const a = state.channelActions.get(part) as StampAction;
-          if (after[part] !== before[part]) {
-            a.outcome = before[part] === null && !state.stampedBefore ? "written" : "repaired";
-            a.applied = true;
-          } else if (a.outcome === "unchanged" || after[part] !== null) {
-            a.outcome = "unchanged";
-            a.applied = true;
-          }
-        }
-      };
+      if (state.renames.length === 0) {
+        await installAndConfigure(inputs, actions);
+        return;
+      }
+
+      // Move a pre-0.12.0 home's names BEFORE the installer, which writes only
+      // the new ones: left in place, the old generation would run beside the new.
+      // TRANSACTIONAL (0.12.1): everything from the rename to the end of this
+      // apply runs against a snapshot (hermes_home_snapshot.ts states exactly
+      // which paths it covers). A failure anywhere in it restores them, then
+      // rethrows the original error; the home is never left half-moved.
+      let snapshot: HermesHomeSnapshot;
       try {
-        await runInstaller(inputs);
-      } finally {
-        measureParts();
+        snapshot = snapshotHermesHome(home, {
+          files: ["config.yaml", ".env", join("plugins", ".install-metadata.json")],
+          trees: [join("plugins", HERMES_PLUGIN_RENAME[0]), join("plugins", PLUGIN_NAME)],
+          tokens: [HERMES_TOKEN_RENAME[0], TOKEN_RELPATH],
+        });
+      } catch (e) {
+        throw fail("rename_snapshot_failed", `could not snapshot ${home} before renaming its pre-0.12.0 names, so nothing was renamed: ${e instanceof Error ? e.message : String(e)}`);
       }
-      // Installing a plugin with Python dependencies makes Hermes commit a NEW
-      // dependency venv (MEASURED on a fresh fdec926e install: the generation
-      // named in installs/<key>/facts.json changed during `hermes plugins
-      // install`). The MCP command registered a moment ago then names the old
-      // one, and the next run would "repair" it. Ask again, and register the
-      // one Hermes now selects.
-      const selected = await askHermesPython(bin);
-      if (selected !== null && selected !== state.python) {
-        deps.stderr(`${CLI_NAME}: Hermes selected a new dependency environment while installing the plugin; registering the MCP bridge with ${selected}\n`);
-        state.python = selected;
-        // The SDK check moves to the new interpreter; the step below installs it if missing.
-        const sdkAction = actions.find((a) => a.kind === "mcp_sdk");
-        if (sdkAction !== undefined) {
-          const has = await importsMcp(selected);
-          sdkAction.target = `${selected} ${MCP_SDK_PIN}`;
-          if (has) sdkAction.outcome = "unchanged";
-          else if (sdkAction.outcome === "unchanged") sdkAction.outcome = state.stampedBefore ? "repaired" : "written";
-          sdkAction.applied = has;
-        }
-        try {
-          await runInstaller(inputs);
-        } finally {
-          measureParts();
-        }
-      }
-      const tokenPath = tokenFilePath(home);
-      let mode = -1;
       try {
-        mode = lstatSync(tokenPath).mode & 0o777;
-      } catch {
-        mode = -1;
-      }
-      if (mode !== 0o600) {
-        throw fail("token_file_mode", `the channel installer left ${tokenPath} ${mode < 0 ? "absent" : `mode 0${mode.toString(8)}`}; it must be 0600`);
-      }
-      deps.stderr(
-        `${CLI_NAME}: the runtime token is held in ${tokenPath} (mode 0600), the one sanctioned copy; ` +
-          `the Hermes channel plugin reads it from that file and has no keychain resolver yet\n`,
-      );
-      if (inputs.tokenRef.kind === "keychain") {
-        state.warnings.push(
-          `keychain ref ${inputs.tokenRef.raw} was materialised into ${tokenPath} (0600): hermes-suite-channel has no keychain resolver (follow-up)`,
-        );
-      }
-
-      const sdk = actions.find((a) => a.kind === "mcp_sdk");
-      if (sdk !== undefined && sdk.outcome !== "unchanged") {
-        await installMcp(state.python as string);
-        sdk.applied = true;
-      }
-
-      const wanted = new Map(desiredModelKeys(o));
-      for (const a of actions) {
-        if (a.kind !== "config_set" || a.outcome === "unchanged" || a.target === TOOLSET_KEY || !wanted.has(a.target)) continue;
-        const value = wanted.get(a.target) as string;
-        const r = await spawn([bin, "config", "set", a.target, value]);
-        if (r.exitCode !== 0) throw fail("config_set_failed", `hermes config set ${a.target} exited ${r.exitCode}: ${lastLine(r.stderr || r.stdout)}`);
-      }
-      const config = readHermesConfig(home);
-      for (const [key, value] of wanted) {
-        if (!sameConfigValue(lookupKey(config, key), value)) {
-          throw fail("config_set_ineffective", `hermes config set ${key} exited 0 but config.yaml does not hold the value`);
+        await renameLegacyNames(home, bin);
+        await installAndConfigure(inputs, actions);
+      } catch (e) {
+        const failed = snapshot.restore();
+        for (const a of state.renameActions) a.applied = false;
+        remeasureAfterRestore();
+        const original = e instanceof Error ? e.message : String(e);
+        if (failed.length === 0) {
+          deps.stderr(`${CLI_NAME}: the start failed after renaming ${home}'s pre-0.12.0 names; they were put back as they were\n`);
+          throw e;
         }
-        const a = actions.find((x) => x.kind === "config_set" && x.target === key);
-        if (a !== undefined) a.applied = true;
+        const both =
+          `${original}\n` +
+          `AND restoring ${home} failed, so these paths are NOT as they were before this start:\n` +
+          failed.map((l) => `  ${l}`).join("\n") +
+          `\nThe snapshot is kept at ${snapshot.dir}.`;
+        if (e instanceof StampFailure) throw new StampFailure(e.exitCode, e.code, redact(both, state.secrets), e.humanSteps);
+        throw fail("rename_restore_failed", both);
       }
-
-      const headlessDefaults = new Map(HEADLESS_CONFIG_DEFAULTS);
-      for (const a of actions) {
-        const value = headlessDefaults.get(a.target);
-        if (a.kind !== "config_set" || value === undefined || a.outcome === "unchanged") continue;
-        const r = await spawn([bin, "config", "set", a.target, value]);
-        if (r.exitCode !== 0) throw fail("config_set_failed", `hermes config set ${a.target} exited ${r.exitCode}: ${lastLine(r.stderr || r.stdout)}`);
-        const now = lookupKey(readHermesConfig(home), a.target);
-        if (!sameConfigValue(now, value)) throw fail("config_set_ineffective", `hermes config set ${a.target} exited 0 but config.yaml does not hold the value`);
-        a.applied = true;
-      }
-
-      // The toolset key: set the managed headless list, or (--full-toolset)
-      // remove a managed list a previous stamp wrote. `unset` is Hermes's own remover.
-      const ts = actions.find((a) => a.kind === "config_set" && a.target === TOOLSET_KEY);
-      if (ts !== undefined && ts.outcome !== "unchanged") {
-        const argv = o.fullToolset ? [bin, "config", "unset", TOOLSET_KEY] : [bin, "config", "set", TOOLSET_KEY, JSON.stringify(HEADLESS_TOOLSET)];
-        const r = await spawn(argv);
-        if (r.exitCode !== 0) throw fail("config_set_failed", `hermes config ${argv[2]} ${TOOLSET_KEY} exited ${r.exitCode}: ${lastLine(r.stderr || r.stdout)}`);
-        const now = lookupKey(readHermesConfig(home), TOOLSET_KEY);
-        const held = o.fullToolset ? now === undefined || now === null : isHeadlessToolset(now);
-        if (!held) throw fail("config_set_ineffective", `hermes config ${argv[2]} ${TOOLSET_KEY} exited 0 but config.yaml does not reflect it`);
-        ts.applied = true;
-      }
-
-      const envKey = actions.find((a) => a.kind === "env_key");
-      if (envKey !== undefined && state.modelKey !== undefined) {
-        if (envKey.outcome !== "unchanged") {
-          const envPath = join(home, ".env");
-          const next = envFileWithKey(existsSync(envPath) ? readFileSync(envPath, "utf8") : null, MODEL_KEY_ENV, state.modelKey);
-          const tmp = `${envPath}.suite-${process.pid}`;
-          writeFileSync(tmp, next, { mode: 0o600 });
-          chmodSync(tmp, 0o600);
-          renameSync(tmp, envPath);
-          envKey.applied = true;
-        }
-        state.warnings.push(
-          `the model API key is stored in ${join(home, ".env")} as ${MODEL_KEY_ENV}; Hermes copies .env into os.environ ` +
-            `every turn and children it spawns without a scrub inherit it (upstream defect)`,
-        );
-      }
+      snapshot.discard();
     },
 
     async validate() {
@@ -1321,6 +1279,156 @@ export function hermesWriter(ctx: { opts: HermesOptions | null }, deps: HermesDe
       return state.warnings;
     },
   };
+
+  /** After a restore: a channel part back at its planned-from fingerprint was not, in the end, applied. */
+  function remeasureAfterRestore(): void {
+    const before = state.before;
+    if (before === null) return;
+    const after = channelFingerprints(opts().hermesHome);
+    for (const part of CHANNEL_PARTS) {
+      const a = state.channelActions.get(part);
+      if (a !== undefined && a.outcome !== "unchanged" && after[part] === before[part]) a.applied = false;
+    }
+  }
+
+  /** The installer, the SDK and the managed config.yaml keys: everything apply does after the checkout and the rename. */
+  async function installAndConfigure(inputs: StampInputs, actions: StampAction[]): Promise<void> {
+    const o = opts();
+    const home = o.hermesHome;
+    const bin = state.bin as string;
+    // Always run: the installer is idempotent, and it IS the repair path
+    // for a deleted MCP entry or a changed runtime id. Its parts are
+    // MEASURED afterwards, and also when it fails part-way: a part it did
+    // change is reported as changed, and a part it never reached as not
+    // applied.
+    const measureParts = (): void => {
+      const after = channelFingerprints(home);
+      const before = state.before as Record<ChannelPart, string | null>;
+      for (const part of CHANNEL_PARTS) {
+        const a = state.channelActions.get(part) as StampAction;
+        if (after[part] !== before[part]) {
+          a.outcome = before[part] === null && !state.stampedBefore ? "written" : "repaired";
+          a.applied = true;
+        } else if (a.outcome === "unchanged" || after[part] !== null) {
+          a.outcome = "unchanged";
+          a.applied = true;
+        }
+      }
+    };
+    try {
+      await runInstaller(inputs);
+    } finally {
+      measureParts();
+    }
+    // Installing a plugin with Python dependencies makes Hermes commit a NEW
+    // dependency venv (MEASURED on a fresh fdec926e install: the generation
+    // named in installs/<key>/facts.json changed during `hermes plugins
+    // install`). The MCP command registered a moment ago then names the old
+    // one, and the next run would "repair" it. Ask again, and register the
+    // one Hermes now selects.
+    const selected = await askHermesPython(bin);
+    if (selected !== null && selected !== state.python) {
+      deps.stderr(`${CLI_NAME}: Hermes selected a new dependency environment while installing the plugin; registering the MCP bridge with ${selected}\n`);
+      state.python = selected;
+      // The SDK check moves to the new interpreter; the step below installs it if missing.
+      const sdkAction = actions.find((a) => a.kind === "mcp_sdk");
+      if (sdkAction !== undefined) {
+        const has = await importsMcp(selected);
+        sdkAction.target = `${selected} ${MCP_SDK_PIN}`;
+        if (has) sdkAction.outcome = "unchanged";
+        else if (sdkAction.outcome === "unchanged") sdkAction.outcome = state.stampedBefore ? "repaired" : "written";
+        sdkAction.applied = has;
+      }
+      try {
+        await runInstaller(inputs);
+      } finally {
+        measureParts();
+      }
+    }
+    const tokenPath = tokenFilePath(home);
+    let mode = -1;
+    try {
+      mode = lstatSync(tokenPath).mode & 0o777;
+    } catch {
+      mode = -1;
+    }
+    if (mode !== 0o600) {
+      throw fail("token_file_mode", `the channel installer left ${tokenPath} ${mode < 0 ? "absent" : `mode 0${mode.toString(8)}`}; it must be 0600`);
+    }
+    deps.stderr(
+      `${CLI_NAME}: the runtime token is held in ${tokenPath} (mode 0600), the one sanctioned copy; ` +
+        `the Hermes channel plugin reads it from that file and has no keychain resolver yet\n`,
+    );
+    if (inputs.tokenRef.kind === "keychain") {
+      state.warnings.push(
+        `keychain ref ${inputs.tokenRef.raw} was materialised into ${tokenPath} (0600): hermes-suite-channel has no keychain resolver (follow-up)`,
+      );
+    }
+
+    const sdk = actions.find((a) => a.kind === "mcp_sdk");
+    if (sdk !== undefined && sdk.outcome !== "unchanged") {
+      await installMcp(state.python as string);
+      sdk.applied = true;
+    }
+
+    const wanted = new Map(desiredModelKeys(o));
+    for (const a of actions) {
+      if (a.kind !== "config_set" || a.outcome === "unchanged" || a.target === TOOLSET_KEY || !wanted.has(a.target)) continue;
+      const value = wanted.get(a.target) as string;
+      const r = await spawn([bin, "config", "set", a.target, value]);
+      if (r.exitCode !== 0) throw fail("config_set_failed", `hermes config set ${a.target} exited ${r.exitCode}: ${lastLine(r.stderr || r.stdout)}`);
+    }
+    const config = readHermesConfig(home);
+    for (const [key, value] of wanted) {
+      if (!sameConfigValue(lookupKey(config, key), value)) {
+        throw fail("config_set_ineffective", `hermes config set ${key} exited 0 but config.yaml does not hold the value`);
+      }
+      const a = actions.find((x) => x.kind === "config_set" && x.target === key);
+      if (a !== undefined) a.applied = true;
+    }
+
+    const headlessDefaults = new Map(HEADLESS_CONFIG_DEFAULTS);
+    for (const a of actions) {
+      const value = headlessDefaults.get(a.target);
+      if (a.kind !== "config_set" || value === undefined || a.outcome === "unchanged") continue;
+      const r = await spawn([bin, "config", "set", a.target, value]);
+      if (r.exitCode !== 0) throw fail("config_set_failed", `hermes config set ${a.target} exited ${r.exitCode}: ${lastLine(r.stderr || r.stdout)}`);
+      const now = lookupKey(readHermesConfig(home), a.target);
+      if (!sameConfigValue(now, value)) throw fail("config_set_ineffective", `hermes config set ${a.target} exited 0 but config.yaml does not hold the value`);
+      a.applied = true;
+    }
+
+    // The toolset key: set the managed headless list, or (--full-toolset)
+    // remove a managed list a previous stamp wrote. `unset` is Hermes's own remover.
+    const ts = actions.find((a) => a.kind === "config_set" && a.target === TOOLSET_KEY);
+    if (ts !== undefined && ts.outcome !== "unchanged") {
+      const argv = o.fullToolset ? [bin, "config", "unset", TOOLSET_KEY] : [bin, "config", "set", TOOLSET_KEY, JSON.stringify(HEADLESS_TOOLSET)];
+      const r = await spawn(argv);
+      if (r.exitCode !== 0) throw fail("config_set_failed", `hermes config ${argv[2]} ${TOOLSET_KEY} exited ${r.exitCode}: ${lastLine(r.stderr || r.stdout)}`);
+      const now = lookupKey(readHermesConfig(home), TOOLSET_KEY);
+      const held = o.fullToolset ? now === undefined || now === null : isHeadlessToolset(now);
+      if (!held) throw fail("config_set_ineffective", `hermes config ${argv[2]} ${TOOLSET_KEY} exited 0 but config.yaml does not reflect it`);
+      ts.applied = true;
+    }
+
+    const envKey = actions.find((a) => a.kind === "env_key");
+    if (envKey !== undefined && state.modelKey !== undefined) {
+      if (envKey.outcome !== "unchanged") {
+        const envPath = join(home, ".env");
+        const next = envFileWithKey(existsSync(envPath) ? readFileSync(envPath, "utf8") : null, MODEL_KEY_ENV, state.modelKey);
+        const tmp = `${envPath}.suite-${process.pid}`;
+        writeFileSync(tmp, next, { mode: 0o600 });
+        chmodSync(tmp, 0o600);
+        renameSync(tmp, envPath);
+        envKey.applied = true;
+      }
+      state.warnings.push(
+        `the model API key is stored in ${join(home, ".env")} as ${MODEL_KEY_ENV}; Hermes copies .env into os.environ ` +
+          `every turn and children it spawns without a scrub inherit it (upstream defect)`,
+      );
+    }
+  }
+
   return writer;
 }
 
@@ -1398,14 +1506,28 @@ export function oldNamesIn(opts: Pick<HermesOptions, "root" | "hermesHome">): st
 /**
  * Attach to this agent's live session WITHOUT stamping, for a root that still
  * holds names an earlier release wrote ({@link oldNamesIn}): the stamp would
- * rename them under the running agent. Returns null when no session is live:
- * the caller then stamps and starts as usual, and that start renames.
+ * rename them under the running agent. Returns null when tmux answered that no
+ * session is live: the caller then stamps and starts as usual, and that start
+ * renames. Returns RENAME_REFUSED_EXIT, having written nothing, when liveness
+ * cannot be determined (tmux not on PATH, or a probe that failed): see
+ * tmux.ts sessionLiveness.
  */
 async function attachWithoutStamp(opts: HermesOptions, deps: HermesDeps, names: string[]): Promise<number | null> {
   const session = sessionNameForAgent(agentNameForRoot(opts.root));
   const sessionEnv = harnessChildEnv(deps.env, { HERMES_HOME: opts.hermesHome, TMUX: deps.env.TMUX });
-  const live = await sessionIsLive(session, sessionEnv, { agentName: HERMES_AGENT_COMM, tmux: deps.tmux });
-  if (!live) return null;
+  // UNKNOWN IS LIVE (0.12.1). With tmux off PATH, or a probe that failed,
+  // this machine cannot see an agent that may be running, so it renames
+  // nothing and starts nothing. Not an attach: there is no session to attach to.
+  const live = await sessionLiveness(derivedCandidates(session), deps.tmux ?? liveTmuxDeps(sessionEnv), HERMES_AGENT_COMM);
+  if (live.state === "unknown") {
+    deps.stderr(
+      `${CLI_NAME}: ${opts.root} still holds names an earlier ${CLI_NAME} wrote (${names.join(", ")}), and whether its agent is running ` +
+        `cannot be told here: ${live.reason}. Refusing to rename them under an agent that may be running; nothing was written and nothing was started.\n` +
+        `${CLI_NAME}: if the agent is stopped, start it in this terminal with --no-session (which renames them), or make tmux reachable and run this again.\n`,
+    );
+    return RENAME_REFUSED_EXIT;
+  }
+  if (live.state !== "live") return null;
   deps.stderr(
     `${CLI_NAME}: ${opts.root} still holds names an earlier ${CLI_NAME} wrote (${names.join(", ")}) and its agent is running; ` +
       `attaching without stamping. They are renamed when the agent next starts.\n`,
