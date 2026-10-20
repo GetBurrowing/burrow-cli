@@ -14,6 +14,8 @@ import {
   detectState,
   killSessionArgv,
   liveTmuxDeps,
+  NO_TMUX_SERVER,
+  sessionLiveness,
   looksLikeAgent,
   nameDigest,
   newSessionArgv,
@@ -634,5 +636,39 @@ describe("resolveLaunchSession", () => {
   test("burrow- wins whenever it exists, even beside a live suite- twin", async () => {
     const { d } = server("burrow-x\t10\tzsh\nsuite-x\t10\tzsh\n", LIVE_PS);
     expect(await resolveLaunchSession(["burrow-x", "suite-x"], d)).toEqual({ session: "burrow-x", state: "live" });
+  });
+});
+
+describe("sessionLiveness (0.12.2): unknown is not none", () => {
+  const deps = (listPanes: { exitCode: number; stdout: string; stderr: string }, ps = { exitCode: 0, stdout: "", stderr: "" }, has = true): TmuxDeps => ({
+    env: {},
+    which: () => (has ? "/usr/bin/tmux" : null),
+    run: async (argv) => (argv[1] === "list-panes" ? listPanes : ps),
+  });
+  const ok = (stdout: string) => ({ exitCode: 0, stdout, stderr: "" });
+
+  test("each no-server message tmux prints is none (3.7b measured; dead socket; older releases)", async () => {
+    for (const stderr of [
+      "error connecting to /tmp/tmux-1001/default (No such file or directory)\n",
+      "error connecting to /tmp/tmux-1001/default (Connection refused)\n",
+      "no server running on /tmp/tmux-1001/default\n",
+    ]) {
+      expect(NO_TMUX_SERVER.test(stderr)).toBe(true);
+      expect(await sessionLiveness(["burrow-a"], deps({ exitCode: 1, stdout: "", stderr }))).toEqual({ state: "none" });
+    }
+  });
+
+  test("tmux off PATH, any other list-panes failure, and a failed ps beside a present session are unknown", async () => {
+    expect((await sessionLiveness(["burrow-a"], deps(ok(""), undefined, false))).state).toBe("unknown");
+    expect((await sessionLiveness(["burrow-a"], deps({ exitCode: 1, stdout: "", stderr: "permission denied\n" }))).state).toBe("unknown");
+    const failedPs = await sessionLiveness(["burrow-a"], deps(ok("burrow-a\t100\tbash\n"), { exitCode: 1, stdout: "", stderr: "" }));
+    expect(failedPs.state).toBe("unknown");
+  });
+
+  test("live, stale and absent sessions answer as detectState would", async () => {
+    const tree = { exitCode: 0, stdout: "  100     1 bash    bash\n  101   100 hermes  /v/bin/hermes gateway run\n", stderr: "" };
+    expect(await sessionLiveness(["burrow-a", "suite-a"], deps(ok("suite-a\t100\tbash\n"), tree), "hermes")).toEqual({ state: "live" });
+    expect(await sessionLiveness(["burrow-a"], deps(ok("burrow-a\t100\tbash\n"), ok("  100     1 bash    bash\n")), "hermes")).toEqual({ state: "none" });
+    expect(await sessionLiveness(["burrow-a"], deps(ok("other\t100\tbash\n")), "hermes")).toEqual({ state: "none" });
   });
 });

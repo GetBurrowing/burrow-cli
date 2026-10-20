@@ -170,7 +170,12 @@ function fakeTmux(panes = "", ps = ""): FakeTmux {
       which: () => "/usr/bin/tmux",
       run: async (argv) => {
         ran.push(argv);
-        if (argv[1] === "list-panes") return { exitCode: panes === "" ? 1 : 0, stdout: panes, stderr: "" };
+        // MEASURED, tmux 3.7b with no server running: exit 1 and this line.
+        if (argv[1] === "list-panes") {
+          return panes === ""
+            ? { exitCode: 1, stdout: "", stderr: "error connecting to /tmp/tmux-1000/default (No such file or directory)\n" }
+            : { exitCode: 0, stdout: panes, stderr: "" };
+        }
         if (argv[0] === "ps") return { exitCode: 0, stdout: ps, stderr: "" };
         return { exitCode: 0, stdout: "", stderr: "" };
       },
@@ -784,8 +789,8 @@ describe("refusals and failures", () => {
     expect((await stamp()).exitCode).toBe(0);
     expect(JSON.parse(readFileSync(join(root, ".burrow-stamp.json"), "utf8")).verdict).toBe("pass");
     // A changed model is a planned config set; the installer then fails first.
-    const installer = join(channelCheckoutDir(makeDeps().env), "install.sh");
-    writeFileSync(installer, `#!/usr/bin/env bash\necho "hermes-suite-channel: error: /bin/sh is older than Python 3.8" >&2\nexit 1\n`);
+    // Through the stub's knob, not by editing the checkout: since 0.12.2 an edited checkout is refused before the installer runs.
+    writeFileSync(join(home, "installer-knob"), "fail-early\n");
     const before = readFileSync(join(hermesHome, "config.yaml"), "utf8");
     const { result, exitCode } = await stamp(stampArgs().map((a) => (a === "wave-model" ? "other-model" : a)));
     expect(exitCode).toBe(1);
@@ -1383,6 +1388,224 @@ describe("0.12.0: a pre-0.12.0 Hermes home is renamed on start, never on attach"
   });
 });
 
+/* ------------------------------------------------------------------------- */
+/* 0.12.2: a failed start leaves a pre-0.12.0 home as it was                  */
+/* ------------------------------------------------------------------------- */
+
+/** mtime of every FILE under `dir` (directory mtimes are outside the restore's guarantee). */
+function fileMtimes(dir: string): Record<string, number> {
+  const out: Record<string, number> = {};
+  const walk = (d: string): void => {
+    for (const n of readdirSync(d).sort()) {
+      const p = join(d, n);
+      const st = lstatSync(p);
+      if (st.isDirectory()) walk(p);
+      else out[relative(dir, p)] = st.mtimeMs;
+    }
+  };
+  walk(dir);
+  return out;
+}
+
+const setKnob = (v: string): void => writeFileSync(join(home, "installer-knob"), `${v}\n`);
+const checkoutDir = (): string => channelCheckoutDir(baseEnv());
+
+/** A stamped root put back to pre-0.12.0 names, and what it looked like. */
+async function oldHome(): Promise<{ hashes: Record<string, string>; mtimes: Record<string, number>; ino: number; calls: number; installs: number }> {
+  makeManagedPython();
+  expect((await stamp()).exitCode).toBe(0);
+  makePre012Home();
+  stderr = [];
+  return {
+    hashes: treeHashes(hermesHome),
+    mtimes: fileMtimes(hermesHome),
+    ino: statSync(oldTokenPath()).ino,
+    calls: stubCalls().length,
+    installs: installerCalls().length,
+  };
+}
+
+function expectAsBefore(before: { hashes: Record<string, string>; mtimes: Record<string, number>; ino: number }): void {
+  expect(treeHashes(hermesHome)).toEqual(before.hashes);
+  expect(fileMtimes(hermesHome)).toEqual(before.mtimes);
+  const st = statSync(oldTokenPath());
+  expect(st.ino).toBe(before.ino);
+  expect(st.mode & 0o777).toBe(0o600);
+  expect(existsSync(tokenFilePath(hermesHome))).toBe(false);
+  expect(existsSync(join(hermesHome, "plugins", "burrow-platform"))).toBe(false);
+}
+
+/** The rename really ran before the failure: otherwise "as before" would prove nothing. */
+function expectRenameRan(since: number): void {
+  const run = stubCalls().slice(since).map((c) => c.argv.join(" "));
+  expect(run).toContain(`plugins remove ${OLD_PLUGIN}`);
+  expect(run).toContain(`config unset mcp_servers.${OLD_MCP}`);
+}
+
+describe("0.12.2: a start that fails after the rename restores the pre-0.12.0 home", () => {
+  test("installer exits 1 before writing: the home is byte-identical, the token keeps its inode, exit 1 with channel_install_failed", async () => {
+    const before = await oldHome();
+    setKnob("fail-early");
+    const tmux = fakeTmux();
+    expect(await runHermes(stampArgs(), makeDeps({ tmux: tmux.deps }))).toBe(1);
+    expectRenameRan(before.calls);
+    expect(installerCalls().length).toBe(before.installs + 1);
+    expectAsBefore(before);
+    expect(tmux.ran.filter((a) => a[1] === "new-session")).toEqual([]);
+    const err = stderr.join("");
+    expect(err).toContain("the hermes-suite-channel installer exited 1");
+    expect(err).toContain("they were put back as they were");
+    expect(readdirSync(hermesHome).filter((n) => n.startsWith(".burrow-start-snapshot-"))).toEqual([]);
+
+    // The same failure through the stamp names its code, and restores again.
+    const n = stubCalls().length;
+    const { result, exitCode } = await stamp();
+    expect(exitCode).toBe(1);
+    expect(result.error?.code).toBe("channel_install_failed");
+    expect(result.actions.filter((a) => a.kind === "legacy_name").map((a) => a.applied)).toEqual([false, false, false]);
+    expectRenameRan(n);
+    expectAsBefore(before);
+  });
+
+  test("installer writes every new name (and a NEW token inode), then exits 1: the home is byte-identical", async () => {
+    const before = await oldHome();
+    // A different token makes the installer replace the token file: a new inode under the new name.
+    writeFileSync(tokenPath, canary("rotated"));
+    setKnob("fail-late");
+    expect(await runHermes(stampArgs(), makeDeps({ tmux: fakeTmux().deps }))).toBe(1);
+    expectRenameRan(before.calls);
+    const run = stubCalls().slice(before.calls).map((c) => c.argv.join(" "));
+    expect(run).toContain("plugins enable burrow-platform");
+    expect(run.some((l) => l.startsWith("config set mcp_servers.burrow."))).toBe(true);
+    const err = stderr.join("");
+    expect(err).toContain("wrote the runtime token");
+    expect(err).toContain("injected failure after every write");
+    expectAsBefore(before);
+  });
+
+  test("the post-installer token-mode check fails (installer left 0644): the home is byte-identical, mode back to 0600", async () => {
+    const before = await oldHome();
+    setKnob("token-0644");
+    expect(await runHermes(stampArgs(), makeDeps({ tmux: fakeTmux().deps }))).toBe(1);
+    expectRenameRan(before.calls);
+    expect(stderr.join("")).toContain("it must be 0600");
+    expectAsBefore(before);
+    const { result } = await stamp();
+    expect(result.error?.code).toBe("token_file_mode");
+    expectAsBefore(before);
+  });
+
+  test("the checkout failing (dingus's measured plugin_checkout_failed) happens BEFORE the rename: zero Hermes writes, byte-identical", async () => {
+    const before = await oldHome();
+    // A pin the channel repo does not have: cat-file misses, the fetch succeeds, the checkout fails.
+    const { result, exitCode } = await stamp(stampArgs(), makeDeps({ channelRef: "0123456789abcdef0123456789abcdef01234567" }));
+    expect(exitCode).toBe(1);
+    expect(result.error?.code).toBe("plugin_checkout_failed");
+    expect(writes(stubCalls().slice(before.calls))).toEqual([]);
+    expect(installerCalls().length).toBe(before.installs);
+    expectAsBefore(before);
+  });
+
+  test("positive control: with no failure injected the same home is renamed and the snapshot is removed", async () => {
+    await oldHome();
+    expect(await runHermes(stampArgs(), makeDeps({ tmux: fakeTmux().deps }))).toBe(0);
+    expect(existsSync(oldTokenPath())).toBe(false);
+    expect(existsSync(tokenFilePath(hermesHome))).toBe(true);
+    expect(existsSync(join(hermesHome, "plugins", "burrow-platform"))).toBe(true);
+    expect(readdirSync(hermesHome).filter((n) => n.startsWith(".burrow-start-snapshot-"))).toEqual([]);
+  });
+});
+
+describe("0.12.2: a shared channel checkout with local edits is refused before anything is written", () => {
+  test("a modified TRACKED file refuses with exit 2 and plugin_checkout_dirty; zero Hermes writes; the edit survives", async () => {
+    const before = await oldHome();
+    const dir = checkoutDir();
+    expect(existsSync(join(dir, ".git"))).toBe(true);
+    writeFileSync(join(dir, "install.sh"), `${readFileSync(join(dir, "install.sh"), "utf8")}# an operator's edit\n`);
+    const diff = sh(["git", "-C", dir, "diff"]);
+    expect(diff).toContain("an operator's edit");
+
+    const deps = makeDeps({ tmux: fakeTmux().deps });
+    expect(await runHermes(stampArgs(), deps)).toBe(2);
+    const err = stderr.join("");
+    expect(err).toContain(`the shared channel checkout ${dir} has local edits`);
+    expect(err).toContain("  install.sh");
+    expect(err).toContain(`git -C ${dir} diff`);
+    expect(writes(stubCalls().slice(before.calls))).toEqual([]);
+    expect(installerCalls().length).toBe(before.installs);
+    expect(deps.execs).toEqual([]);
+    expect(treeHashes(hermesHome)).toEqual(before.hashes);
+    expect(sh(["git", "-C", dir, "diff"])).toBe(diff);
+
+    const { result, exitCode } = await stamp();
+    expect(exitCode).toBe(2);
+    expect(result.error?.code).toBe("plugin_checkout_dirty");
+    expect(writes(stubCalls().slice(before.calls))).toEqual([]);
+    expect(treeHashes(hermesHome)).toEqual(before.hashes);
+    expect(sh(["git", "-C", dir, "diff"])).toBe(diff);
+  });
+
+  test("UNTRACKED files in the checkout (an installer's __pycache__) do not refuse: the start renames", async () => {
+    await oldHome();
+    const dir = checkoutDir();
+    mkdirSync(join(dir, "__pycache__"));
+    writeFileSync(join(dir, "__pycache__", "x.cpython-314.pyc"), "x");
+    writeFileSync(join(dir, "stray.txt"), "x");
+    expect(await runHermes(stampArgs(), makeDeps({ tmux: fakeTmux().deps }))).toBe(0);
+    expect(existsSync(oldTokenPath())).toBe(false);
+    expect(existsSync(join(hermesHome, "plugins", "burrow-platform"))).toBe(true);
+  });
+});
+
+describe("0.12.2: when liveness cannot be determined, nothing is renamed", () => {
+  const noTmux = (): TmuxDeps => ({ ...fakeTmux().deps, which: () => null });
+
+  test("tmux not on PATH: a pre-0.12.0 home is refused with exit 7, zero Hermes calls, byte-identical", async () => {
+    const before = await oldHome();
+    const deps = makeDeps({ tmux: noTmux() });
+    expect(await runHermes(stampArgs(), deps)).toBe(7);
+    expect(stubCalls().length).toBe(before.calls);
+    expect(installerCalls().length).toBe(before.installs);
+    expect(deps.execs).toEqual([]);
+    expect(treeHashes(hermesHome)).toEqual(before.hashes);
+    expect(fileMtimes(hermesHome)).toEqual(before.mtimes);
+    const err = stderr.join("");
+    expect(err).toContain("tmux is not on PATH");
+    expect(err).toContain("--no-session");
+  });
+
+  test("a tmux probe that fails for another reason is unknown too: exit 7, nothing written", async () => {
+    const before = await oldHome();
+    const broken: TmuxDeps = {
+      ...fakeTmux().deps,
+      run: async (argv) =>
+        argv[1] === "list-panes" ? { exitCode: 1, stdout: "", stderr: "open terminal failed: permission denied\n" } : { exitCode: 0, stdout: "", stderr: "" },
+    };
+    expect(await runHermes(stampArgs(), makeDeps({ tmux: broken }))).toBe(7);
+    expect(stubCalls().length).toBe(before.calls);
+    expect(treeHashes(hermesHome)).toEqual(before.hashes);
+    expect(stderr.join("")).toContain("tmux list-panes exited 1: open terminal failed: permission denied");
+  });
+
+  test("no tmux and --no-session (the operator says it is stopped): renames, then runs the gateway here", async () => {
+    await oldHome();
+    const deps = makeDeps({ tmux: noTmux() });
+    expect(await runHermes(stampArgs(["--no-session"]), deps)).toBe(0);
+    expect(existsSync(oldTokenPath())).toBe(false);
+    expect(deps.execs.map((e) => e.argv.slice(1, 3))).toEqual([["gateway", "run"]]);
+  });
+
+  test("no tmux and no old names: unchanged, it stamps and runs the gateway directly with the tmux warning", async () => {
+    makeManagedPython();
+    const deps = makeDeps({ tmux: noTmux() });
+    expect(await runHermes(stampArgs(), deps)).toBe(0);
+    // runInSession without tmux execs the relaunch (this CLI, --gateway-only) in this terminal.
+    expect(deps.execs).toHaveLength(1);
+    expect(deps.execs[0]?.argv).toContain("--gateway-only");
+    expect(stderr.join("")).toContain("tmux is not installed");
+  });
+});
+
 describe("--stamp-only as a subprocess: the machine contract", () => {
   async function run(args: string[]) {
     const proc = Bun.spawn(["bun", HERMES_FIXTURE, ...args], {
@@ -1422,8 +1645,8 @@ describe("--stamp-only as a subprocess: the machine contract", () => {
 });
 
 describe("pins", () => {
-  test("the channel is pinned to the commit tagged v0.4.0 on burrow-channel-hermes main (PR #9)", () => {
-    expect(HERMES_CHANNEL_REF).toBe("4d64006780bc3c8011d034b20910c0aee06aa4c6");
+  test("the channel is pinned to the commit tagged v0.4.1 on burrow-channel-hermes main (PR #10)", () => {
+    expect(HERMES_CHANNEL_REF).toBe("189683ae8a0c7272221d13d0fef0f4e14bb242e1");
   });
 
   test("the pin's DEPLOYER comment is present, so the bump is not forgotten at merge", () => {

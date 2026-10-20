@@ -12,6 +12,12 @@
 #
 # Each call is recorded under $HOME/installer-calls/<n>/: argv (NUL separated),
 # env (env -0), and stdin (only when the token came from stdin).
+#
+# Failure knob (0.12.2 transactional-start tests): the first word of
+# $HOME/installer-knob, when that file exists:
+#   fail-early   exit 1 before writing anything
+#   fail-late    write every new name (token, .env, plugin, enable, MCP entry), then exit 1
+#   token-0644   do everything, then leave the token file mode 0644 and succeed
 set -euo pipefail
 
 log() { printf 'hermes-suite-channel: %s\n' "$*" >&2; }
@@ -24,6 +30,9 @@ CALL="$LOG/$((n + 1))"
 mkdir -p "$CALL"
 printf '%s\0' "$@" >"$CALL/argv"
 env -0 >"$CALL/env"
+KNOB=""
+[ ! -f "$HOME/installer-knob" ] || read -r KNOB <"$HOME/installer-knob" || true
+[ "$KNOB" != fail-early ] || die "injected failure before any write (fail-early)"
 
 URL="" RID="" HH="" TF="" HB="hermes" PY="" ALLOW="" USERS=""
 while [ "$#" -gt 0 ]; do
@@ -120,5 +129,7 @@ have_args="$("$HB" config get mcp_servers.burrow.args --json 2>/dev/null || true
 [ "$have_cmd" = "$want_cmd" ] || "$HB" config set mcp_servers.burrow.command "$want_cmd" >&2
 [ "$have_args" = "$want_args" ] || "$HB" config set mcp_servers.burrow.args "$want_args" >&2
 
+[ "$KNOB" != fail-late ] || die "injected failure after every write (fail-late)"
+[ "$KNOB" != token-0644 ] || chmod 644 "$TP"
 log "restart the gateway to load it: hermes gateway restart"
 printf '%s\n' "hermes-suite-channel: installed"
