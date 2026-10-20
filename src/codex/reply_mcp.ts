@@ -1,5 +1,5 @@
 /**
- * The `suite-channel` MCP server Codex runs: `suite_reply`, `suite_typing`,
+ * The `burrow-channel` MCP server Codex runs: `suite_reply`, `suite_typing`,
  * `suite_reply_chunk` and `suite_reply_with_media` — the same names and input
  * schemas as the Claude channel plugin, so an agent's habits carry over.
  *
@@ -155,7 +155,7 @@ export async function handleMcpMessage(line: string, io: McpIo, version: string)
       return ok({
         protocolVersion: (msg.params?.protocolVersion as string | undefined) ?? "2025-06-18",
         capabilities: { tools: {} },
-        serverInfo: { name: "suite-channel", version },
+        serverInfo: { name: "burrow-channel", version },
       });
     case "ping":
       return ok({});

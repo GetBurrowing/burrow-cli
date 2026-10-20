@@ -146,7 +146,8 @@ describe("renderPatch", () => {
   });
 
   test("declares one MCP server per entry, not a servers map", () => {
-    expect(patch).toContain("serverName: startup-suite");
+    expect(patch).toContain("serverName: burrow\n");
+    expect(patch).not.toContain("startup-suite");
     expect(patch).not.toContain("servers:");
   });
 

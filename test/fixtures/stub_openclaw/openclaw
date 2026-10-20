@@ -10,7 +10,7 @@
  *                           `token` REDACTED and its schema defaults ADDED, exactly as the capture
  *                           in ../openclaw-2026.9.4/config-get-account.json shows; exit 1 + {"ok":false,
  *                           "error":{"message":"Config path is valid but unset: <p>. ..."}}
- *                           or "Unknown config path: <p>. ..." for channels.startup-suite.*
+ *                           or "Unknown config path: <p>. ..." for channels.burrow.*
  *                           before the plugin is linked
  *   config validate --json  {"valid":true,"path":..,"warnings":[]} exit 0, or
  *                           {"ok":false,..,"valid":false,..,"issues":[..]} exit 1
@@ -124,17 +124,17 @@ const ACCOUNT_DEFAULTS: Obj = Object.fromEntries(
 const bundled = (JSON.parse(readFileSync(join(CAPTURED, "plugins-list.onboard.json"), "utf8")) as { plugins: Obj[] }).plugins;
 /** Loaded even under an allowlist that omits it (measured: 1 of 39 survives allow=[ours]). */
 const ALWAYS_LOADED = new Set(["memory-core"]);
-const OURS = "startup-suite-channel-plugin";
+const OURS = "burrow-channel-plugin";
 
 /** What `config get` prints for a value: accounts redacted and defaulted, as 2026.9.4 does. */
 const asGot = (path: string, v: unknown): unknown => {
   const account = (a: unknown): unknown => (isObj(a) ? { ...a, ...Object.fromEntries(Object.entries(ACCOUNT_DEFAULTS).filter(([k]) => !(k in a))), ...(typeof a.token === "string" ? { token: REDACTED } : {}) } : a);
   const parts = path.split(".");
-  if (parts[0] !== "channels" || parts[1] !== "startup-suite") return v;
+  if (parts[0] !== "channels" || parts[1] !== "burrow") return v;
   if (parts.length === 5 && parts[2] === "accounts" && parts[4] === "token") return typeof v === "string" ? REDACTED : v;
   if (parts.length === 4 && parts[2] === "accounts") return account(v);
   if (parts.length === 3 && parts[2] === "accounts" && isObj(v)) return Object.fromEntries(Object.entries(v).map(([k, a]) => [k, account(a)]));
-  if (parts.length === 2 && isObj(v) && isObj(v.accounts)) return { ...v, accounts: asGot("channels.startup-suite.accounts", v.accounts) };
+  if (parts.length === 2 && isObj(v) && isObj(v.accounts)) return { ...v, accounts: asGot("channels.burrow.accounts", v.accounts) };
   return v;
 };
 
@@ -192,7 +192,7 @@ if (a0 === "onboard") {
 if (a0 === "config" && a1 === "get") {
   const d = read();
   const path = a2 ?? "";
-  if (path.startsWith("channels.startup-suite") && !pluginLinked(d)) {
+  if (path.startsWith("channels.burrow") && !pluginLinked(d)) {
     cliError(`Unknown config path: ${path}. Run openclaw config schema to inspect valid paths.`);
   }
   const found = issues(d);
@@ -210,7 +210,7 @@ if (a0 === "config" && a1 === "set") {
   const path = a2 ?? "";
   const raw = argv[3] ?? "";
   const d = read();
-  if (path.startsWith("channels.startup-suite") && !pluginLinked(d)) {
+  if (path.startsWith("channels.burrow") && !pluginLinked(d)) {
     cliError(`Unknown config path: ${path}. Run openclaw config schema to inspect valid paths.`);
   }
   let value: unknown = raw;
@@ -262,7 +262,7 @@ if (a0 === "plugins" && a1 === "install") {
   const d = read();
   const paths = (get(d, "plugins.load.paths") as string[] | undefined) ?? [];
   if (link && !paths.includes(path)) set(d, "plugins.load.paths", [...paths, path]);
-  set(d, "plugins.entries.startup-suite-channel-plugin", { enabled: true });
+  set(d, "plugins.entries.burrow-channel-plugin", { enabled: true });
   write(d);
   out(`Linked plugin path: ${path}`);
   process.exit(0);
@@ -283,7 +283,7 @@ if (a0 === "plugins" && a1 === "doctor") {
     process.exit(0);
   }
   const d = read();
-  const errs = knobs.doctor === "error" ? [{ pluginId: "startup-suite-channel-plugin", message: "failed to load" }] : [];
+  const errs = knobs.doctor === "error" ? [{ pluginId: "burrow-channel-plugin", message: "failed to load" }] : [];
   const rows = new Map(pluginList(d).map((p) => [p.id as string, p]));
   const entries = get(d, "plugins.entries");
   const warnings: string[] = [];
@@ -312,7 +312,7 @@ if (a0 === "plugins" && a1 === "inspect") {
       id: a2,
       name: "Burrow Channel",
       status,
-      enabled: get(d, "plugins.entries.startup-suite-channel-plugin.enabled") === true,
+      enabled: get(d, "plugins.entries.burrow-channel-plugin.enabled") === true,
       ...(status === "error" ? { error: "Cannot find module 'phoenix'" } : {}),
     },
     install: { source: "path" },

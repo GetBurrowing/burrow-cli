@@ -1,6 +1,6 @@
 /**
  * The pieces of `suite codex` other than the bridge: the Phoenix client, the
- * suite-channel MCP server and its socket to the bridge, and the verb itself.
+ * burrow-channel MCP server and its socket to the bridge, and the verb itself.
  */
 import { afterAll, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
@@ -9,6 +9,7 @@ import { join } from "node:path";
 import { PhoenixChannel, redactUrl, socketUrl, type SocketLike } from "../src/codex/phoenix.ts";
 import { handleMcpMessage, listenBridgeSocket, socketForwarder, TOOL_SPECS } from "../src/codex/reply_mcp.ts";
 import {
+  CHANNEL_MCP,
   MCP_TOKEN_ENV,
   NOT_LOGGED_IN_EXIT,
   MISSING_CODEX_EXIT,
@@ -141,12 +142,18 @@ describe("phoenix client", () => {
 });
 
 /* ------------------------------------------------------------------------- */
-/* suite-channel MCP server                                                   */
+/* burrow-channel MCP server                                                  */
 /* ------------------------------------------------------------------------- */
 
-describe("the suite-channel MCP server", () => {
+describe("the burrow-channel MCP server", () => {
   type Fwd = (tool: string, args: Record<string, unknown>) => Promise<{ ok: boolean; text: string }>;
   const io = (forward: Fwd = async () => ({ ok: true, text: "reply sent" })) => ({ write: () => {}, forward });
+
+  test("names itself burrow-channel, the id Codex is told to run it under", async () => {
+    const out = JSON.parse((await handleMcpMessage('{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}', io(), "0"))!);
+    expect(out.result.serverInfo.name).toBe("burrow-channel");
+    expect(out.result.serverInfo.name).toBe(CHANNEL_MCP);
+  });
 
   test("offers the Claude channel plugin's tool names", async () => {
     const out = JSON.parse((await handleMcpMessage('{"jsonrpc":"2.0","id":1,"method":"tools/list"}', io(), "0"))!);
@@ -235,15 +242,34 @@ describe("suite codex options and argv", () => {
     expect(argv.slice(0, 2)).toEqual(["/usr/bin/codex", "app-server"]);
     const c = argv.filter((_, i) => argv[i - 1] === "-c");
     expect(c).toEqual([
-      'mcp_servers.startup-suite.url="https://suite.example/mcp"',
-      `mcp_servers.startup-suite.bearer_token_env_var="${MCP_TOKEN_ENV}"`,
-      'mcp_servers.startup-suite.env_http_headers={"X-Proxy-Id"="CODEX_SUITE_MCP_HEADER_0"}',
-      'mcp_servers.startup-suite.default_tools_approval_mode="approve"',
-      'mcp_servers.suite-channel.command="/usr/bin/bun"',
-      'mcp_servers.suite-channel.args=["/opt/suite/src/cli.ts","codex","--reply-mcp"]',
-      'mcp_servers.suite-channel.env={BURROW_CODEX_BRIDGE_SOCKET="/run/user/1000/suite-codex-ab.sock",SUITE_CODEX_BRIDGE_SOCKET="/run/user/1000/suite-codex-ab.sock"}',
-      'mcp_servers.suite-channel.default_tools_approval_mode="approve"',
+      'mcp_servers.burrow.url="https://suite.example/mcp"',
+      `mcp_servers.burrow.bearer_token_env_var="${MCP_TOKEN_ENV}"`,
+      'mcp_servers.burrow.env_http_headers={"X-Proxy-Id"="CODEX_SUITE_MCP_HEADER_0"}',
+      'mcp_servers.burrow.default_tools_approval_mode="approve"',
+      'mcp_servers.burrow-channel.command="/usr/bin/bun"',
+      'mcp_servers.burrow-channel.args=["/opt/suite/src/cli.ts","codex","--reply-mcp"]',
+      'mcp_servers.burrow-channel.env={BURROW_CODEX_BRIDGE_SOCKET="/run/user/1000/suite-codex-ab.sock",SUITE_CODEX_BRIDGE_SOCKET="/run/user/1000/suite-codex-ab.sock"}',
+      'mcp_servers.burrow-channel.default_tools_approval_mode="approve"',
     ]);
+  });
+
+  test("the app-server argv carries only the burrow ids: mcp_servers.burrow. and mcp_servers.burrow-channel., no pre-0.12.0 id", () => {
+    const argv = appServerArgv({
+      codexBin: "/usr/bin/codex",
+      suiteUrl: "https://suite.example",
+      headerNames: ["X-Proxy-Id"],
+      self: ["/usr/bin/bun", "/opt/suite/src/cli.ts"],
+      socketPath: "/run/user/1000/suite-codex-ab.sock",
+    });
+    const c = argv.filter((_, i) => argv[i - 1] === "-c");
+    const ids = new Set(c.map((kv) => /^mcp_servers\.([^.]+)\./.exec(kv)?.[1]));
+    expect([...ids].sort()).toEqual(["burrow", "burrow-channel"]);
+    expect(c.some((kv) => kv.startsWith("mcp_servers.burrow."))).toBe(true);
+    expect(c.some((kv) => kv.startsWith("mcp_servers.burrow-channel."))).toBe(true);
+    for (const a of argv) {
+      expect(a).not.toContain("startup-suite");
+      expect(a).not.toContain("suite-channel");
+    }
   });
 
   test("the bridge socket path stays short wherever the agent root is", () => {

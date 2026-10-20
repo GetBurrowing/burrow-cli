@@ -8,7 +8,7 @@
  *  - `account/read` reports no account — the precondition that this test
  *    touches nobody's login;
  *  - the `-c mcp_servers.*` overrides from `appServerArgv` parse, and Codex
- *    spawns `suite codex --reply-mcp` as the `suite-channel` MCP server and
+ *    spawns `suite codex --reply-mcp` as the `burrow-channel` MCP server and
  *    lists its four tools;
  *  - `mcpServer/tool/call` on `suite_reply` goes Codex → reply MCP server →
  *    unix socket → bridge → a `reply` push: the agent's reply path, end to end;
@@ -28,7 +28,7 @@ import { AppServerClient, processTransport } from "../src/codex/app_server.ts";
 import { CodexBridge } from "../src/codex/bridge.ts";
 import type { Payload } from "../src/codex/phoenix.ts";
 import { listenBridgeSocket } from "../src/codex/reply_mcp.ts";
-import { appServerArgv, codexEnv } from "../src/commands/codex.ts";
+import { appServerArgv, CHANNEL_MCP, codexEnv } from "../src/commands/codex.ts";
 import { envValue } from "../src/env_names.ts";
 
 const CODEX = Bun.which("codex");
@@ -111,18 +111,18 @@ describe.if(CODEX !== null)("real codex app-server, no login", () => {
         type Status = { data: { name: string; tools: Record<string, unknown> }[] };
         let status: Status = { data: [] };
         for (let i = 0; i < 40; i++) {
-          status = await client.request<Status>("mcpServerStatus/list", { threadId, serverName: "suite-channel" });
-          if (Object.keys(status.data.find((s) => s.name === "suite-channel")?.tools ?? {}).length > 0) break;
+          status = await client.request<Status>("mcpServerStatus/list", { threadId, serverName: CHANNEL_MCP });
+          if (Object.keys(status.data.find((s) => s.name === CHANNEL_MCP)?.tools ?? {}).length > 0) break;
           await Bun.sleep(250);
         }
-        const tools = Object.keys(status.data.find((s) => s.name === "suite-channel")?.tools ?? {}).sort();
+        const tools = Object.keys(status.data.find((s) => s.name === CHANNEL_MCP)?.tools ?? {}).sort();
         expect(tools).toEqual(["suite_reply", "suite_reply_chunk", "suite_reply_with_media", "suite_typing"]);
 
         // suite_reply, called through Codex, lands as a reply push.
         pushes.length = 0;
         const r = await client.request<{ content: { text?: string }[]; isError?: boolean }>("mcpServer/tool/call", {
           threadId,
-          server: "suite-channel",
+          server: CHANNEL_MCP,
           tool: "suite_reply",
           arguments: { space_id: SPACE, content: "hello from codex" },
         });

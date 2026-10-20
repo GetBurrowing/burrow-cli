@@ -244,7 +244,7 @@ export function renderPatch(pluginPath: string, headerNames: string[]): string {
     - id: mcp-suite
       name: '@deepseek-ai/dsh-mcp-client'
       config:
-        serverName: startup-suite
+        serverName: burrow
         transport: streamable-http
         url: !!js process.env.BURROW_MCP_URL || process.env.SUITE_MCP_URL
         headers:

@@ -82,7 +82,7 @@ export interface EntryIdentity {
   runtimeId: string | null;
   /** The same entry's BURROW_URL, else SUITE_URL, or null. */
   channelUrl: string | null;
-  /** burrow (or, unmigrated, startup-suite) url, or null. */
+  /** The tools entry's url (`burrow`, or an unmigrated folder's old id from legacy_names.ts), or null. */
   toolsUrl: string | null;
 }
 

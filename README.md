@@ -425,10 +425,10 @@ What it writes, and with what mode:
 | --- | --- | --- | --- |
 | `<root>/burrow.json` | this CLI | default (`0644` under a `022` umask) | Burrow URL, runtime id, the token **ref**. No secret |
 | `<root>/.burrow-stamp.json` | this CLI | default | Stamp record: harness, writer and harness version, plugin ref, inputs digest, token ref, last verdict. A run that fails after its first write records `fail`, so an older `pass` never outlives it and `--gateway-only` refuses the root. A refusal before any write leaves it as it was. No secret |
-| `$HERMES_HOME/mcp-tokens/startup-suite-platform.runtime-token` | the channel installer | `0600` | The runtime token: the one sanctioned copy |
+| `$HERMES_HOME/mcp-tokens/burrow-platform.runtime-token` | the channel installer | `0600` | The runtime token: the one sanctioned copy |
 | `$HERMES_HOME/.env` | the channel installer; this CLI adds `CUSTOM_MODEL_API_KEY` | `0600` for this CLI's write | Channel keys; the model key when `--model-api-key-ref` is given |
-| `$HERMES_HOME/config.yaml` | `hermes config set` (model keys, headless policy, the toolset key); the channel installer (`mcp_servers.startup-suite`) | Hermes's own | Model routing; `approvals.mode: off` and `hooks_auto_accept: true` when absent; `platform_toolsets.startup_suite` unless `--full-toolset` |
-| `$HERMES_HOME/plugins/startup-suite-platform` | the channel installer | the installer's | The channel plugin |
+| `$HERMES_HOME/config.yaml` | `hermes config set` (model keys, headless policy, the toolset key); the channel installer (`mcp_servers.burrow`) | Hermes's own | Model routing; `approvals.mode: off` and `hooks_auto_accept: true` when absent; `platform_toolsets.startup_suite` unless `--full-toolset` |
+| `$HERMES_HOME/plugins/burrow-platform` | the channel installer | the installer's | The channel plugin |
 | `~/.local/share/burrow/burrow-channel-hermes` | this CLI (`git`) | git's | The channel checkout, pinned to one commit |
 | `~/.local/state/burrow/agents.json` | this CLI | default | The roster entry, on session creation |
 
@@ -527,7 +527,7 @@ What it writes, and with what mode:
 | `<root>/burrow.json` | this CLI | default | Burrow URL, runtime id, the token ref. No secret |
 | `<root>/.burrow-stamp.json` | this CLI | default | Stamp record, as for Hermes. No secret |
 | `<root>/.openclaw/` | this CLI | `0700` | OpenClaw's state directory |
-| `<root>/.openclaw/openclaw.json` | `openclaw onboard` / `openclaw config set` | OpenClaw's own | `gateway.port`, `plugins.load.paths`, `plugins.allow`, the plugin and channel entries, the account (its `token` is the **ref string**), one route binding |
+| `<root>/.openclaw/openclaw.json` | `openclaw onboard` / `openclaw config set` | OpenClaw's own | `gateway.port`, `plugins.load.paths`, `plugins.allow`, the plugin entry `plugins.entries.burrow-channel-plugin` and channel `channels.burrow`, the account (its `token` is the **ref string**), one route binding (`match.channel: burrow`) |
 | `~/.local/share/burrow/burrow-channel-openclaw` | this CLI (`git`, `npm ci`) | git's / npm's | The channel checkout pinned to one commit, and its dependencies |
 | `~/.local/state/burrow/agents.json` | this CLI | default | The roster entry, on session creation |
 
@@ -552,7 +552,7 @@ burrow codex --root ~/agents/oddjob --approvals decline --sandbox workspace-writ
 burrow codex                    connection, Codex login, then tmux session burrow-<agent>
   └ burrow codex --no-session   the bridge: Burrow runtime socket ⇄ app-server
       └ codex app-server       Burrow MCP servers passed as -c overrides
-          └ burrow codex --reply-mcp   the suite-channel MCP server (suite_reply …)
+          └ burrow codex --reply-mcp   the burrow-channel MCP server (suite_reply …)
 ```
 
 - **Connection.** The one `burrow init` saved for this folder (`agents/<key>.credentials.json`),
@@ -566,10 +566,10 @@ burrow codex                    connection, Codex login, then tmux session burro
   `--codex-home DIR` to point it somewhere else on purpose.
 - **MCP.** Codex gets two servers as `-c mcp_servers.…` overrides on the
   app-server command line, so no `config.toml` is edited:
-  - `startup-suite`, the install's `/mcp` endpoint, which has the same tool
+  - `burrow`, the install's `/mcp` endpoint, which has the same tool
     bundles a Claude agent has. The runtime token reaches Codex only as the
     environment variable named by `bearer_token_env_var`, never in an argv.
-  - `suite-channel`, which provides `suite_reply`, `suite_typing`,
+  - `burrow-channel`, which provides `suite_reply`, `suite_typing`,
     `suite_reply_chunk` and `suite_reply_with_media`, the same names and
     schemas as the Claude channel plugin. Codex runs it as a child process. It
     forwards each call over a unix socket to the bridge, which owns the one
@@ -713,7 +713,7 @@ Hermes env ships `ruamel.yaml`, because Hermes needs it to read its own config.
    own environment every turn, and children it spawns without a scrub inherit
    it, model key included.
 7. **The Hermes MCP command names a venv generation.** The interpreter the
-   channel installer registers as `mcp_servers.startup-suite.command` is the
+   channel installer registers as `mcp_servers.burrow.command` is the
    dependency venv Hermes selected at stamp time, which Hermes may replace on
    `hermes update`. A re-run of the stamp repairs it; nothing does in between.
 
@@ -908,8 +908,24 @@ place is checked before any changes. Remove one and start again.
 
 **Not renamed by 0.11.0:** user-scope entries (shared by every folder; an old
 one is reported by the convergence check, with the command to remove it); the
-MCP ids Codex, Hermes and OpenClaw register for themselves (`startup-suite`,
-`suite-channel` in their own configs); the `--suite-url` flag.
+`--suite-url` flag. The ids the other adapters register move in 0.12.0 (below).
+
+### The 0.12.0 rename: the codex, dsh, Hermes and OpenClaw ids
+
+0.12.0 finishes the rename for every other adapter. Again no dual support.
+
+| Adapter | Before 0.12.0 | From 0.12.0 | What moves it |
+| --- | --- | --- | --- |
+| codex | `-c mcp_servers.startup-suite.…` / `mcp_servers.suite-channel.…` | `mcp_servers.burrow.…` / `mcp_servers.burrow-channel.…` | nothing persisted: the next `codex app-server` start |
+| dsh | `.dsh/burrow.patch.yml` `serverName: startup-suite` | `serverName: burrow` | regenerated on every start |
+| Hermes | `mcp_servers.startup-suite`, plugin `startup-suite-platform`, `mcp-tokens/startup-suite-platform.runtime-token` | `mcp_servers.burrow`, `burrow-platform`, `mcp-tokens/burrow-platform.runtime-token` | moved on the next `burrow hermes` start (stamp path), before the channel installer |
+| OpenClaw | plugin `startup-suite-channel-plugin`, channel `startup-suite` | `burrow-channel-plugin`, `burrow` | **refused** on start, not moved (exit 7); the message prints the `openclaw` commands that clear them |
+
+An attach to a running agent changes nothing and refuses nothing new; the
+move or refusal waits for its next start. Old beside new in one Hermes place
+is refused (exit 7) with nothing moved. Tool names change for codex and dsh
+agents the same way they did for Claude (`mcp__burrow__…`); `suite_reply` and
+the other channel tool names do not.
 
 **The repo is `burrow-cli`; it was `suite-cli` before 0.9.0.** GitHub
 redirects the old name after a repo rename, but nothing here relies on that:

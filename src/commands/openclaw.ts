@@ -106,6 +106,8 @@ import {
 import { shellJoin } from "./hermes.ts";
 import { CLI_NAME } from "../version.ts";
 import { legacyNamesIn, migrateAgentRootOrSay } from "../agent_root_names.ts";
+import { openclawLegacyNames, openclawLegacyRefusal } from "../legacy_names.ts";
+import { RENAME_REFUSED_EXIT } from "./claude.ts";
 
 type Env = Record<string, string | undefined>;
 
@@ -116,14 +118,15 @@ type Env = Record<string, string | undefined>;
 /**
  * DEPLOYER: BUMP THIS BEFORE burrow-cli MERGES.
  *
- * This is the commit tagged v0.8.0 on burrow-channel-openclaw main (PR #32,
- * BURROW_* names with SUITE_* fallback, task 01a14b9f-b62c; Burrow rename C).
- * The repo was renamed from openclaw-suite-channel, whose URL redirects. It
- * replaced b220c8b1 (v0.7.0, PR #31).
+ * This is the commit tagged v0.9.0 on burrow-channel-openclaw main (PR #34,
+ * task 01a158c2): the plugin id became burrow-channel-plugin and the channel
+ * id burrow. It replaced ad307416 (v0.8.0, PR #32). OpenClaw loads it from
+ * this CLI's own checkout through `plugins.load.paths`, so the extension
+ * directory OpenClaw derives from the id is never involved here.
  * Pin a commit on main, never a branch tip: a squash merge deletes the branch
  * and the tip would dangle.
  */
-export const OPENCLAW_CHANNEL_REF = "ad307416839aaf266ce6fd941dbcc25446e0445c";
+export const OPENCLAW_CHANNEL_REF = "20c0e844ec447ec56da65dd5785bed7b6c1e558f";
 /** The channel repo's name. Its owner comes from repo_source.ts (SUITE_GITHUB_OWNER). */
 // The repo's own name since Burrow rename C. Its old name, openclaw-suite-channel, redirects; nothing relies on that.
 export const OPENCLAW_CHANNEL_REPO_NAME = "burrow-channel-openclaw";
@@ -148,8 +151,9 @@ export const OPENCLAW_NODE_FLOOR = ">=24.16.0 <25 || >=26.1.0";
 
 export const WRITER_VERSION = 1;
 
-export const PLUGIN_ID = "startup-suite-channel-plugin";
-export const CHANNEL_ID = "startup-suite";
+/** burrow-channel-openclaw v0.9.0's manifest `id` and `channels[0]`. The pre-v0.9.0 ids live in legacy_names.ts. */
+export const PLUGIN_ID = "burrow-channel-plugin";
+export const CHANNEL_ID = "burrow";
 
 /**
  * The gateway as `ps` shows it. MEASURED on the CLI path: the launcher's
@@ -163,6 +167,9 @@ export const CHANNEL_ID = "startup-suite";
  * `openclaw config get` in the pane's tree a live gateway.
  */
 export const OPENCLAW_GATEWAY_COMM = "openclaw-gateway";
+
+/** The stamp error code for a root whose openclaw.json still holds the pre-v0.9.0 plugin or channel id. */
+export const LEGACY_IDS_CODE = "legacy_openclaw_ids";
 
 /** OpenClaw's default gateway port, and the one hive's live gateway holds. */
 export const LIVE_GATEWAY_PORT = 18789;
@@ -435,7 +442,7 @@ export type ConfigRead = { present: true; value: unknown } | { present: false };
  *   set       exit 0, stdout is the value as JSON (`18801`, `["a"]`, an object)
  *   unset     exit 1, `{"ok":false,"error":{"message":"Config path is valid but unset: <path>. ..."}}`
  *   unknown   exit 1, message `Unknown config path: <path>. ...` — what
- *             `channels.startup-suite` reads as before the plugin is installed
+ *             `channels.<CHANNEL_ID>` reads as before the plugin is installed
  *   invalid   exit 1, message `OpenClaw config is invalid: <file>` plus `issues`
  * Unset and unknown are ABSENT; anything else that is not a value throws.
  */
@@ -501,7 +508,7 @@ export function parsePluginsDoctor(exitCode: number, stdout: string, stderr: str
 }
 
 /**
- * `openclaw plugins inspect startup-suite-channel-plugin --json`. MEASURED at
+ * `openclaw plugins inspect <PLUGIN_ID> --json`. MEASURED at
  * 2026.9.4 (absent): `{"ok":false,"error":{"message":"Plugin not found: ..."}}`.
  * Present, READ FROM SOURCE (plugins-inspect-command.ts): `{plugin: PluginRecord,
  * ..., install}` with `plugin.status` one of loaded | disabled | error.
@@ -604,7 +611,7 @@ export function mergedBindings(current: unknown, agentId: string): unknown[] {
  * `plugins.allow` is an EXCLUSIVE allowlist: once it is set, every plugin not
  * named in it is disabled, bundled ones included. MEASURED at 2026.9.4 on a
  * fresh onboard: 39 bundled plugins load with `plugins.allow` unset, and 1
- * (memory-core) with `plugins.allow = [startup-suite-channel-plugin]`; the
+ * (memory-core) with `plugins.allow = [<PLUGIN_ID>]`; the
  * harness's own model plugin `anthropic` is among the 38 lost, which is what
  * `plugins doctor` reports as `plugins.entries.anthropic: plugin disabled (not
  * in allowlist) but config is present`.
@@ -712,6 +719,31 @@ export function readOpenclawConfig(root: string): Record<string, unknown> | null
     throw new StampFailure(EXIT_FAILED, "openclaw_config_unreadable", `${path} is not a JSON object; \`openclaw config validate\` names the problem`);
   }
   return doc;
+}
+
+/**
+ * The pre-v0.9.0 plugin and channel ids this root's openclaw.json still
+ * holds (legacy_names.ts "OpenClaw"). Read-only; an unreadable file reads as
+ * none (the stamp then reports it).
+ */
+export function oldOpenclawIdsIn(root: string): string[] {
+  try {
+    return openclawLegacyNames(readOpenclawConfig(root)).map((n) => `${configPathFor(root)} ${n.path}`);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Refuse a start on a root that still holds the pre-v0.9.0 ids, naming the
+ * file and the OpenClaw commands that clear them. Nothing is moved: no root a
+ * burrow-cli stamp wrote held them when 0.12.0 was cut.
+ */
+function refuseOldOpenclawIds(root: string): void {
+  const names = openclawLegacyNames(readOpenclawConfig(root));
+  if (names.length === 0) return;
+  const prefix = `OPENCLAW_STATE_DIR=${stateDirFor(root)} OPENCLAW_CONFIG_PATH=${configPathFor(root)} OPENCLAW_HOME=${root} `;
+  throw refused(LEGACY_IDS_CODE, openclawLegacyRefusal(configPathFor(root), names, prefix));
 }
 
 /* ------------------------------------------------------------------------- */
@@ -1009,6 +1041,8 @@ export function openclawWriter(ctx: { opts: OpenclawOptions | null }, deps: Open
 
     async plan(inputs) {
       const o = opts();
+      // Before any read through OpenClaw and any write: a root on the old ids is refused, not stamped beside them.
+      refuseOldOpenclawIds(o.root);
       state.agentId = agentIdForRoot(o.root);
       state.stampedBefore = (await readStampRecord(o.root)) !== null;
       const absent = state.stampedBefore ? "repaired" : "written";
@@ -1243,17 +1277,18 @@ async function execGateway(opts: OpenclawOptions, deps: OpenclawDeps, bin: strin
 /**
  * Attach to this agent's live session WITHOUT stamping, for a root that still
  * holds pre-0.10.2 names (the stamp would rename them under the running
- * agent). Returns null when no session is live: the caller then stamps and
- * starts as usual, and that start renames.
+ * agent) or pre-v0.9.0 OpenClaw ids (the stamp would refuse them). Returns
+ * null when no session is live: the caller then stamps and starts as usual,
+ * and that start renames the former and refuses the latter.
  */
-async function attachWithoutStamp(opts: OpenclawOptions, deps: OpenclawDeps): Promise<number | null> {
+async function attachWithoutStamp(opts: OpenclawOptions, deps: OpenclawDeps, names: string[]): Promise<number | null> {
   const session = sessionNameForAgent(basename(opts.root));
   const sessionEnv = openclawChildEnv(deps.env, opts.root, { TMUX: deps.env.TMUX });
   const live = await sessionIsLive(session, sessionEnv, { agentName: OPENCLAW_GATEWAY_COMM, tmux: deps.tmux });
   if (!live) return null;
   deps.stderr(
-    `${CLI_NAME}: ${opts.root} still holds pre-0.10.2 names and its agent is running; ` +
-      `attaching without stamping. They are renamed when the agent next starts.\n`,
+    `${CLI_NAME}: ${opts.root} still holds names an earlier ${CLI_NAME} wrote (${names.join(", ")}) and its agent is running; ` +
+      `attaching without stamping. They are dealt with when the agent next starts.\n`,
   );
   return await runInSession(session, [], opts.root, sessionEnv, createStore(), deps.session, {
     agentName: OPENCLAW_GATEWAY_COMM,
@@ -1269,6 +1304,14 @@ async function attachWithoutStamp(opts: OpenclawOptions, deps: OpenclawDeps): Pr
 
 async function runGateway(opts: OpenclawOptions, deps: OpenclawDeps): Promise<number> {
   if (!migrateAgentRootOrSay(opts.root, deps.stderr, CLI_NAME)) return EXIT_REFUSED;
+  // A restore relaunches this path with no stamp before it: refuse the old ids here too, before the gateway reads them.
+  try {
+    refuseOldOpenclawIds(opts.root);
+  } catch (e) {
+    if (!(e instanceof StampFailure)) throw e;
+    deps.stderr(`${CLI_NAME}: ${e.message}\n`);
+    return e.code === LEGACY_IDS_CODE ? RENAME_REFUSED_EXIT : e.exitCode;
+  }
   const record = await readStampRecord(opts.root);
   if (record === null || record.harness !== "openclaw" || record.verdict !== "pass") {
     deps.stderr(`${CLI_NAME}: ${join(opts.root, STAMP_FILE)} records no passing openclaw stamp; run ${CLI_NAME} openclaw without --gateway-only first\n`);
@@ -1331,17 +1374,23 @@ export async function runOpenclaw(args: string[], deps: OpenclawDeps): Promise<n
   }
   if (opts.gatewayOnly) return await runGateway(opts, deps);
 
-  // NEVER RENAME UNDER A RUNNING AGENT (0.10.3). The stamp below renames a
-  // pre-0.10.2 root's `suite` names, so while this agent's session is live
-  // and the root still holds them, neither runs: this run only attaches, and
-  // the rename waits for the next start (`--gateway-only`, which renames).
-  // A root already renamed is stamped as before.
-  if (!opts.noSession && legacyNamesIn(opts.root).length > 0) {
-    const attach = await attachWithoutStamp(opts, deps);
-    if (attach !== null) return attach;
+  // NEVER RENAME UNDER A RUNNING AGENT (0.10.3, 0.12.0). The stamp below
+  // renames a pre-0.10.2 root's `suite` names and refuses a root on the
+  // pre-v0.9.0 OpenClaw ids, so while this agent's session is live and the
+  // root still holds either, neither runs: this run only attaches, and the
+  // rename or refusal waits for the next start. A root already renamed is
+  // stamped as before.
+  if (!opts.noSession) {
+    const names = [...legacyNamesIn(opts.root), ...oldOpenclawIdsIn(opts.root)];
+    if (names.length > 0) {
+      const attach = await attachWithoutStamp(opts, deps, names);
+      if (attach !== null) return attach;
+    }
   }
 
-  const { exitCode, writer } = await stampOpenclaw(args, deps, { stdout: () => {}, stderr: deps.stderr });
+  const { exitCode, writer, result } = await stampOpenclaw(args, deps, { stdout: () => {}, stderr: deps.stderr });
+  // The old ids are the rename refusal every adapter shares (claude.ts); --stamp-only keeps the contract's 2.
+  if (result.error?.code === LEGACY_IDS_CODE) return RENAME_REFUSED_EXIT;
   if (exitCode !== 0) return exitCode;
   const bin = writer.state.bin as string;
   const port = writer.state.port as number;

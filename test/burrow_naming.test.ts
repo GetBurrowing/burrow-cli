@@ -35,8 +35,8 @@ describe("the package says burrow", () => {
   test("name, version and description", () => {
     const pkg = JSON.parse(readFileSync(join(REPO, "package.json"), "utf8"));
     expect(pkg.name).toBe("burrow-cli");
-    expect(pkg.version).toBe("0.11.1");
-    expect(VERSION).toBe("0.11.1");
+    expect(pkg.version).toBe("0.12.0");
+    expect(VERSION).toBe("0.12.0");
     expect(pkg.bin).toEqual({ burrow: "./src/cli.ts" });
     expect(pkg.description).toBe("Connects a machine to a Burrow install, then sets up and runs its agent harness");
     expect(CLI_NAME).toBe("burrow");

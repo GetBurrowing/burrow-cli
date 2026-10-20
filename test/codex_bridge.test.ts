@@ -185,7 +185,7 @@ describe("a dispatch becomes a turn on the space's thread", () => {
     expect(turn?.params.input).toEqual([
       {
         type: "text",
-        text: `<channel source="startup-suite" space_id="${SPACE_A}" message_id="m-hello" reason="mention" author="Ryan" author_id="u-1">\nhello\n</channel>`,
+        text: `<channel source="burrow" space_id="${SPACE_A}" message_id="m-hello" reason="mention" author="Ryan" author_id="u-1">\nhello\n</channel>`,
         text_elements: [],
       },
     ]);
@@ -270,13 +270,30 @@ describe("a dispatch becomes a turn on the space's thread", () => {
   });
 });
 
+describe("the instructions name the burrow MCP servers", () => {
+  test("burrow-channel for replies, burrow for the rest, the burrow channel tag, and no pre-0.12.0 id", () => {
+    expect(DEVELOPER_INSTRUCTIONS).toContain('<channel source="burrow" ');
+    expect(DEVELOPER_INSTRUCTIONS).toContain("`burrow-channel` MCP server");
+    expect(DEVELOPER_INSTRUCTIONS).toContain("The `burrow` MCP server");
+    expect(DEVELOPER_INSTRUCTIONS).not.toContain("startup-suite");
+    expect(DEVELOPER_INSTRUCTIONS).not.toContain("suite-channel");
+  });
+});
+
 describe("threads survive a restart", () => {
   test("a saved thread is resumed, not restarted", async () => {
     const t = setup({ saved: { [SPACE_A]: "thread-old" } });
     t.server.resumable.add("thread-old");
     t.channel.deliver("attention", attention(SPACE_A, "back"));
     await t.bridge.whenIdle();
-    expect(t.server.calls("thread/resume")[0]?.params).toMatchObject({ threadId: "thread-old", cwd: "/srv/agents/codexy", excludeTurns: true });
+    // developerInstructions is re-sent on resume, so a thread saved before
+    // 0.12.0 is told the burrow server ids, not the ones it was started with.
+    expect(t.server.calls("thread/resume")[0]?.params).toMatchObject({
+      threadId: "thread-old",
+      cwd: "/srv/agents/codexy",
+      excludeTurns: true,
+      developerInstructions: DEVELOPER_INSTRUCTIONS,
+    });
     expect(t.server.calls("thread/start")).toEqual([]);
     expect(t.server.calls("turn/start")[0]?.params.threadId).toBe("thread-old");
   });
@@ -333,7 +350,7 @@ describe("approval requests follow the configured policy", () => {
   });
 });
 
-describe("suite-channel tool calls become socket pushes", () => {
+describe("burrow-channel tool calls become socket pushes", () => {
   test("suite_reply pushes a reply to the named space", async () => {
     const t = setup();
     expect(await t.bridge.channelTool("suite_reply", { space_id: SPACE_A, content: "done" })).toEqual({ ok: true, text: "reply sent" });
@@ -365,7 +382,7 @@ describe("the prompt envelope", () => {
       ],
     };
     expect(renderAttention(p, true)).toBe(
-      `<channel source="startup-suite" space_id="${SPACE_A}" reason="system_event" responsibility_key="standup">\n` +
+      `<channel source="burrow" space_id="${SPACE_A}" reason="system_event" responsibility_key="standup">\n` +
         "Recent context (last 2 turns in this space):\nRyan: morning\nDalton: hi\n\n---\n\nCurrent message:\nPost the standup.\n</channel>",
     );
     expect(renderAttention(p, false)).not.toContain("Recent context");

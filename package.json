@@ -1,6 +1,6 @@
 {
   "name": "burrow-cli",
-  "version": "0.11.1",
+  "version": "0.12.0",
   "description": "Connects a machine to a Burrow install, then sets up and runs its agent harness",
   "license": "MIT",
   "type": "module",
