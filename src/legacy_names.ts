@@ -9,7 +9,9 @@
  *   channel entry env  SUITE_<X> -> BURROW_<X> (the SUITE_* copies are no longer written)
  *
  * 0.12.0 adds the names a Hermes home holds (MCP id, platform plugin, token
- * file; the "Hermes" section below), moved on the hermes start path.
+ * file; the "Hermes" section below), moved on the hermes start path, and the
+ * OpenClaw plugin and channel ids (the "OpenClaw" section), which a start
+ * refuses rather than moves.
  *
  * From 0.11.0 every writer writes only the new names, and this module is the
  * ONLY place that spells the old ones. It follows the 0.10.2 agent-root rename
