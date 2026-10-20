@@ -556,3 +556,98 @@ export async function renameHermesHome(home: string, cli: HermesRenameCli): Prom
   }
   return changes;
 }
+
+/* ------------------------------------------------------------------------- */
+/* OpenClaw (0.12.0)                                                          */
+/* ------------------------------------------------------------------------- */
+
+/*
+ * burrow-channel-openclaw v0.9.0 renamed its plugin id and channel id. An
+ * openclaw.json that a pre-0.12.0 stamp wrote holds the old ones in:
+ *
+ *   channels.<channel id>                       startup-suite                -> burrow
+ *   bindings[].match.channel                    startup-suite                -> burrow
+ *   plugins.entries.<plugin id>, plugins.allow  startup-suite-channel-plugin -> burrow-channel-plugin
+ *
+ * Unlike Hermes, these are NOT moved: no root a burrow-cli stamp wrote was
+ * found holding them when 0.12.0 was cut, so a start REFUSES such a root
+ * (writing nothing) and names the OpenClaw commands that clear it. Those
+ * commands were MEASURED at OpenClaw 2026.9.9 in a throwaway
+ * OPENCLAW_STATE_DIR holding the v0.8.0 plugin linked: `config unset
+ * channels.<old>` removes the channel; `plugins uninstall <old> --force`
+ * removes the allowlist entry and the load path but LEAVES
+ * `plugins.entries.<old>` behind as `{enabled: false}`, so that is unset too;
+ * `config unset bindings[N]` removes one binding. After all four the file
+ * names neither old id and `config validate` passes. The next start then
+ * stamps the new ids.
+ *
+ * An attach to a live gateway refuses nothing new: it attaches without
+ * stamping (openclaw.ts), and the refusal waits for the next start.
+ */
+
+/** `[old, new]` OpenClaw plugin id. The new one is openclaw.ts PLUGIN_ID (asserted by test). */
+export const OPENCLAW_PLUGIN_RENAME = ["startup-suite-channel-plugin", "burrow-channel-plugin"] as const;
+/** `[old, new]` OpenClaw channel id. The new one is openclaw.ts CHANNEL_ID (asserted by test). */
+export const OPENCLAW_CHANNEL_RENAME = ["startup-suite", "burrow"] as const;
+
+/** The release from which the OpenClaw adapter reads only the new ids. */
+const OPENCLAW_SINCE = "0.12.0";
+
+/** One old id in openclaw.json, and the OpenClaw commands that clear it. */
+export interface OpenclawLegacyName {
+  /** Where, as a dotted path into openclaw.json. */
+  path: string;
+  /** Each `openclaw ...` argv (after the binary) that removes it, in order (measured; see the section comment). */
+  clear: string[][];
+}
+
+/**
+ * The old OpenClaw ids an openclaw.json still holds, in the order their
+ * clearing commands should run. Read-only, never throws. `doc` is the parsed
+ * file (null when there is none).
+ */
+export function openclawLegacyNames(doc: Json | null): OpenclawLegacyName[] {
+  if (doc === null) return [];
+  const [oldPlugin] = OPENCLAW_PLUGIN_RENAME;
+  const [oldChannel] = OPENCLAW_CHANNEL_RENAME;
+  const out: OpenclawLegacyName[] = [];
+  const channels = isObject(doc.channels) ? doc.channels : {};
+  // The channel first, while the plugin that declares it is still installed.
+  if (has(channels, oldChannel)) out.push({ path: `channels.${oldChannel}`, clear: [["config", "unset", `channels.${oldChannel}`]] });
+  const plugins = isObject(doc.plugins) ? doc.plugins : {};
+  const inAllow = Array.isArray(plugins.allow) && plugins.allow.includes(oldPlugin);
+  const inEntries = isObject(plugins.entries) && has(plugins.entries, oldPlugin);
+  const uninstall = ["plugins", "uninstall", oldPlugin, "--force"];
+  const unsetEntry = ["config", "unset", `plugins.entries.${oldPlugin}`];
+  if (inAllow) out.push({ path: `plugins.allow[${oldPlugin}]`, clear: [uninstall] });
+  if (inEntries) out.push({ path: `plugins.entries.${oldPlugin}`, clear: inAllow ? [unsetEntry] : [uninstall, unsetEntry] });
+  const bindings = Array.isArray(doc.bindings) ? doc.bindings : [];
+  // Highest index first: unsetting bindings[N] shifts every later one down.
+  for (let i = bindings.length - 1; i >= 0; i--) {
+    const b = bindings[i];
+    if (isObject(b) && isObject(b.match) && b.match.channel === oldChannel) {
+      out.push({ path: `bindings[${i}].match.channel`, clear: [["config", "unset", `bindings[${i}]`]] });
+    }
+  }
+  return out;
+}
+
+/**
+ * The refusal a start prints for a root whose openclaw.json still holds old
+ * ids: the file, both spellings of each id, and the commands that clear it.
+ * `env` is the variable prefix the operator needs so the commands act on THIS
+ * root's state, not ~/.openclaw.
+ */
+export function openclawLegacyRefusal(configFile: string, names: readonly OpenclawLegacyName[], env: string): string {
+  const [oldPlugin, newPlugin] = OPENCLAW_PLUGIN_RENAME;
+  const [oldChannel, newChannel] = OPENCLAW_CHANNEL_RENAME;
+  const commands: string[] = [];
+  for (const n of names) for (const argv of n.clear) commands.push(`  ${env}openclaw ${argv.join(" ")}`);
+  return [
+    `${configFile} still holds the OpenClaw ids burrow-channel-openclaw used before v0.9.0 ` +
+      `(${names.map((n) => n.path).join(", ")}); burrow ${OPENCLAW_SINCE} reads only ` +
+      `plugin ${newPlugin} and channel ${newChannel}, in place of ${oldPlugin} and ${oldChannel}, and does not move them.`,
+    "Nothing was written and nothing was started. Clear them with OpenClaw's own commands, then start the agent again:",
+    ...commands,
+  ].join("\n");
+}

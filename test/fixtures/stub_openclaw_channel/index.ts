@@ -1,2 +1,2 @@
-// Fixture: stands in for openclaw-suite-channel's TypeScript entry. Never loaded.
+// Fixture: stands in for burrow-channel-openclaw's TypeScript entry. Never loaded.
 export default {};

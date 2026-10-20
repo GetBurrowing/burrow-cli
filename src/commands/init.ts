@@ -179,8 +179,8 @@ export function pluginRepo(env: Env = process.env): string {
 /** The checkout directory under `<data>/burrow`; migrate.ts CHECKOUT_DIR_MAP renames the old one to it. */
 export const PLUGIN_DIRNAME = "burrow-channel-claude-code";
 /**
- * The two MCP server ids, renamed from `suite-channel` / `startup-suite` in
- * 0.11.0. Claude Code names every tool `mcp__<id>__<tool>`, so these ids are
+ * The two MCP server ids, renamed in 0.11.0 from the old pair that
+ * legacy_names.ts SERVER_RENAMES spells. Claude Code names every tool `mcp__<id>__<tool>`, so these ids are
  * the prefix of every Burrow tool name an agent, a subagent allowlist or a
  * hook sees. An agent folder still holding the old ids is renamed on its next
  * START (legacy_names.ts), never under a running agent.

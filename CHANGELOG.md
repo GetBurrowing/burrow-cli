@@ -10,18 +10,94 @@ that matters in the field: is this one newer than what I had?
 Minor for a new capability or a changed default; patch for a fix that changes no
 behaviour anyone was relying on.
 
-## 0.12.0 (draft, unreleased; stage 5 of task 01a158c2 finishes this section)
+## 0.12.0
 
-- **Codex and dsh agents use the burrow MCP ids.** `burrow codex` passes
-  `-c mcp_servers.burrow.…` and `-c mcp_servers.burrow-channel.…` (were
-  `startup-suite` and `suite-channel`); the reply server reports serverInfo
-  `burrow-channel`, and the prompt's channel tag is `<channel source="burrow" …>`.
-  `burrow deepseek` writes `serverName: burrow` into `.dsh/burrow.patch.yml`.
-  Tool names (`suite_reply` …) are unchanged. Neither adapter persists these ids
-  (codex takes them on the app-server argv; dsh's patch file is regenerated on
-  every start), so there is no `legacy_names.ts` entry and nothing to migrate:
-  the new ids apply at the agent's next start. Attaching to a running agent
-  does not change them. A resumed Codex thread is re-sent the new instructions.
+**Every other adapter moves to the burrow MCP ids.** 0.11.0 renamed Claude
+Code's; this renames what codex, dsh, Hermes and OpenClaw register. No dual
+support: writers write only the new ids, and `src/legacy_names.ts` is the one
+module under `src/` that spells the old ones (a test now fails on the
+substring `startup-suite` anywhere else in `src/`, comments included).
+
+| Adapter | Before 0.12.0 | From 0.12.0 |
+| --- | --- | --- |
+| codex | `-c mcp_servers.startup-suite.…`, `-c mcp_servers.suite-channel.…`; reply serverInfo `suite-channel`; prompt tag `<channel source="startup-suite" …>` | `mcp_servers.burrow.…`, `mcp_servers.burrow-channel.…`; serverInfo `burrow-channel`; `<channel source="burrow" …>` |
+| dsh | `.dsh/burrow.patch.yml` `serverName: startup-suite` | `serverName: burrow` |
+| Hermes | config.yaml `mcp_servers.startup-suite`; plugin `startup-suite-platform`; `mcp-tokens/startup-suite-platform.runtime-token` | `mcp_servers.burrow`; `burrow-platform`; `mcp-tokens/burrow-platform.runtime-token` |
+| OpenClaw | plugin id `startup-suite-channel-plugin`; channel id `startup-suite` (`channels.startup-suite`, `bindings[].match.channel`) | `burrow-channel-plugin`; `burrow` |
+
+Tool names follow the server id where the harness prefixes them
+(`mcp__burrow__task_ack`); the channel tools' own names (`suite_reply` …) and
+the Hermes gateway platform key `startup_suite` (underscore; it keys Hermes
+sessions and `platform_toolsets.startup_suite`) are unchanged.
+
+**Pins.** burrow-channel-hermes v0.4.0, `4d64006780bc3c8011d034b20910c0aee06aa4c6`
+(was v0.3.1). burrow-channel-openclaw v0.9.0,
+`20c0e844ec447ec56da65dd5785bed7b6c1e558f` (was v0.8.0, `ad307416`). Both are
+merge commits on their repos' main. The OpenClaw plugin is still loaded from
+this CLI's own checkout through `plugins.load.paths`, not from npm.
+
+**What moves on start, and what is refused.**
+
+- **codex, dsh: nothing to move.** Neither persists the ids: codex takes them
+  on the `codex app-server` argv, and dsh's patch file is regenerated on every
+  start. The next start uses the new ids; an attach to a running agent does
+  not change them. A resumed Codex thread is re-sent the new instructions.
+- **Hermes: moved on the start path** (`burrow hermes`, `--no-session`,
+  `--stamp-only`), before the v0.4.0 channel installer runs, because these
+  persist and the installer alone would install a second generation beside
+  the first. The MCP entry moves through `hermes config set` / `unset`; the old
+  plugin is disabled and removed through `hermes plugins disable` / `remove`;
+  the token file is renamed in place (same bytes, inode and `0600` mode). An
+  old name beside its new one in any one place is refused with exit 7, naming
+  the file and both names, and nothing moves. `--gateway-only` (a restore's
+  relaunch) moves nothing: it runs no installer, and the old plugin reads the
+  old token path, so the old names stay consistent until the next start.
+- **OpenClaw: refused, not moved.** No OpenClaw root that a burrow-cli stamp
+  wrote was found on the old ids when this was cut, so there is no migration:
+  a start (`burrow openclaw`, `--no-session`, `--gateway-only`) on a root
+  whose `openclaw.json` holds the old plugin or channel id exits 7 and writes
+  nothing (`--stamp-only` keeps the contract's exit 2, error code
+  `legacy_openclaw_ids`). The message names the file and prints the OpenClaw
+  commands, scoped to that root, that clear them: `config unset
+  channels.startup-suite`, `plugins uninstall startup-suite-channel-plugin
+  --force`, `config unset plugins.entries.startup-suite-channel-plugin` (the
+  uninstall leaves that entry behind as `{enabled: false}`, measured), and
+  `config unset bindings[N]` for each old binding. Then start again.
+  Existing OpenClaw sessions do not carry over: v0.9.0's session keys are
+  `agent:<id>:burrow:…`.
+- **Never under a running agent.** An attach to a live session (Hermes or
+  OpenClaw) with old ids attaches without stamping, says the names are dealt
+  with at the next start, and changes and refuses nothing new.
+
+**Per-agent cutover.** codex, dsh and Hermes read their MCP config at process
+start (no hot reload, unlike Claude Code's subagent files and settings), so
+there is no staged-file kit as there was for 0.11.0: update the CLI, then
+restart each agent through its own launcher, one at a time, when it is idle.
+
+1. `burrow update`, then `burrow --version` reads `0.12.0`. Record `tmux ls`
+   before and after: the update must not have restarted any agent session.
+2. **Is it idle?** `tmux capture-pane -p -t "=burrow-<agent>" | tail -30`: no
+   turn in progress, and nothing typed but unsent at the prompt (if there is,
+   keep it and wait). An agent that is not running needs nothing now: it
+   migrates at its next start.
+3. **Restart through its own launcher**, never by starting a second copy:
+   - under a systemd user unit (a dsh agent whose `ExecStop` kills its tmux
+     session): `systemctl --user restart <unit>`;
+   - started by hand or by a launcher script: `tmux kill-session -t
+     "=burrow-<agent>"`, then the same launcher (`burrow deepseek --root DIR`,
+     `burrow codex --root DIR`, `burrow hermes --root DIR …`).
+4. **Check it came back on the new ids:**
+   - dsh: `grep serverName <root>/.dsh/burrow.patch.yml` reads `burrow`, and
+     the pane or log shows the `burrow` MCP server connected;
+   - codex: the bridge's app-server argv carries `mcp_servers.burrow.`;
+   - Hermes: `<root>/.hermes/config.yaml` has `mcp_servers.burrow` and no
+     `startup-suite`, and `plugins/burrow-platform/` exists;
+   - OpenClaw: the start either stamps the new ids or refuses with the
+     commands above.
+5. **Text that names a tool by its full name moves at the same restart**, as
+   in 0.11.0: an `AGENTS.md` or prompt that says `mcp__startup-suite__*` or
+   names the `suite-channel` server. Edit it while the agent is stopped, after
+   backing it up.
 
 ## 0.11.1
 

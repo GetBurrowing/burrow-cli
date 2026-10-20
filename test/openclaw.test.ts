@@ -5,7 +5,9 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { emptyConfig, serializeConfig } from "../src/config.ts";
 import {
+  CHANNEL_ID,
   FIRST_STAMP_PORT,
+  LEGACY_IDS_CODE,
   LIVE_GATEWAY_PORT,
   MODEL_KEY_ENV,
   OPENCLAW_CHANNEL_REF,
@@ -21,6 +23,7 @@ import {
   mergedBindings,
   nodeMeetsFloor,
   normalizeAgentId,
+  oldOpenclawIdsIn,
   parseConfigGet,
   parseConfigValidate,
   parseOpenclawOptions,
@@ -34,6 +37,7 @@ import {
   stateDirFor,
   type OpenclawDeps,
 } from "../src/commands/openclaw.ts";
+import { OPENCLAW_CHANNEL_RENAME, OPENCLAW_PLUGIN_RENAME } from "../src/legacy_names.ts";
 import { renderStampResult, StampFailure, type StampResult } from "../src/stamp_result.ts";
 import { classify, parseProcesses, type TmuxDeps } from "../src/tmux.ts";
 import type { RestoreDeps } from "../src/commands/restore.ts";
@@ -268,8 +272,8 @@ describe("measured OpenClaw output shapes (2026.9.4)", () => {
     expect(parseConfigGet("gateway.port", 0, "18801\n", "")).toEqual({ present: true, value: 18801 });
     const unset = JSON.stringify({ ok: false, error: { type: "cli_error", message: "Config path is valid but unset: bindings. The runtime default applies ..." } });
     expect(parseConfigGet("bindings", 1, unset, "")).toEqual({ present: false });
-    const unknown = JSON.stringify({ ok: false, error: { type: "cli_error", message: "Unknown config path: channels.startup-suite. Run openclaw config schema ..." } });
-    expect(parseConfigGet("channels.startup-suite", 1, unknown, "")).toEqual({ present: false });
+    const unknown = JSON.stringify({ ok: false, error: { type: "cli_error", message: "Unknown config path: channels.burrow. Run openclaw config schema ..." } });
+    expect(parseConfigGet("channels.burrow", 1, unknown, "")).toEqual({ present: false });
     const invalid = JSON.stringify({
       ok: false,
       error: { type: "cli_error", message: "OpenClaw config is invalid: /x/openclaw.json" },
@@ -418,7 +422,7 @@ describe("a first stamp", () => {
   test("the account, binding and plugin entries mirror install.sh's shape, and the token is the REF string", async () => {
     await stamp();
     const c = config();
-    const ch = c.channels["startup-suite"];
+    const ch = c.channels["burrow"];
     expect(ch.enabled).toBe(true);
     expect(ch.dmPolicy).toBe("allowlist");
     expect(ch.allowFrom).toEqual(["*"]);
@@ -429,7 +433,7 @@ describe("a first stamp", () => {
       autoJoinSpaces: [],
     });
     expect(c.bindings).toEqual([
-      { type: "route", agentId: "openclaw-01a0d8f8", match: { channel: "startup-suite", accountId: "openclaw-01a0d8f8" } },
+      { type: "route", agentId: "openclaw-01a0d8f8", match: { channel: "burrow", accountId: "openclaw-01a0d8f8" } },
     ]);
     // Every plugin that was enabled before the stamp, then this one (see the allowlist tests).
     expect(c.plugins.allow).toEqual([...CAPTURED_ENABLED, PLUGIN_ID]);
@@ -472,7 +476,7 @@ describe("a first stamp", () => {
     const { result, exitCode } = await stamp(args, makeDeps({ resolve: { platform: "darwin", securityBin: security } }));
     expect(exitCode).toBe(0);
     expect(result.token_ref).toBe("keychain:RUNTIME_TOKEN.openclaw");
-    const acct = config().channels["startup-suite"].accounts["openclaw-01a0d8f8"];
+    const acct = config().channels["burrow"].accounts["openclaw-01a0d8f8"];
     expect(acct.token).toBe("keychain:RUNTIME_TOKEN.openclaw");
     expect(acct.tokenKeychainService).toBe("suite-test");
     expect(existsSync(join(home, "security-ran"))).toBe(false);
@@ -518,14 +522,14 @@ describe("the stub answers in the captured 2026.9.4 shapes", () => {
   test("config get redacts the account token and adds the schema defaults, exactly as captured", async () => {
     await stamp();
     const c = config();
-    c.channels["startup-suite"].accounts.m1 = { url: "ws://127.0.0.1:9/runtime/ws", runtimeId: "m1-rt", token: "file:/nonexistent/m1.token", autoJoinSpaces: [] };
+    c.channels["burrow"].accounts.m1 = { url: "ws://127.0.0.1:9/runtime/ws", runtimeId: "m1-rt", token: "file:/nonexistent/m1.token", autoJoinSpaces: [] };
     writeFileSync(configPathFor(root), JSON.stringify(c, null, 2));
-    const r = Bun.spawnSync([STUB_OPENCLAW, "config", "get", "channels.startup-suite.accounts.m1", "--json"], {
+    const r = Bun.spawnSync([STUB_OPENCLAW, "config", "get", "channels.burrow.accounts.m1", "--json"], {
       env: { ...baseEnv(), OPENCLAW_CONFIG_PATH: configPathFor(root) },
     });
     expect(JSON.parse(r.stdout.toString())).toEqual(CAPTURED_ACCOUNT_GET);
     // The file itself holds the ref: that is what the writer reads.
-    expect(config().channels["startup-suite"].accounts.m1.token).toBe("file:/nonexistent/m1.token");
+    expect(config().channels["burrow"].accounts.m1.token).toBe("file:/nonexistent/m1.token");
   });
 
   test("an allowlist naming only this plugin reproduces the captured doctor failure", async () => {
@@ -677,22 +681,22 @@ describe("idempotence and repair", () => {
   test("an edited runtimeId is repaired, keeping keys this verb does not own", async () => {
     await stamp();
     const c = config();
-    c.channels["startup-suite"].accounts["openclaw-01a0d8f8"].runtimeId = "someone-else";
-    c.channels["startup-suite"].accounts["openclaw-01a0d8f8"].reconnectIntervalMs = 7000;
+    c.channels["burrow"].accounts["openclaw-01a0d8f8"].runtimeId = "someone-else";
+    c.channels["burrow"].accounts["openclaw-01a0d8f8"].reconnectIntervalMs = 7000;
     writeFileSync(configPathFor(root), JSON.stringify(c, null, 2));
     const { result } = await stamp();
-    expect(outcomes(result)["config_set channels.startup-suite.accounts.openclaw-01a0d8f8"]).toBe("repaired");
-    const acct = config().channels["startup-suite"].accounts["openclaw-01a0d8f8"];
+    expect(outcomes(result)["config_set channels.burrow.accounts.openclaw-01a0d8f8"]).toBe("repaired");
+    const acct = config().channels["burrow"].accounts["openclaw-01a0d8f8"];
     expect(acct.runtimeId).toBe("openclaw-01a0d8f8-rt");
     expect(acct.reconnectIntervalMs).toBe(7000);
   });
 
   test("duplicate routes collapse to exactly one; other bindings are kept in place", () => {
     const other = { type: "route", agentId: "x", match: { channel: "telegram", accountId: "x" } };
-    const ours = { type: "route", agentId: "old", match: { channel: "startup-suite", accountId: "a" } };
+    const ours = { type: "route", agentId: "old", match: { channel: "burrow", accountId: "a" } };
     expect(mergedBindings([other, ours, ours], "a")).toEqual([
       other,
-      { type: "route", agentId: "a", match: { channel: "startup-suite", accountId: "a" } },
+      { type: "route", agentId: "a", match: { channel: "burrow", accountId: "a" } },
     ]);
   });
 
@@ -1001,6 +1005,123 @@ describe("the gateway session", () => {
   });
 });
 
+/* ------------------------------------------------------------------------- */
+/* 0.12.0: a root on the pre-v0.9.0 OpenClaw ids                              */
+/* ------------------------------------------------------------------------- */
+
+describe("0.12.0: a root still on the pre-v0.9.0 plugin and channel ids", () => {
+  const OLD_PLUGIN = "startup-suite-channel-plugin";
+  const OLD_CHANNEL = "startup-suite";
+
+  /** Stamp, then put openclaw.json back the way a pre-0.12.0 stamp left it: every new id replaced by its old one. */
+  async function oldIdRoot(): Promise<void> {
+    expect((await stamp()).exitCode).toBe(0);
+    const c = config();
+    c.channels = { [OLD_CHANNEL]: c.channels[CHANNEL_ID] };
+    c.plugins.allow = (c.plugins.allow as string[]).map((p) => (p === PLUGIN_ID ? OLD_PLUGIN : p));
+    c.plugins.entries[OLD_PLUGIN] = c.plugins.entries[PLUGIN_ID];
+    delete c.plugins.entries[PLUGIN_ID];
+    for (const b of c.bindings) if (b.match?.channel === CHANNEL_ID) b.match.channel = OLD_CHANNEL;
+    writeFileSync(configPathFor(root), `${JSON.stringify(c, null, 2)}\n`);
+    expect(readFileSync(configPathFor(root), "utf8")).not.toContain(`"${CHANNEL_ID}"`);
+  }
+
+  function treeHashes(at: string): Record<string, string> {
+    const out: Record<string, string> = {};
+    const walk = (d: string): void => {
+      for (const n of readdirSync(d, { withFileTypes: true })) {
+        const p = join(d, n.name);
+        if (n.isDirectory()) walk(p);
+        else out[p] = new Bun.CryptoHasher("sha256").update(readFileSync(p)).digest("hex");
+      }
+    };
+    walk(at);
+    return out;
+  }
+
+  test("the ids are burrow-channel-openclaw v0.9.0's, and the old ones are legacy_names.ts's", () => {
+    expect([PLUGIN_ID, CHANNEL_ID]).toEqual([OPENCLAW_PLUGIN_RENAME[1], OPENCLAW_CHANNEL_RENAME[1]]);
+    expect([OPENCLAW_PLUGIN_RENAME[0], OPENCLAW_CHANNEL_RENAME[0]]).toEqual([OLD_PLUGIN, OLD_CHANNEL]);
+    const manifest = JSON.parse(readFileSync(join(STUB_CHANNEL, "openclaw.plugin.json"), "utf8"));
+    expect([manifest.id, manifest.channels]).toEqual([PLUGIN_ID, [CHANNEL_ID]]);
+  });
+
+  test("START is refused with exit 7, byte-identical, nothing started, naming the file, both ids and the clearing commands", async () => {
+    await oldIdRoot();
+    const before = treeHashes(root);
+    const n = stubCalls().length;
+    stderr = [];
+    const tmux = fakeTmux();
+    const deps = makeDeps({ tmux: tmux.deps });
+    expect(await runOpenclaw(stampArgs(), deps)).toBe(7);
+    expect(treeHashes(root)).toEqual(before);
+    // The one OpenClaw call is the version probe, which precedes every stamp; the refusal comes before any config read.
+    expect(stubCalls().slice(n).map((c) => c.argv)).toEqual([["--version"]]);
+    expect(tmux.ran.filter((a) => a[1] === "new-session")).toEqual([]);
+    expect(deps.execs).toEqual([]);
+    const err = stderr.join("");
+    expect(err).toContain(configPathFor(root));
+    for (const id of [OLD_PLUGIN, OLD_CHANNEL, PLUGIN_ID, CHANNEL_ID]) expect(err).toContain(id);
+    const prefix = `OPENCLAW_STATE_DIR=${stateDirFor(root)} OPENCLAW_CONFIG_PATH=${configPathFor(root)} OPENCLAW_HOME=${root} openclaw`;
+    expect(err).toContain(`${prefix} config unset channels.${OLD_CHANNEL}`);
+    expect(err).toContain(`${prefix} plugins uninstall ${OLD_PLUGIN} --force`);
+    expect(err).toContain(`${prefix} config unset plugins.entries.${OLD_PLUGIN}`);
+    expect(err).toContain(`${prefix} config unset bindings[0]`);
+  });
+
+  test("--no-session START is refused the same way", async () => {
+    await oldIdRoot();
+    const before = treeHashes(root);
+    const deps = makeDeps();
+    expect(await runOpenclaw([...stampArgs(), "--no-session"], deps)).toBe(7);
+    expect(treeHashes(root)).toEqual(before);
+    expect(deps.execs).toEqual([]);
+  });
+
+  test("--stamp-only keeps the contract: exit 2, error code legacy_openclaw_ids, nothing written", async () => {
+    await oldIdRoot();
+    const before = treeHashes(root);
+    const n = stubCalls().length;
+    const { exitCode, result } = await stamp();
+    expect(exitCode).toBe(2);
+    expect(result.error?.code).toBe(LEGACY_IDS_CODE);
+    expect(treeHashes(root)).toEqual(before);
+    expect(writes(stubCalls().slice(n))).toEqual([]);
+  });
+
+  test("--gateway-only (a restore's relaunch) refuses with exit 7 and starts nothing", async () => {
+    await oldIdRoot();
+    const deps = makeDeps();
+    const o = parseOpenclawOptions(stampArgs());
+    expect(await runOpenclaw(relaunchArgv([], o, STUB_OPENCLAW, FIRST_STAMP_PORT).slice(1), deps)).toBe(7);
+    expect(deps.execs).toEqual([]);
+    expect(stderr.join("")).toContain(`config unset channels.${OLD_CHANNEL}`);
+  });
+
+  test("ATTACH to a live session refuses nothing new: it attaches, byte-identical, with no OpenClaw call", async () => {
+    await oldIdRoot();
+    const before = treeHashes(root);
+    const n = stubCalls().length;
+    stderr = [];
+    const session = "burrow-openclaw-01a0d8f8";
+    const tmux = fakeTmux(`${session}\t100\tbash\n`, "  100     1 bash    bash\n  102   100 openclaw-gatewa openclaw-gateway\n");
+    expect(await runOpenclaw(stampArgs(), makeDeps({ tmux: tmux.deps }))).toBe(0);
+    expect(stderr.join("")).toContain(`attaching to ${session}`);
+    expect(stderr.join("")).toContain(`${configPathFor(root)} channels.${OLD_CHANNEL}`);
+    expect(tmux.ran.filter((a) => a[1] === "new-session")).toEqual([]);
+    expect(stubCalls().slice(n)).toEqual([]);
+    expect(treeHashes(root)).toEqual(before);
+  });
+
+  test("positive control: the same root on the new ids starts (and a stamped root reads as holding none)", async () => {
+    expect((await stamp()).exitCode).toBe(0);
+    expect(oldOpenclawIdsIn(root)).toEqual([]);
+    const tmux = fakeTmux();
+    expect(await runOpenclaw(stampArgs(), makeDeps({ tmux: tmux.deps }))).toBe(0);
+    expect(tmux.ran.filter((a) => a[1] === "new-session")).toHaveLength(1);
+  });
+});
+
 describe("--stamp-only as a subprocess: the machine contract", () => {
   async function run(args: string[]) {
     const proc = Bun.spawn(["bun", OPENCLAW_FIXTURE, ...args], {
@@ -1047,8 +1168,8 @@ describe("--stamp-only as a subprocess: the machine contract", () => {
 });
 
 describe("pins", () => {
-  test("the channel is pinned to the commit tagged v0.8.0 on burrow-channel-openclaw main (PR #32)", () => {
-    expect(OPENCLAW_CHANNEL_REF).toBe("ad307416839aaf266ce6fd941dbcc25446e0445c");
+  test("the channel is pinned to the commit tagged v0.9.0 on burrow-channel-openclaw main (PR #34)", () => {
+    expect(OPENCLAW_CHANNEL_REF).toBe("20c0e844ec447ec56da65dd5785bed7b6c1e558f");
     expect(readFileSync(resolve(import.meta.dir, "..", "src", "commands", "openclaw.ts"), "utf8")).toContain("DEPLOYER: BUMP THIS BEFORE burrow-cli MERGES");
   });
   test("the OpenClaw pin", () => {
