@@ -134,9 +134,6 @@ const OLD_LITERAL = /["'`](suite-channel|startup-suite|server:suite-channel|suit
  */
 const OUT_OF_SCOPE: Record<string, string> = {
   "legacy_names.ts": "the one module that spells the old names",
-  "commands/codex.ts": "Codex's per-launch -c mcp_servers.<id> names",
-  "codex/bridge.ts": "the Codex bridge's prompt and channel tag",
-  "codex/reply_mcp.ts": "the Codex reply server's serverInfo name",
   "commands/hermes.ts": "hermes-suite-channel's installer registers mcp_servers.startup-suite",
   "commands/openclaw.ts": "the OpenClaw plugin's own channel id",
 };

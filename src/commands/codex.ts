@@ -8,7 +8,7 @@
  *   suite codex                 (outer) connection, login, then tmux
  *     └ suite codex --no-session (in the pane) the bridge: runtime socket ⇄ app-server
  *         └ codex app-server     with the Burrow MCP servers as `-c` overrides
- *             └ suite codex --reply-mcp   the `suite-channel` MCP server (suite_reply …)
+ *             └ suite codex --reply-mcp   the `burrow-channel` MCP server (suite_reply …)
  *
  * FOUR RULES:
  *
@@ -63,8 +63,8 @@ export const MCP_TOKEN_ENV = "CODEX_SUITE_MCP_BEARER";
 /** Env vars carrying the operator's extra headers, one per configured header name. */
 export const headerEnvName = (i: number): string => `CODEX_SUITE_MCP_HEADER_${i}`;
 
-export const TOOLS_MCP = "startup-suite";
-export const CHANNEL_MCP = "suite-channel";
+export const TOOLS_MCP = "burrow";
+export const CHANNEL_MCP = "burrow-channel";
 
 const SANDBOXES: readonly SandboxMode[] = ["read-only", "workspace-write", "danger-full-access"];
 

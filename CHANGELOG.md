@@ -10,6 +10,19 @@ that matters in the field: is this one newer than what I had?
 Minor for a new capability or a changed default; patch for a fix that changes no
 behaviour anyone was relying on.
 
+## 0.12.0 (draft, unreleased; stage 5 of task 01a158c2 finishes this section)
+
+- **Codex and dsh agents use the burrow MCP ids.** `burrow codex` passes
+  `-c mcp_servers.burrow.…` and `-c mcp_servers.burrow-channel.…` (were
+  `startup-suite` and `suite-channel`); the reply server reports serverInfo
+  `burrow-channel`, and the prompt's channel tag is `<channel source="burrow" …>`.
+  `burrow deepseek` writes `serverName: burrow` into `.dsh/burrow.patch.yml`.
+  Tool names (`suite_reply` …) are unchanged. Neither adapter persists these ids
+  (codex takes them on the app-server argv; dsh's patch file is regenerated on
+  every start), so there is no `legacy_names.ts` entry and nothing to migrate:
+  the new ids apply at the agent's next start. Attaching to a running agent
+  does not change them. A resumed Codex thread is re-sent the new instructions.
+
 ## 0.11.1
 
 **Fix: `burrow status` read a not-yet-restarted folder's channel as missing.**
