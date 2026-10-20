@@ -10,6 +10,15 @@ that matters in the field: is this one newer than what I had?
 Minor for a new capability or a changed default; patch for a fix that changes no
 behaviour anyone was relying on.
 
+## 0.11.1
+
+**Fix: `burrow status` read a not-yet-restarted folder's channel as missing.**
+Run from an agent folder whose agent still runs on the pre-0.11.0 ids, status
+looked for `burrow-channel` in `claude mcp list` and printed `channel missing`
+for a channel that was connected as `suite-channel` (seen on hive right after
+`burrow update`). It now checks the id the folder has, as doctor already did.
+Nothing is renamed; the agent's next start still does that.
+
 ## 0.11.0
 
 **The last `suite` names this CLI wrote are renamed, on each agent's next
