@@ -38,7 +38,6 @@ const NOT_A_HIT = new RegExp(`Startup-${OLD}/|test ${OLD.toLowerCase()}`);
 const COMBINED = new RegExp(`Burrow[ -]${OLD}`);
 
 const HISTORY = "A changelog entry before 0.9.0: a record of what shipped under the old name. Only the 0.9.0 entry is rewritten.";
-const OWNER = "The GitHub org literal, which stays until the org itself is renamed: the installer default, its one source in repo_source.ts, and the tests that pin both.";
 const LEGACY_UNIT = "A pre-0.9.0 systemd unit, verbatim, as the migration finds it on a host; and the assertion that the swapped unit no longer says it.";
 
 interface Allowed {
@@ -62,31 +61,9 @@ export const ALLOWLIST: readonly Allowed[] = [
   { file: "CHANGELOG.md", text: "clarify, plus every enabled MCP server, so the Suite bridge stays) and no", reason: HISTORY },
   { file: "CHANGELOG.md", text: "the Suite MCP bundle, shell and file tools widen what untrusted chat can", reason: HISTORY },
   { file: "CHANGELOG.md", text: "- **`suite init` seeds a starting `CLAUDE.md`** for new Suite agents \u2014 how a", reason: HISTORY },
-  { file: "README.md", text: "GitHub org is still `Startup-Suite` until it is renamed; `BURROW_GITHUB_OWNER`", reason: OWNER },
-  { file: "install.sh", text: "OWNER=\"Startup-Suite\"", reason: OWNER },
-  { file: "src/repo_source.ts", text: "* THE DEFAULT STAYS `Startup-Suite` until the rename is the last step left.", reason: OWNER },
-  { file: "src/repo_source.ts", text: "export const DEFAULT_GITHUB_OWNER = \"Startup-Suite\";", reason: OWNER },
-  { file: "src/repo_source.ts", text: "* (`${SUITE_GITHUB_OWNER:-Startup-Suite}`) and the same one SUITE_CLI_REF", reason: OWNER },
-  { file: "test/install.test.ts", text: "expect(runWithEnv({ SUITE_CLI_REF: SHA_A }).fetched).toContain(codeload(\"Startup-Suite\", SHA_A));", reason: OWNER },
-  { file: "test/install.test.ts", text: "expect(runWithEnv({ BURROW_CLI_REF: \"next\" }).fetched).toContain(codeload(\"Startup-Suite\", \"next\"));", reason: OWNER },
-  { file: "test/install.test.ts", text: "expect(fetched).toContain(codeload(\"Startup-Suite\", \"main\"));", reason: OWNER },
-  { file: "test/install.test.ts", text: "expect(runWithEnv({ BURROW_CLI_REF: \"\", SUITE_CLI_REF: SHA_A }).fetched).toContain(codeload(\"Startup-Suite\", SHA_A));", reason: OWNER },
-  { file: "test/install.test.ts", text: "const r = runWithEnv({ BURROW_GITHUB_OWNER: \"bad/owner\", SUITE_GITHUB_OWNER: \"Startup-Suite\" });", reason: OWNER },
   { file: "test/migrate_rewrites.test.ts", text: "Description=Suite agent session watchdog", reason: LEGACY_UNIT },
   { file: "test/migrate_rewrites.test.ts", text: "Description=Restore Suite agent sessions after boot", reason: LEGACY_UNIT },
   { file: "test/migrate_rewrites.test.ts", text: "expect(unit).not.toContain(\"Description=Suite\");", reason: LEGACY_UNIT },
-  { file: "test/repo_source.test.ts", text: "*   2. A repo-wide guard: no `Startup-Suite` literal in src/ or install.sh", reason: OWNER },
-  { file: "test/repo_source.test.ts", text: "test(\"unset means the default, which is still Startup-Suite\", () => {", reason: OWNER },
-  { file: "test/repo_source.test.ts", text: "expect(DEFAULT_GITHUB_OWNER).toBe(\"Startup-Suite\");", reason: OWNER },
-  { file: "test/repo_source.test.ts", text: "expect(ownerFrom({})).toBe(\"Startup-Suite\");", reason: OWNER },
-  { file: "test/repo_source.test.ts", text: "expect(ownerFrom({ [OWNER_ENV]: \"\" })).toBe(\"Startup-Suite\");", reason: OWNER },
-  { file: "test/repo_source.test.ts", text: "expect(ownerFrom({ [OWNER_ENV_BURROW]: \"GetBurrowing\", [OWNER_ENV]: \"Startup-Suite\" })).toBe(\"GetBurrowing\");", reason: OWNER },
-  { file: "test/repo_source.test.ts", text: "ownerFrom({ [OWNER_ENV_BURROW]: \"../x\", [OWNER_ENV]: \"Startup-Suite\" });", reason: OWNER },
-  { file: "test/repo_source.test.ts", text: "const LITERAL = \"Startup-Suite\";", reason: OWNER },
-  { file: "test/repo_source.test.ts", text: "const INSTALL_DEFAULT_LINE = 'OWNER=\"Startup-Suite\"';", reason: OWNER },
-  { file: "test/repo_source.test.ts", text: "test(\"no Startup-Suite literal in src/ or install.sh outside repo_source.ts and the installer default\", () => {", reason: OWNER },
-  { file: "test/repo_source.test.ts", text: "test(\"default: both halves say Startup-Suite\", () => {", reason: OWNER },
-  { file: "test/repo_source.test.ts", text: "expect(script).toContain(`${OWNER_ENV}='Startup-Suite'`);", reason: OWNER },
 ];
 
 export interface Hit {

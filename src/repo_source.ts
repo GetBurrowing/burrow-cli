@@ -7,10 +7,10 @@
  * A second copy of the owner is a second thing to keep true during an org
  * rename, and the copy that drifts is the one nobody runs.
  *
- * THE DEFAULT STAYS `Startup-Suite` until the rename is the last step left.
- * Old URLs keep working through GitHub's rename redirects; the override exists
- * so the new org can be exercised before it is the default. Flipping it is a
- * one-line change to {@link DEFAULT_GITHUB_OWNER} plus install.sh's default.
+ * THE DEFAULT IS `GetBurrowing` (0.12.1 on). The org was renamed in place;
+ * {@link DEFAULT_GITHUB_OWNER} and install.sh's default are the only two
+ * places that name it. The override exists so a fork or a future org can be
+ * exercised before it is the default.
  *
  * THE OVERRIDE IS READ FROM THE PROCESS ENVIRONMENT ONLY. Never from a config
  * file: an agent or a channel can write those, and whatever names this owner
@@ -22,8 +22,8 @@
  */
 import { BURROW_PREFIX, burrowName, envSource, suiteName } from "./env_names.ts";
 
-/** The GitHub org every repo lives under today. */
-export const DEFAULT_GITHUB_OWNER = "Startup-Suite";
+/** The GitHub org every repo lives under. */
+export const DEFAULT_GITHUB_OWNER = "GetBurrowing";
 
 /**
  * The legacy environment variable that overrides it, and the name this CLI
@@ -65,7 +65,7 @@ export function ownerIsValid(owner: string): boolean {
  * the default (precedence lives in env_names.ts).
  *
  * Unset and empty both mean the default, the same rule install.sh applies
- * (`${SUITE_GITHUB_OWNER:-Startup-Suite}`) and the same one SUITE_CLI_REF
+ * (`${BURROW_GITHUB_OWNER:-${SUITE_GITHUB_OWNER:-GetBurrowing}}`) and the same one SUITE_CLI_REF
  * follows. Anything else must be a valid slug or this throws.
  */
 export function ownerFrom(env: Env = process.env): string {
@@ -132,6 +132,15 @@ export function codeloadUrl(repo: string, ref: string, env: Env = process.env): 
  * {@link LEGACY_CLI_REPO_NAME} on a 404 only, so before the rename burrow-cli
  * 404s and the legacy name answers, and after it burrow-cli answers and the
  * legacy name is never asked.
+ *
+ * Measured 2026-10-20, after both renames: github.com/GetBurrowing/burrow-cli
+ * answers, so the legacy name is never asked under the default owner. The
+ * fallback stays for a pinned older ref and for an override naming an org
+ * where only the legacy name exists. Under the old org, the new repo name
+ * 404s, because GitHub's redirect follows the name each repo had when the
+ * org moved (the legacy name redirects to GetBurrowing/burrow-cli; the new
+ * name under the old org never existed). That is why 0.12.0 and earlier
+ * reached burrow-cli only through this fallback.
  */
 export const CLI_REPO_NAME = "burrow-cli";
 export const LEGACY_CLI_REPO_NAME = "suite-cli";

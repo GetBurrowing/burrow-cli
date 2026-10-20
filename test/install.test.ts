@@ -399,10 +399,10 @@ describe("install.sh", () => {
   }
 
   test("SUITE_GITHUB_OWNER names the org in the tarball URL the installer fetches", () => {
-    const r = runWithOwner("GetBurrowing");
+    const r = runWithOwner("Example-Fork");
     // burrow-cli first: the stub's failure carries no status, so it is not a
     // 404 and the installer stops there rather than trying suite-cli.
-    const url = "https://codeload.github.com/GetBurrowing/burrow-cli/tar.gz/refs/heads/main";
+    const url = "https://codeload.github.com/Example-Fork/burrow-cli/tar.gz/refs/heads/main";
     expect(r.fetched).toContain(url);
     expect(r.stderr).toContain(`could not download burrow-cli from ${url}`);
     expect(r.status).not.toBe(0);
@@ -411,14 +411,14 @@ describe("install.sh", () => {
 
   test("a SHA ref under the override uses codeload's SHA path", () => {
     const sha = "0123456789abcdef0123456789abcdef01234567";
-    expect(runWithOwner("GetBurrowing", sha).fetched).toContain(
-      `https://codeload.github.com/GetBurrowing/burrow-cli/tar.gz/${sha}`,
+    expect(runWithOwner("Example-Fork", sha).fetched).toContain(
+      `https://codeload.github.com/Example-Fork/burrow-cli/tar.gz/${sha}`,
     );
   });
 
   test("CONTROL: unset and empty both mean the default org", () => {
     for (const owner of [undefined, ""]) {
-      expect(runWithOwner(owner).fetched).toContain("https://codeload.github.com/Startup-Suite/burrow-cli/tar.gz/refs/heads/main");
+      expect(runWithOwner(owner).fetched).toContain("https://codeload.github.com/GetBurrowing/burrow-cli/tar.gz/refs/heads/main");
     }
   });
 
@@ -566,21 +566,21 @@ describe("install.sh", () => {
     `https://codeload.github.com/${owner}/burrow-cli/tar.gz/${/^[0-9a-f]{40}$/.test(ref) ? ref : `refs/heads/${ref}`}`;
 
   test("ref: SUITE_CLI_REF alone is honoured (core's agent-host passes it)", () => {
-    expect(runWithEnv({ SUITE_CLI_REF: SHA_A }).fetched).toContain(codeload("Startup-Suite", SHA_A));
+    expect(runWithEnv({ SUITE_CLI_REF: SHA_A }).fetched).toContain(codeload("GetBurrowing", SHA_A));
   });
 
   test("ref: BURROW_CLI_REF alone is honoured", () => {
-    expect(runWithEnv({ BURROW_CLI_REF: "next" }).fetched).toContain(codeload("Startup-Suite", "next"));
+    expect(runWithEnv({ BURROW_CLI_REF: "next" }).fetched).toContain(codeload("GetBurrowing", "next"));
   });
 
   test("ref: both set, BURROW_CLI_REF wins and the SUITE value is never fetched", () => {
     const fetched = runWithEnv({ BURROW_CLI_REF: "main", SUITE_CLI_REF: SHA_A }).fetched ?? "";
-    expect(fetched).toContain(codeload("Startup-Suite", "main"));
+    expect(fetched).toContain(codeload("GetBurrowing", "main"));
     expect(fetched).not.toContain(SHA_A);
   });
 
   test("ref: an empty BURROW_CLI_REF falls back to SUITE_CLI_REF", () => {
-    expect(runWithEnv({ BURROW_CLI_REF: "", SUITE_CLI_REF: SHA_A }).fetched).toContain(codeload("Startup-Suite", SHA_A));
+    expect(runWithEnv({ BURROW_CLI_REF: "", SUITE_CLI_REF: SHA_A }).fetched).toContain(codeload("GetBurrowing", SHA_A));
   });
 
   test("owner: SUITE_GITHUB_OWNER alone is honoured", () => {
@@ -598,7 +598,7 @@ describe("install.sh", () => {
   });
 
   test("owner: an invalid BURROW_GITHUB_OWNER is refused BY THAT NAME, never replaced by a valid SUITE one", () => {
-    const r = runWithEnv({ BURROW_GITHUB_OWNER: "bad/owner", SUITE_GITHUB_OWNER: "Startup-Suite" });
+    const r = runWithEnv({ BURROW_GITHUB_OWNER: "bad/owner", SUITE_GITHUB_OWNER: "OldOrg" });
     expect(r.status).not.toBe(0);
     expect(r.fetched).toBeNull();
     expect(r.stderr).toContain('BURROW_GITHUB_OWNER="bad/owner"');
@@ -633,7 +633,7 @@ describe("install.sh", () => {
  */
 describe("install.sh: refs and the repo name", () => {
   const SHA = "0123456789abcdef0123456789abcdef01234567";
-  const at = (repo: string, path: string) => `https://codeload.github.com/Startup-Suite/${repo}/tar.gz/${path}`;
+  const at = (repo: string, path: string) => `https://codeload.github.com/GetBurrowing/${repo}/tar.gz/${path}`;
 
   /** Run the installer against the codeload stub; `serve` URLs answer 200 with `archive`. */
   function runCodeload(env: Record<string, string>, serve: string[] = [], archive: string = tarball) {

@@ -10,6 +10,43 @@ that matters in the field: is this one newer than what I had?
 Minor for a new capability or a changed default; patch for a fix that changes no
 behaviour anyone was relying on.
 
+## 0.12.1
+
+**The default GitHub org is `GetBurrowing`.** The org was renamed in place on
+2026-10-19; this is the one-line flip 0.7.3 deferred to cutover:
+`DEFAULT_GITHUB_OWNER` in `src/repo_source.ts` and `install.sh`'s default.
+Every URL the CLI builds follows it: the installer and tarball, the commits
+API, `burrow update`, the Claude Code plugin clone, the OpenClaw and Hermes
+channel clones, the SSH recovery hint and the units' `Documentation=` lines.
+`BURROW_GITHUB_OWNER` (and `SUITE_GITHUB_OWNER`) still override it, unchanged.
+
+- **Why it could not wait.** Through 0.12.0 a fresh clone under
+  `~/.local/share/burrow/` got an origin under the old org
+  (`github.com/Startup-Suite/…`), so re-cloning undid a hand-repointed origin.
+  And `github.com/Startup-Suite/burrow-cli` answers 404 (measured 2026-10-20):
+  GitHub's org redirect follows the name each repo had when the org moved, and
+  this repo was still `suite-cli` then. 0.12.0 and earlier reached this CLI's
+  own files only through the `suite-cli` fallback. Under `GetBurrowing`,
+  `burrow-cli` answers first and the fallback is not asked.
+- **The `suite-cli` fallback stays.** `GetBurrowing/suite-cli` still redirects
+  to `burrow-cli` (301), and the fallback names no org, so nothing in it needed
+  to change.
+- **Existing clones keep their origin.** Neither `burrow update` nor a start
+  rewrites the origin of a checkout that already exists: `burrow update` only
+  runs the installer, which replaces `~/.local/share/burrow/cli` from a
+  tarball and touches no git checkout; the plugin and channel checkouts are
+  cloned only when absent and are otherwise fetched from whatever `origin`
+  they have. GitHub redirects the old URLs, so they keep working. To repoint
+  one by hand: `git -C <checkout> remote set-url origin
+  https://github.com/GetBurrowing/<repo>.git`.
+- **Guards.** The repository-identity test now pins the default to
+  `GetBurrowing`, keeps the one-source rule for that literal, and allows the old
+  org's name in `src/` and `install.sh` only on one named historical comment.
+  A new assertion pins the default plugin clone URL to
+  `https://github.com/GetBurrowing/burrow-channel-claude-code.git`. Override
+  tests use an invented org, so they cannot pass on the default by accident.
+- **Rollback:** `BURROW_CLI_REF=v0.12.0 burrow update` reinstalls 0.12.0.
+
 ## 0.12.0
 
 **Every other adapter moves to the burrow MCP ids.** 0.11.0 renamed Claude

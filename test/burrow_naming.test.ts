@@ -35,8 +35,8 @@ describe("the package says burrow", () => {
   test("name, version and description", () => {
     const pkg = JSON.parse(readFileSync(join(REPO, "package.json"), "utf8"));
     expect(pkg.name).toBe("burrow-cli");
-    expect(pkg.version).toBe("0.12.0");
-    expect(VERSION).toBe("0.12.0");
+    expect(pkg.version).toBe("0.12.1");
+    expect(VERSION).toBe("0.12.1");
     expect(pkg.bin).toEqual({ burrow: "./src/cli.ts" });
     expect(pkg.description).toBe("Connects a machine to a Burrow install, then sets up and runs its agent harness");
     expect(CLI_NAME).toBe("burrow");
@@ -193,7 +193,7 @@ describe("README", () => {
 
   test("installs with the published one-liner and shows burrow verbs", () => {
     expect(readme).toContain(
-      "curl -fsSL https://raw.githubusercontent.com/Startup-Suite/burrow-cli/main/install.sh | sh",
+      "curl -fsSL https://raw.githubusercontent.com/GetBurrowing/burrow-cli/main/install.sh | sh",
     );
     expect(readme).toContain("burrow init && burrow claude");
   });
