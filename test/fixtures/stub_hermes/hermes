@@ -14,7 +14,9 @@
  * Knobs come from $HOME/hermes-stub-knobs.json:
  *   version  the --version line
  *   check    ok | missing | garbage
- *   mcp      ok | zero | fail | garbage
+ *   mcp      ok | zero | fail | garbage | timeout | auth
+ *   mcpSeq   a list of `mcp` modes, one per `mcp test` call in order (the last
+ *            repeats); wins over `mcp`. The call count is $HOME/mcp-test-calls.
  *   activation  ok (default) | none | garbage | switch — `--run-module pm.environments`,
  *            which at fdec926e prints Hermes's activation environment as JSON
  *            with PYTHONPATH `<repo>:<venv>/lib/python3.14/site-packages` of
@@ -148,10 +150,27 @@ if (a0 === "--run-module" && a1 === "pm.environments") {
   }
 } else if (a0 === "mcp" && a1 === "test") {
   if (lookup(read(), `mcp_servers.${a2}`) === undefined) die(`  ✗ Server '${a2}' not found in config.`, 3);
-  const mode = knobs.mcp ?? "ok";
+  let mode = knobs.mcp ?? "ok";
+  if (Array.isArray(knobs.mcpSeq) && knobs.mcpSeq.length > 0) {
+    const counter = join(process.env.HOME ?? "", "mcp-test-calls");
+    const n = existsSync(counter) ? Number.parseInt(readFileSync(counter, "utf8"), 10) : 0;
+    writeFileSync(counter, String(n + 1));
+    mode = knobs.mcpSeq[Math.min(n, knobs.mcpSeq.length - 1)];
+  }
   console.log(`\n  Testing '${a2}'...\n  Transport: stdio → /usr/bin/env\n  Auth: none`);
   if (mode === "fail") {
     console.log("  ✗ Connection failed (7.8s): Connection closed");
+    process.exit(1);
+  }
+  if (mode === "timeout") {
+    // MEASURED on rock at fdec926e (task 01a15abb, dingus dry run on 0.12.2).
+    console.log(
+      `  ✗ Connection failed (32.1s): Connecting to MCP server '${a2}' timed out after 30s (bounded by connect_timeout; an OAuth login also by oauth.timeout); CancelledError`,
+    );
+    process.exit(1);
+  }
+  if (mode === "auth") {
+    console.log("  ✗ Connection failed (0.6s): Burrow MCP answered HTTP 401");
     process.exit(1);
   }
   if (mode === "garbage") console.log("  something the parser has never seen");

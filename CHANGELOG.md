@@ -10,6 +10,25 @@ that matters in the field: is this one newer than what I had?
 Minor for a new capability or a changed default; patch for a fix that changes no
 behaviour anyone was relying on.
 
+## 0.12.3
+
+**`burrow hermes` retries `hermes mcp test` once when, and only when, it timed
+out connecting.** A correctly migrated home could be stamped `fail` because the
+post-write `hermes mcp test burrow` hit Hermes's 30 s `connect_timeout` once
+(`Connecting to MCP server 'burrow' timed out after 30s ...; CancelledError`).
+That happened in 1 of 8 dry runs of the dingus migration on rock against
+0.12.2. In that run no request reached the Burrow endpoint (its log has no
+`POST /mcp` in the window), and every other test in those runs passed, the timed
+ones in 1.2 to 1.6 s. The new interpreter is not the cause: in 5 measured runs
+its first `import mcp` took 0.41 to 0.56 s and the bridge lived 0.6 to 0.7 s.
+
+- A failure whose line is `✗ Connection failed (...)` naming `timed out after
+  Ns` or `CancelledError`, with exit 1, is retried once, and the second result
+  is what the stamp reports. The retry is announced on stderr.
+- Every other failure is reported from the first call, as before: an auth
+  error, a closed connection, a missing server, 0 tools, unparseable output.
+- The 30 s bound is Hermes's and is unchanged.
+
 ## 0.12.2
 
 **A failed `burrow hermes` start no longer leaves a pre-0.12.0 home
