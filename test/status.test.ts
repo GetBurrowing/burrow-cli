@@ -40,6 +40,8 @@ interface FakeOptions {
   config?: SuiteConfig | null;
   tools?: string[];
   channel?: string;
+  /** The channel id `claude mcp list` prints (default CHANNEL_SERVER). */
+  channelId?: string;
   /** name → [ageSeconds, live?] */
   sessions?: Array<{ name: string; age: number; live: boolean }>;
 }
@@ -57,7 +59,7 @@ function fakeDeps(options: FakeOptions = {}): StatusDeps & { lines: string[] } {
       return {
         ...ok,
         stdout:
-          `${CHANNEL_SERVER}: bun /opt/example/src/index.ts - ${options.channel ?? "✔ Connected"}\n` +
+          `${options.channelId ?? CHANNEL_SERVER}: bun /opt/example/src/index.ts - ${options.channel ?? "✔ Connected"}\n` +
           `${TOOLS_SERVER}: ${SUITE_URL}/mcp (HTTP) - ✔ Connected\n`,
       };
     }
@@ -116,6 +118,28 @@ async function status(options: FakeOptions = {}): Promise<{ text: string; code: 
   const code = await runStatus(deps, NOW);
   return { text: deps.lines.join("\n"), code };
 }
+
+describe("burrow status: a folder not yet restarted on 0.11.0", () => {
+  test("reads the channel under the id the folder still has (suite-channel), and says connected", async () => {
+    const home = mkdtempSync(resolve(tmpdir(), "burrow-status-0110-"));
+    const cwd = resolve(home, "agent");
+    mkdirSync(cwd);
+    writeFileSync(resolve(home, ".claude.json"), JSON.stringify({ projects: { [cwd]: { mcpServers: { "suite-channel": { command: "bun" } } } } }));
+    const deps = fakeDeps({ channelId: "suite-channel" });
+    deps.env = { HOME: home };
+    deps.cwd = cwd;
+    await runStatus(deps, NOW);
+    const text = deps.lines.join("\n");
+    expect(text).toMatch(/channel\s+connected\s+suite-channel/);
+    rmSync(home, { recursive: true, force: true });
+  });
+
+  test("POSITIVE CONTROL: a renamed folder is read as burrow-channel", async () => {
+    const deps = fakeDeps();
+    await runStatus(deps, NOW);
+    expect(deps.lines.join("\n")).toMatch(/channel\s+connected\s+burrow-channel/);
+  });
+});
 
 describe("burrow status", () => {
   test("names the runtime this box is federated as, and never the token", async () => {

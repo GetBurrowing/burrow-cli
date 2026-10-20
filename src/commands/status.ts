@@ -32,6 +32,8 @@
  */
 import { SGR, glyphFor, paint, row } from "../ui.ts";
 import { CHANNEL_SERVER, whichBin } from "./init.ts";
+import { localEntries } from "../claude_wiring.ts";
+import { registeredId } from "../legacy_names.ts";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { AGENT_NAME, TMUX, detectState, hasOwnPrefix, type SessionState } from "../tmux.ts";
@@ -341,9 +343,11 @@ export async function runStatus(deps: StatusDeps, now: number = Math.floor(Date.
     say(row("channel", "unknown", "claude is not on PATH"));
     ok = false;
   } else {
-    const status = await channelStatus(deps, claudePath);
+    // A folder whose agent has not restarted since 0.11.0 still has the old id (legacy_names.ts).
+    const channelId = registeredId(localEntries(deps.env, deps.cwd), CHANNEL_SERVER);
+    const status = await channelStatus(deps, claudePath, channelId);
     if (status.state === "connected") {
-      say(row("channel", "connected", CHANNEL_SERVER));
+      say(row("channel", "connected", channelId));
     } else {
       say(row("channel", status.state.replace("-", " "), status.raw));
       ok = false;
