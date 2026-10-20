@@ -188,6 +188,21 @@ describe("renderPatch", () => {
     expect(defaults).toBeDefined();
   });
 
+  test("declares the model from the same expression that selects it", () => {
+    // UNKNOWN_MODEL is the sibling of NO_ADAPTER: both come from two places
+    // having to agree about one fact. The route's declared model and the
+    // agent's selected model must be the SAME expression, or setting
+    // DSH_MODEL (or editing one default) selects a model the route has never
+    // declared. Comparing the two sides catches an edit to either; asserting
+    // one literal line catches only an edit to that line.
+    const doc = parse(patch) as Array<Record<string, any>>;
+    const route = doc.find((e) => e?.id === "llm-pi-ai");
+    const chosen = doc.find((e) => e?.id === "agent-default-model");
+    const declared = route?.config?.providers?.openrouter?.models?.[0]?.id;
+    expect(declared).toBeDefined();
+    expect(String(declared)).toBe(String(chosen?.config?.model));
+  });
+
   test("no secret value can reach the patch — only variable names", () => {
     expect(patch).not.toContain("Bearer sk-");
     expect(patch).toContain("${process.env.BURROW_RUNTIME_TOKEN || process.env.SUITE_RUNTIME_TOKEN}");
