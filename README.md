@@ -86,7 +86,7 @@ offer says so before you answer it.
 ## Install
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/Startup-Suite/burrow-cli/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/GetBurrowing/burrow-cli/main/install.sh | sh
 ```
 
 The installer never uses `sudo`. It installs to `$XDG_BIN_HOME`, or
@@ -932,8 +932,8 @@ redirects the old name after a repo rename, but nothing here relies on that:
 the installer, the tarball download and `burrow update` ask `burrow-cli` first
 and `suite-cli` only when that answers 404, so the same code works before the
 rename and after it. `BURROW_CLI_REPO` names one repo, with no fallback. The
-GitHub org is still `Startup-Suite` until it is renamed; `BURROW_GITHUB_OWNER`
-overrides it.
+GitHub org is `GetBurrowing` (the default from 0.12.1; it was renamed in
+place); `BURROW_GITHUB_OWNER` overrides it.
 
 ## Versioning
 

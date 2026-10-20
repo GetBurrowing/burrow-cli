@@ -27,7 +27,7 @@ elif [ -n "${SUITE_GITHUB_OWNER:-}" ]; then
 	OWNER="$SUITE_GITHUB_OWNER"
 else
 	OWNER_VAR="BURROW_GITHUB_OWNER"
-	OWNER="Startup-Suite"
+	OWNER="GetBurrowing"
 fi
 REF="${BURROW_CLI_REF:-${SUITE_CLI_REF:-main}}"
 # An explicit archive URL (tests, offline installs); empty means "build it".

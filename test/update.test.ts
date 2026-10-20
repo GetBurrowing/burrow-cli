@@ -322,7 +322,7 @@ describe("the installer gets BURROW_* AND SUITE_* names, one value per pair", ()
  * the rename.
  */
 describe("tags and the repo name", () => {
-  const raw = (repo: string, ref: string) => `https://raw.githubusercontent.com/Startup-Suite/${repo}/${ref}/install.sh`;
+  const raw = (repo: string, ref: string) => `https://raw.githubusercontent.com/GetBurrowing/${repo}/${ref}/install.sh`;
 
   test("the repo is burrow-cli, and suite-cli is its legacy name", () => {
     expect(REPO_NAME).toBe("burrow-cli");
@@ -440,8 +440,8 @@ describe("tags and the repo name", () => {
     try {
       expect(await resolveRefToSha("v0.8.0", {}, fake)).toBe("0123456789abcdef0123456789abcdef01234567");
       expect(asked).toEqual([
-        "https://api.github.com/repos/Startup-Suite/burrow-cli/commits/v0.8.0",
-        "https://api.github.com/repos/Startup-Suite/suite-cli/commits/v0.8.0",
+        "https://api.github.com/repos/GetBurrowing/burrow-cli/commits/v0.8.0",
+        "https://api.github.com/repos/GetBurrowing/suite-cli/commits/v0.8.0",
       ]);
       asked.length = 0;
       const found = async (url: string): Promise<Response> => {
@@ -449,7 +449,7 @@ describe("tags and the repo name", () => {
         return new Response(JSON.stringify({ sha: "fedcba9876543210fedcba9876543210fedcba98" }), { status: 200 });
       };
       expect(await resolveRefToSha("v0.8.0", {}, found)).toBe("fedcba9876543210fedcba9876543210fedcba98");
-      expect(asked).toEqual(["https://api.github.com/repos/Startup-Suite/burrow-cli/commits/v0.8.0"]);
+      expect(asked).toEqual(["https://api.github.com/repos/GetBurrowing/burrow-cli/commits/v0.8.0"]);
     } finally {
       if (prev === undefined) delete process.env.GH_TOKEN;
       else process.env.GH_TOKEN = prev;
