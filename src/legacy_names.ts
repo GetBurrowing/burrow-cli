@@ -8,6 +8,9 @@
  *   pane wrapper $0    suite-claude-continue -> burrow-claude-continue
  *   channel entry env  SUITE_<X> -> BURROW_<X> (the SUITE_* copies are no longer written)
  *
+ * 0.12.0 adds the names a Hermes home holds (MCP id, platform plugin, token
+ * file; the "Hermes" section below), moved on the hermes start path.
+ *
  * From 0.11.0 every writer writes only the new names, and this module is the
  * ONLY place that spells the old ones. It follows the 0.10.2 agent-root rename
  * as 0.10.3 fixed it:
@@ -41,7 +44,7 @@
  * every folder on the machine and are never renamed here; an old-named one is
  * reported by the convergence check (init.ts) instead.
  */
-import { chmodSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, lstatSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { join } from "node:path";
 
@@ -78,9 +81,11 @@ export class LegacyNameConflict extends Error {
     readonly where: string,
     readonly oldName: string,
     readonly newName: string,
+    /** The release that reads only the new name. */
+    readonly since = "0.11.0",
   ) {
     super(
-      `${where} holds both ${oldName} and ${newName}; burrow 0.11.0 reads only ${newName}, ` +
+      `${where} holds both ${oldName} and ${newName}; burrow ${since} reads only ${newName}, ` +
         `so keep one (remove the other) and start the agent again`,
     );
     this.name = "LegacyNameConflict";
@@ -337,4 +342,217 @@ export function renameFiles(configFiles: readonly string[], claudeRoot: string |
   const plans = planFiles(configFiles, claudeRoot);
   for (const p of plans) replaceFile(p.file, p.next);
   return plans.flatMap((p) => p.changes.map((what) => ({ file: p.file, what })));
+}
+
+/* ------------------------------------------------------------------------- */
+/* Hermes (0.12.0)                                                           */
+/* ------------------------------------------------------------------------- */
+
+/*
+ * A Hermes home (`HERMES_HOME`, `<root>/.hermes`) holds three names that
+ * burrow-channel-hermes before v0.4.0 wrote, and that PERSIST across starts:
+ *
+ *   config.yaml `mcp_servers.<id>`            startup-suite          -> burrow
+ *   the platform plugin (plugins/<name>/,     startup-suite-platform -> burrow-platform
+ *     plugins.enabled / plugins.disabled)
+ *   the runtime token file                    mcp-tokens/startup-suite-platform.runtime-token
+ *                                             -> mcp-tokens/burrow-platform.runtime-token
+ *
+ * The v0.4.0 installer writes only the new names. Run over an old home it
+ * installs a second generation beside the first (two MCP servers, two
+ * enabled platform plugins on one runtime), so the old one is moved HERE, on
+ * the start path (`burrow hermes`, `--no-session`, `--stamp-only`: every path
+ * that stamps), before the installer runs. Never on an attach: the running
+ * gateway read these at its start. Never on `--gateway-only` either: that
+ * path runs no installer, and an old plugin left installed reads the old
+ * token path, so moving the names without the installer that follows would
+ * leave the gateway unable to connect.
+ *
+ * HOW each moves (hermes.ts rule 3: config.yaml is written only by Hermes):
+ *   - the MCP entry: `hermes config set mcp_servers.<new> <old value as JSON>`,
+ *     then `hermes config unset mcp_servers.<old>`. MEASURED at hermes-agent
+ *     fdec926e: `config set` stores a JSON object as structure, and the
+ *     installer then rewrites only the keys it owns (command, args);
+ *   - the plugin: `hermes plugins disable <old>` when it is enabled, then
+ *     `hermes plugins remove <old>`. MEASURED at fdec926e: `remove` (aliases
+ *     `rm`, `uninstall`) deletes the tree and its install-metadata entry and
+ *     drops the name from plugins.enabled AND plugins.disabled; both exit 1
+ *     "No plugin named ..." for a name with no tree. A name listed with no tree
+ *     is taken out of its list with `hermes config set plugins.<list>`. The
+ *     installer then installs and enables the new plugin;
+ *   - the token file: rename(2) in its own directory, so its bytes, inode and
+ *     0600 mode are kept and its value never enters this process. The
+ *     installer then finds the same token there and reports it unchanged.
+ *
+ * Old beside new in any place refuses ({@link LegacyNameConflict}), every
+ * place is checked before any is changed, and the conflict names the file and
+ * both names.
+ */
+
+/** `[old, new]` Hermes MCP server id. The new one is hermes.ts MCP_SERVER_NAME (asserted by test). */
+export const HERMES_MCP_RENAME = ["startup-suite", "burrow"] as const;
+/** `[old, new]` Hermes platform plugin name. The new one is hermes.ts PLUGIN_NAME. */
+export const HERMES_PLUGIN_RENAME = ["startup-suite-platform", "burrow-platform"] as const;
+/** `[old, new]` runtime token path, relative to HERMES_HOME. The new one is hermes.ts TOKEN_RELPATH. */
+export const HERMES_TOKEN_RENAME = [
+  join("mcp-tokens", "startup-suite-platform.runtime-token"),
+  join("mcp-tokens", "burrow-platform.runtime-token"),
+] as const;
+
+/** The release from which the Hermes adapter reads only the new names. */
+const HERMES_SINCE = "0.12.0";
+
+const PLUGIN_LISTS = ["enabled", "disabled"] as const;
+
+export type HermesPlace = "mcp_server" | "plugin" | "token_file";
+
+/** One Hermes name the start would move. `file` is absolute. */
+export interface HermesRename {
+  place: HermesPlace;
+  file: string;
+  oldName: string;
+  newName: string;
+}
+
+function presentPath(path: string): boolean {
+  try {
+    lstatSync(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function pluginLists(config: Json | null): Record<(typeof PLUGIN_LISTS)[number], unknown[]> {
+  const plugins = config !== null && isObject(config.plugins) ? config.plugins : {};
+  const list = (k: string): unknown[] => (Array.isArray(plugins[k]) ? (plugins[k] as unknown[]) : []);
+  return { enabled: list("enabled"), disabled: list("disabled") };
+}
+
+function mcpServers(config: Json | null): Json {
+  return config !== null && isObject(config.mcp_servers) ? config.mcp_servers : {};
+}
+
+/**
+ * What the start would rename in a Hermes home, checked in every place before
+ * anything changes. Throws {@link LegacyNameConflict} when an old name sits
+ * beside its new one. Read-only. `config` is config.yaml parsed (null when
+ * there is none); the caller parses it so this module needs no YAML reader.
+ */
+export function pendingHermesRenames(home: string, config: Json | null): HermesRename[] {
+  const todo: HermesRename[] = [];
+  const configFile = join(home, "config.yaml");
+
+  const [oldMcp, newMcp] = HERMES_MCP_RENAME;
+  const servers = mcpServers(config);
+  if (has(servers, oldMcp)) {
+    if (has(servers, newMcp)) throw new LegacyNameConflict(`${configFile} mcp_servers`, oldMcp, newMcp, HERMES_SINCE);
+    todo.push({ place: "mcp_server", file: configFile, oldName: oldMcp, newName: newMcp });
+  }
+
+  const [oldPlugin, newPlugin] = HERMES_PLUGIN_RENAME;
+  const pluginsDir = join(home, "plugins");
+  const lists = pluginLists(config);
+  const oldListed = PLUGIN_LISTS.some((k) => lists[k].includes(oldPlugin));
+  const oldTree = presentPath(join(pluginsDir, oldPlugin));
+  if (oldTree || oldListed) {
+    // The same place holding both: the plugins directory, or one list.
+    if (oldTree && presentPath(join(pluginsDir, newPlugin))) throw new LegacyNameConflict(pluginsDir, oldPlugin, newPlugin, HERMES_SINCE);
+    for (const k of PLUGIN_LISTS) {
+      if (lists[k].includes(oldPlugin) && lists[k].includes(newPlugin)) {
+        throw new LegacyNameConflict(`${configFile} plugins.${k}`, oldPlugin, newPlugin, HERMES_SINCE);
+      }
+    }
+    todo.push({ place: "plugin", file: join(pluginsDir, oldPlugin), oldName: oldPlugin, newName: newPlugin });
+  }
+
+  const [oldToken, newToken] = HERMES_TOKEN_RENAME;
+  if (presentPath(join(home, oldToken))) {
+    if (presentPath(join(home, newToken))) throw new LegacyNameConflict(join(home, "mcp-tokens"), oldToken, newToken, HERMES_SINCE);
+    todo.push({ place: "token_file", file: join(home, oldToken), oldName: oldToken, newName: newToken });
+  }
+  return todo;
+}
+
+/**
+ * The old Hermes names a home still holds, one description each, for a
+ * reader that must not write or refuse (the attach gate). Never throws:
+ * a home holding old beside new is still a home holding old names.
+ */
+export function hermesLegacyNames(home: string, config: Json | null): string[] {
+  const out: string[] = [];
+  const [oldMcp] = HERMES_MCP_RENAME;
+  if (has(mcpServers(config), oldMcp)) out.push(`${join(home, "config.yaml")} mcp_servers.${oldMcp}`);
+  const [oldPlugin] = HERMES_PLUGIN_RENAME;
+  const lists = pluginLists(config);
+  if (presentPath(join(home, "plugins", oldPlugin))) out.push(join(home, "plugins", oldPlugin));
+  for (const k of PLUGIN_LISTS) if (lists[k].includes(oldPlugin)) out.push(`${join(home, "config.yaml")} plugins.${k}: ${oldPlugin}`);
+  const [oldToken] = HERMES_TOKEN_RENAME;
+  if (presentPath(join(home, oldToken))) out.push(join(home, oldToken));
+  return out;
+}
+
+/** How {@link renameHermesHome} reaches Hermes: its CLI (argv after the binary), and a fresh parse of config.yaml. */
+export interface HermesRenameCli {
+  run(args: string[]): Promise<{ exitCode: number; stdout: string; stderr: string }>;
+  readConfig(): Json | null;
+}
+
+/** Key-order-independent JSON, for comparing what Hermes stored with what was asked. */
+function canonical(v: unknown): string {
+  if (Array.isArray(v)) return `[${v.map(canonical).join(",")}]`;
+  if (isObject(v)) return `{${Object.keys(v).sort().map((k) => `${JSON.stringify(k)}:${canonical(v[k])}`).join(",")}}`;
+  return JSON.stringify(v) ?? "null";
+}
+
+/**
+ * Move a Hermes home's old names to the new ones (see the section comment for
+ * how each moves). Every place is checked first: a conflict throws
+ * {@link LegacyNameConflict} having changed nothing. A Hermes command that
+ * fails, or that exits 0 without the effect, throws an Error naming it.
+ * Returns what moved; empty for a home already renamed.
+ */
+export async function renameHermesHome(home: string, cli: HermesRenameCli): Promise<NameChange[]> {
+  const todo = pendingHermesRenames(home, cli.readConfig());
+  const changes: NameChange[] = [];
+  const hermes = async (args: string[]): Promise<void> => {
+    const r = await cli.run(args);
+    if (r.exitCode !== 0) {
+      const detail = (r.stderr || r.stdout).trim().split("\n").pop() ?? "";
+      throw new Error(`hermes ${args.join(" ")} exited ${r.exitCode}: ${detail}`);
+    }
+  };
+  for (const r of todo) {
+    if (r.place === "mcp_server") {
+      const value = mcpServers(cli.readConfig())[r.oldName];
+      const carried = isObject(value) || Array.isArray(value);
+      if (carried) await hermes(["config", "set", `mcp_servers.${r.newName}`, JSON.stringify(value)]);
+      await hermes(["config", "unset", `mcp_servers.${r.oldName}`]);
+      const after = mcpServers(cli.readConfig());
+      if (has(after, r.oldName) || (carried && canonical(after[r.newName]) !== canonical(value))) {
+        throw new Error(`hermes config set/unset exited 0 but ${r.file} does not hold mcp_servers.${r.newName} in place of mcp_servers.${r.oldName}`);
+      }
+      changes.push({ file: r.file, what: `mcp_servers.${r.oldName} -> mcp_servers.${r.newName}` });
+    } else if (r.place === "plugin") {
+      const tree = presentPath(r.file);
+      if (tree && pluginLists(cli.readConfig()).enabled.includes(r.oldName)) await hermes(["plugins", "disable", r.oldName]);
+      if (tree) await hermes(["plugins", "remove", r.oldName]);
+      // A name listed with no tree: `plugins disable/remove` cannot resolve it (measured), so the list is set without it.
+      const lists = pluginLists(cli.readConfig());
+      for (const k of PLUGIN_LISTS) {
+        if (!lists[k].includes(r.oldName)) continue;
+        await hermes(["config", "set", `plugins.${k}`, JSON.stringify(lists[k].filter((n) => n !== r.oldName))]);
+      }
+      const after = pluginLists(cli.readConfig());
+      if (presentPath(r.file) || PLUGIN_LISTS.some((k) => after[k].includes(r.oldName))) {
+        throw new Error(`hermes plugins disable/remove exited 0 but ${r.oldName} is still installed or listed`);
+      }
+      changes.push({ file: r.file, what: `plugin ${r.oldName} removed; the installer installs ${r.newName}` });
+    } else {
+      const to = join(home, r.newName);
+      renameSync(r.file, to);
+      changes.push({ file: to, what: `renamed from ${r.file}` });
+    }
+  }
+  return changes;
 }

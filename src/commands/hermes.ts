@@ -118,6 +118,8 @@ import {
 } from "./deepseek.ts";
 import { CLI_NAME } from "../version.ts";
 import { legacyNamesIn, migrateAgentRootOrSay } from "../agent_root_names.ts";
+import { LegacyNameConflict, hermesLegacyNames, pendingHermesRenames, renameHermesHome, type HermesRename } from "../legacy_names.ts";
+import { RENAME_REFUSED_EXIT } from "./claude.ts";
 
 type Env = Record<string, string | undefined>;
 
@@ -128,8 +130,13 @@ type Env = Record<string, string | undefined>;
 /**
  * DEPLOYER: BUMP THIS BEFORE burrow-cli MERGES.
  *
- * This is the commit tagged v0.3.1 on burrow-channel-hermes main (PR #8,
- * product-name copy to Burrow, Burrow rename F). It replaced f1399d77 (v0.3.0,
+ * This is the commit tagged v0.4.0 on burrow-channel-hermes main (PR #9): the
+ * MCP id, plugin name and token path renamed to burrow / burrow-platform /
+ * mcp-tokens/burrow-platform.runtime-token, with no alias and no migration in
+ * that repo (an existing home is moved by this verb's start path, see
+ * legacy_names.ts "Hermes"). PLATFORM_NAME and the result line are unchanged
+ * (read at both). It replaced 36e3d539 (v0.3.1, PR #8, product-name copy to
+ * Burrow, Burrow rename F), which replaced f1399d77 (v0.3.0,
  * PR #7, BURROW_* names with SUITE_* fallback, Burrow rename C). The installer's
  * result line and PLATFORM_NAME are unchanged between the two (read at both).
  * f1399d77 replaced 71041456 (v0.2.0, PR #6), which replaced d9918533 (PR #3, the
@@ -137,7 +144,7 @@ type Env = Record<string, string | undefined>;
  * d9918533 refuse, so the pin cannot move to an older commit than that. Pin a commit on main, never a branch tip: a squash
  * merge deletes the branch and the tip would dangle.
  */
-export const HERMES_CHANNEL_REF = "36e3d5398d724be0fe55232a7df536454ca189c9";
+export const HERMES_CHANNEL_REF = "4d64006780bc3c8011d034b20910c0aee06aa4c6";
 /** The channel repo's name. Its owner comes from repo_source.ts (SUITE_GITHUB_OWNER). */
 // The repo's own name since Burrow rename C. Its old name, hermes-suite-channel, redirects; nothing relies on that.
 export const HERMES_CHANNEL_REPO_NAME = "burrow-channel-hermes";
@@ -165,9 +172,17 @@ export const WRITER_VERSION = 1;
  */
 export const MCP_SDK_PIN = "mcp==2.0.0";
 
-export const MCP_SERVER_NAME = "startup-suite";
-export const PLUGIN_NAME = "startup-suite-platform";
-export const TOKEN_RELPATH = join("mcp-tokens", "startup-suite-platform.runtime-token");
+/**
+ * The names burrow-channel-hermes v0.4.0 installs ({@link HERMES_CHANNEL_REF}).
+ * A home an older installer wrote is moved to these on the start path; the old
+ * spellings live only in legacy_names.ts.
+ */
+export const MCP_SERVER_NAME = "burrow";
+export const PLUGIN_NAME = "burrow-platform";
+export const TOKEN_RELPATH = join("mcp-tokens", "burrow-platform.runtime-token");
+/** The stamp error code for a home holding a pre-0.12.0 name beside its new one. */
+export const LEGACY_CONFLICT_CODE = "legacy_name_conflict";
+
 /** The channel installer's last stdout line on success. */
 export const INSTALLER_RESULT_LINE = "hermes-suite-channel: installed";
 
@@ -488,7 +503,7 @@ export function parseConfigCheck(exitCode: number, stdout: string, stderr: strin
 }
 
 /**
- * `hermes mcp test startup-suite`. MEASURED at fdec926e against a stdio
+ * `hermes mcp test <MCP_SERVER_NAME>`. MEASURED at fdec926e against a stdio
  * server (hermes_cli/mcp_config.py:783): exit 0 connected, 1 connection
  * failed, 3 no such server. Connected output carries `✓ Connected (Nms)` and
  * `✓ Tools discovered: N`.
@@ -693,6 +708,9 @@ interface WriterState {
   /** Whether this root carried a stamp record before this run: an absent part is then a repair. */
   stampedBefore: boolean;
   channelActions: Map<ChannelPart, StampAction>;
+  /** The pre-0.12.0 names this start moves (legacy_names.ts "Hermes"), and their actions. */
+  renames: HermesRename[];
+  renameActions: StampAction[];
   warnings: string[];
   secrets: string[];
 }
@@ -826,6 +844,8 @@ export function hermesWriter(ctx: { opts: HermesOptions | null }, deps: HermesDe
     before: null,
     stampedBefore: false,
     channelActions: new Map(),
+    renames: [],
+    renameActions: [],
     warnings: [],
     secrets: [],
   };
@@ -996,6 +1016,21 @@ export function hermesWriter(ctx: { opts: HermesOptions | null }, deps: HermesDe
     }
   }
 
+  async function renameLegacyNames(home: string, bin: string): Promise<void> {
+    let changes;
+    try {
+      changes = await renameHermesHome(home, {
+        run: async (args) => await spawn([bin, ...args]),
+        readConfig: () => readHermesConfig(home),
+      });
+    } catch (e) {
+      if (e instanceof LegacyNameConflict) throw refused(LEGACY_CONFLICT_CODE, e.message);
+      throw fail("legacy_rename_failed", `could not rename ${home}'s pre-0.12.0 names: ${e instanceof Error ? e.message : String(e)}`);
+    }
+    for (const c of changes) deps.stderr(`${CLI_NAME}: renamed ${c.file}: ${c.what}\n`);
+    for (const a of state.renameActions) a.applied = true;
+  }
+
   const writer: HarnessWriter & { state: WriterState } = {
     state,
     harness: "hermes",
@@ -1054,6 +1089,20 @@ export function hermesWriter(ctx: { opts: HermesOptions | null }, deps: HermesDe
       state.stampedBefore = (await readStampRecord(o.root)) !== null;
       const absent = state.stampedBefore ? "repaired" : "written";
 
+      // The pre-0.12.0 names, every place checked before anything is written
+      // (the identity is written after this plan). Old beside new refuses here.
+      try {
+        state.renames = pendingHermesRenames(home, readHermesConfig(home));
+      } catch (e) {
+        if (e instanceof LegacyNameConflict) throw refused(LEGACY_CONFLICT_CODE, e.message);
+        throw e;
+      }
+      for (const r of state.renames) {
+        const a = planned("legacy_name", `${r.file}: ${r.oldName} -> ${r.newName}`, "repaired");
+        state.renameActions.push(a);
+        actions.push(a);
+      }
+
       const head = await gitHead();
       actions.push(planned("plugin_checkout", `${checkout()}@${channelRef}`, head === null ? "written" : head === channelRef ? "unchanged" : "repaired"));
 
@@ -1110,6 +1159,10 @@ export function hermesWriter(ctx: { opts: HermesOptions | null }, deps: HermesDe
       const home = o.hermesHome;
       const bin = state.bin as string;
       mkdirSync(home, { recursive: true, mode: 0o700 });
+
+      // Move a pre-0.12.0 home's names BEFORE the installer, which writes only
+      // the new ones: left in place, the old generation would run beside the new.
+      if (state.renames.length > 0) await renameLegacyNames(home, bin);
 
       const co = actions.find((a) => a.kind === "plugin_checkout");
       if (co !== undefined && co.outcome !== "unchanged") {
@@ -1327,18 +1380,34 @@ export function gatewayEnv(deps: Pick<HermesDeps, "env">, opts: HermesOptions): 
 }
 
 /**
- * Attach to this agent's live session WITHOUT stamping, for a root that still
- * holds pre-0.10.2 names (the stamp would rename them under the running
- * agent). Returns null when no session is live: the caller then stamps and
- * starts as usual, and that start renames.
+ * The names an earlier release wrote that this root still holds: the
+ * pre-0.10.2 agent-root files, and the pre-0.12.0 Hermes names in its home.
+ * Read-only; an unparseable config.yaml reads as no Hermes names (the stamp
+ * then reports it).
  */
-async function attachWithoutStamp(opts: HermesOptions, deps: HermesDeps): Promise<number | null> {
+export function oldNamesIn(opts: Pick<HermesOptions, "root" | "hermesHome">): string[] {
+  let config: Record<string, unknown> | null = null;
+  try {
+    config = readHermesConfig(opts.hermesHome);
+  } catch {
+    config = null;
+  }
+  return [...legacyNamesIn(opts.root), ...hermesLegacyNames(opts.hermesHome, config)];
+}
+
+/**
+ * Attach to this agent's live session WITHOUT stamping, for a root that still
+ * holds names an earlier release wrote ({@link oldNamesIn}): the stamp would
+ * rename them under the running agent. Returns null when no session is live:
+ * the caller then stamps and starts as usual, and that start renames.
+ */
+async function attachWithoutStamp(opts: HermesOptions, deps: HermesDeps, names: string[]): Promise<number | null> {
   const session = sessionNameForAgent(agentNameForRoot(opts.root));
   const sessionEnv = harnessChildEnv(deps.env, { HERMES_HOME: opts.hermesHome, TMUX: deps.env.TMUX });
   const live = await sessionIsLive(session, sessionEnv, { agentName: HERMES_AGENT_COMM, tmux: deps.tmux });
   if (!live) return null;
   deps.stderr(
-    `${CLI_NAME}: ${opts.root} still holds pre-0.10.2 names and its agent is running; ` +
+    `${CLI_NAME}: ${opts.root} still holds names an earlier ${CLI_NAME} wrote (${names.join(", ")}) and its agent is running; ` +
       `attaching without stamping. They are renamed when the agent next starts.\n`,
   );
   return await runInSession(session, [], opts.root, sessionEnv, createStore(), deps.session, {
@@ -1353,6 +1422,14 @@ async function attachWithoutStamp(opts: HermesOptions, deps: HermesDeps): Promis
   });
 }
 
+/**
+ * `--gateway-only`: exec the stamped gateway. It renames a pre-0.10.2 root's
+ * files (a rename of paths only this CLI reads) but NOT a pre-0.12.0 home's
+ * Hermes names: those move only together with the installer run that installs
+ * the new plugin (legacy_names.ts "Hermes"), and this path runs no installer.
+ * A restore of an unrenamed agent therefore starts it on its old, consistent
+ * names; its next `burrow hermes` start renames them.
+ */
 async function runGateway(opts: HermesOptions, deps: HermesDeps): Promise<number> {
   if (!migrateAgentRootOrSay(opts.root, deps.stderr, CLI_NAME)) return EXIT_REFUSED;
   const record = await readStampRecord(opts.root);
@@ -1415,17 +1492,22 @@ export async function runHermes(args: string[], deps: HermesDeps): Promise<numbe
   }
   if (opts.gatewayOnly) return await runGateway(opts, deps);
 
-  // NEVER RENAME UNDER A RUNNING AGENT (0.10.3). The stamp below renames a
-  // pre-0.10.2 root's `suite` names, so while this agent's session is live
-  // and the root still holds them, neither runs: this run only attaches, and
-  // the rename waits for the next start (`--gateway-only`, which renames).
-  // A root already renamed is stamped as before.
-  if (!opts.noSession && legacyNamesIn(opts.root).length > 0) {
-    const attach = await attachWithoutStamp(opts, deps);
-    if (attach !== null) return attach;
+  // NEVER RENAME UNDER A RUNNING AGENT (0.10.3, 0.12.0). The stamp below
+  // renames a pre-0.10.2 root's `suite` files and a pre-0.12.0 home's Hermes
+  // names, so while this agent's session is live and the root still holds
+  // any of them, neither runs: this run only attaches, and the rename waits
+  // for the next start. A root already renamed is stamped as before.
+  if (!opts.noSession) {
+    const names = oldNamesIn(opts);
+    if (names.length > 0) {
+      const attach = await attachWithoutStamp(opts, deps, names);
+      if (attach !== null) return attach;
+    }
   }
 
-  const { exitCode, writer } = await stampHermes(args, deps, { stdout: () => {}, stderr: deps.stderr });
+  const { exitCode, writer, result } = await stampHermes(args, deps, { stdout: () => {}, stderr: deps.stderr });
+  // A name beside its new one is the rename refusal every adapter shares (claude.ts); --stamp-only keeps the contract's 2.
+  if (result.error?.code === LEGACY_CONFLICT_CODE) return RENAME_REFUSED_EXIT;
   if (exitCode !== 0) return exitCode;
   const bin = writer.state.bin as string;
 

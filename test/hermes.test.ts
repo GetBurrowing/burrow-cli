@@ -4,6 +4,7 @@ import {
   copyFileSync,
   cpSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -13,8 +14,9 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
+import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import { emptyConfig, serializeConfig } from "../src/config.ts";
 import {
@@ -22,6 +24,7 @@ import {
   HERMES_AGENT_REF,
   HERMES_CHANNEL_REF,
   HEADLESS_TOOLSET,
+  LEGACY_CONFLICT_CODE,
   LEGACY_LEAN_TOOLSET,
   MCP_SDK_PIN,
   TOOLSET_KEY,
@@ -385,7 +388,7 @@ describe("stamping from nothing (file: ref)", () => {
     expect(result.harness_version).toBe("fdec926e");
     expect(result.warnings).toEqual([]);
     expect(result.validation.verdict).toBe("pass");
-    expect(result.validation.checks.map((c) => c.command)).toEqual(["hermes config check", "hermes mcp test startup-suite"]);
+    expect(result.validation.checks.map((c) => c.command)).toEqual(["hermes config check", "hermes mcp test burrow"]);
 
     const o = outcomes(result);
     expect(o[`sanctioned_token_file ${tokenFilePath(hermesHome)}`]).toBe("written");
@@ -500,7 +503,7 @@ describe("idempotence and repair", () => {
     const changed = result.actions.filter((a) => a.outcome !== "unchanged");
     expect(changed.map((a) => [a.kind, a.outcome])).toEqual([["mcp_server", "repaired"]]);
     const after = parseYaml(readFileSync(cfgPath, "utf8")) as { mcp_servers: Record<string, { args: string[] }> };
-    const args = after.mcp_servers["startup-suite"]?.args ?? [];
+    const args = after.mcp_servers.burrow?.args ?? [];
     // The entry references the token only by its 0600 file path.
     expect(args).toContain(tokenFilePath(hermesHome));
     expect(args.join(" ").includes(token)).toBe(false);
@@ -831,7 +834,7 @@ describe("the interpreter, with a real #!/bin/sh launcher (fdec926e ships only t
     const calls = installerCalls();
     expect(calls).toHaveLength(2);
     expect(calls[1]?.argv[(calls[1]?.argv.indexOf("--python") ?? 0) + 1]).toBe(e2);
-    expect(lookupKey(parseYaml(readFileSync(join(hermesHome, "config.yaml"), "utf8")), "mcp_servers.startup-suite.command")).toBe(e2);
+    expect(lookupKey(parseYaml(readFileSync(join(hermesHome, "config.yaml"), "utf8")), "mcp_servers.burrow.command")).toBe(e2);
     expect(first.result.actions.find((a) => a.kind === "mcp_sdk")?.target).toBe(`${e2} ${MCP_SDK_PIN}`);
     const before = stubCalls().length;
     const again = await stamp(withLauncher(join(bin, "hermes")));
@@ -1120,6 +1123,266 @@ describe("the gateway session", () => {
   });
 });
 
+/* ------------------------------------------------------------------------- */
+/* 0.12.0: a pre-0.12.0 Hermes home is renamed on start, never on attach      */
+/* ------------------------------------------------------------------------- */
+
+const OLD_MCP = "startup-suite";
+const OLD_PLUGIN = "startup-suite-platform";
+const oldTokenPath = (): string => join(hermesHome, "mcp-tokens", "startup-suite-platform.runtime-token");
+const cfgFile = (): string => join(hermesHome, "config.yaml");
+const sha256 = (b: Buffer | string): string => createHash("sha256").update(b).digest("hex");
+const readCfg = (): Record<string, any> => parseYaml(readFileSync(cfgFile(), "utf8")) as Record<string, any>;
+
+/** sha256 and mode of every file under `dir` (and every directory's mode): "byte-identical" made checkable. */
+function treeHashes(dir: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  const walk = (d: string): void => {
+    for (const n of readdirSync(d).sort()) {
+      const p = join(d, n);
+      const st = lstatSync(p);
+      const rel = relative(dir, p);
+      if (st.isDirectory()) {
+        out[`${rel}/`] = `dir ${(st.mode & 0o7777).toString(8)}`;
+        walk(p);
+      } else out[rel] = `${(st.mode & 0o7777).toString(8)} ${sha256(readFileSync(p))}`;
+    }
+  };
+  walk(dir);
+  return out;
+}
+
+/**
+ * Put a stamped home back as burrow-channel-hermes before v0.4.0 left it:
+ * MCP entry `startup-suite` (its args naming the old token path and plugin
+ * dir, plus an operator key the move must carry), plugin
+ * `startup-suite-platform` installed and enabled, and the token under its old
+ * name. The stamp record stays a passing one.
+ */
+function makePre012Home(): void {
+  const cfg = readCfg();
+  const entry = cfg.mcp_servers.burrow as { args: string[]; timeout?: number };
+  renameSync(tokenFilePath(hermesHome), oldTokenPath());
+  renameSync(join(hermesHome, "plugins", "burrow-platform"), join(hermesHome, "plugins", OLD_PLUGIN));
+  writeFileSync(join(hermesHome, "plugins", OLD_PLUGIN, "plugin.yaml"), `name: ${OLD_PLUGIN}\n`);
+  entry.args = entry.args.map((a) =>
+    a === tokenFilePath(hermesHome) ? oldTokenPath() : a.replace(`${join("plugins", "burrow-platform")}/`, `${join("plugins", OLD_PLUGIN)}/`),
+  );
+  entry.timeout = 30;
+  cfg.mcp_servers = { [OLD_MCP]: entry };
+  cfg.plugins = { enabled: [OLD_PLUGIN], disabled: [] };
+  writeFileSync(cfgFile(), stringifyYaml(cfg));
+  const env = join(hermesHome, ".env");
+  writeFileSync(env, readFileSync(env, "utf8").split(tokenFilePath(hermesHome)).join(oldTokenPath()));
+}
+
+const writes = (calls: StubCall[]): StubCall[] =>
+  calls.filter((c) => (c.argv[0] === "config" && (c.argv[1] === "set" || c.argv[1] === "unset")) || c.argv[0] === "plugins");
+
+function expectRenamed(tokenSha: string, tokenIno: number): void {
+  const cfg = readCfg();
+  expect(Object.keys(cfg.mcp_servers)).toEqual(["burrow"]);
+  // The operator's own key moved with the entry; the installer rewrote only what it owns.
+  expect(cfg.mcp_servers.burrow.timeout).toBe(30);
+  expect(cfg.mcp_servers.burrow.args).toContain(tokenFilePath(hermesHome));
+  expect(cfg.plugins.enabled).toEqual(["burrow-platform"]);
+  expect(cfg.plugins.disabled ?? []).toEqual([]);
+  expect(readFileSync(cfgFile(), "utf8")).not.toContain("startup-suite");
+  expect(existsSync(join(hermesHome, "plugins", OLD_PLUGIN))).toBe(false);
+  expect(existsSync(join(hermesHome, "plugins", "burrow-platform"))).toBe(true);
+  expect(existsSync(oldTokenPath())).toBe(false);
+  const st = statSync(tokenFilePath(hermesHome));
+  expect(st.mode & 0o777).toBe(0o600);
+  expect(st.ino).toBe(tokenIno);
+  expect(sha256(readFileSync(tokenFilePath(hermesHome)))).toBe(tokenSha);
+}
+
+describe("0.12.0: a pre-0.12.0 Hermes home is renamed on start, never on attach", () => {
+  test("START renames all three before the installer runs; a second start makes 0 config set/unset calls and changes nothing", async () => {
+    makeManagedPython();
+    expect((await stamp()).exitCode).toBe(0);
+    makePre012Home();
+    const tokenSha = sha256(readFileSync(oldTokenPath()));
+    const tokenIno = statSync(oldTokenPath()).ino;
+    const n = stubCalls().length;
+    stderr = [];
+
+    const tmux = fakeTmux();
+    expect(await runHermes(stampArgs(), makeDeps({ tmux: tmux.deps }))).toBe(0);
+    expect(tmux.ran.filter((a) => a[1] === "new-session")).toHaveLength(1);
+    expectRenamed(tokenSha, tokenIno);
+    // The installer found the moved token and did not write one.
+    expect(stderr.join("")).not.toContain("wrote the runtime token");
+
+    // Through Hermes's own CLI, the old generation gone before the installer enabled the new one.
+    const run = stubCalls().slice(n).map((c) => c.argv.join(" "));
+    const at = (prefix: string): number => run.findIndex((l) => l.startsWith(prefix));
+    expect(at("config set mcp_servers.burrow {")).toBeGreaterThan(-1);
+    expect(at(`config unset mcp_servers.${OLD_MCP}`)).toBeGreaterThan(at("config set mcp_servers.burrow {"));
+    expect(at(`plugins disable ${OLD_PLUGIN}`)).toBeGreaterThan(-1);
+    expect(at(`plugins remove ${OLD_PLUGIN}`)).toBeGreaterThan(at(`plugins disable ${OLD_PLUGIN}`));
+    expect(at("plugins enable burrow-platform")).toBeGreaterThan(at(`plugins remove ${OLD_PLUGIN}`));
+
+    // Second start: nothing left to move, nothing written.
+    const hashes = treeHashes(hermesHome);
+    const m = stubCalls().length;
+    expect(await runHermes(stampArgs(), makeDeps({ tmux: fakeTmux().deps }))).toBe(0);
+    expect(writes(stubCalls().slice(m))).toEqual([]);
+    expect(treeHashes(hermesHome)).toEqual(hashes);
+    const k = stubCalls().length;
+    const again = await stamp();
+    expect(again.exitCode).toBe(0);
+    expect(again.result.changed).toBe(false);
+    expect(again.result.actions.filter((a) => a.kind === "legacy_name")).toEqual([]);
+    expect(writes(stubCalls().slice(k))).toEqual([]);
+  });
+
+  test("START with --no-session renames too, then runs the gateway", async () => {
+    makeManagedPython();
+    expect((await stamp()).exitCode).toBe(0);
+    makePre012Home();
+    const tokenSha = sha256(readFileSync(oldTokenPath()));
+    const tokenIno = statSync(oldTokenPath()).ino;
+    const deps = makeDeps();
+    expect(await runHermes(stampArgs(["--no-session"]), deps)).toBe(0);
+    expectRenamed(tokenSha, tokenIno);
+    expect(deps.execs.map((e) => e.argv.slice(1, 3))).toEqual([["gateway", "run"]]);
+  });
+
+  test("the stamp (--stamp-only) renames, and reports each move as an applied legacy_name action", async () => {
+    makeManagedPython();
+    expect((await stamp()).exitCode).toBe(0);
+    makePre012Home();
+    const tokenSha = sha256(readFileSync(oldTokenPath()));
+    const tokenIno = statSync(oldTokenPath()).ino;
+    const { result, exitCode } = await stamp();
+    expect(exitCode).toBe(0);
+    expect(result.changed).toBe(true);
+    const moves = result.actions.filter((a) => a.kind === "legacy_name");
+    expect(moves.map((a) => [a.outcome, a.applied])).toEqual([
+      ["repaired", true],
+      ["repaired", true],
+      ["repaired", true],
+    ]);
+    expect(moves.map((a) => a.target)).toEqual([
+      `${cfgFile()}: ${OLD_MCP} -> burrow`,
+      `${join(hermesHome, "plugins", OLD_PLUGIN)}: ${OLD_PLUGIN} -> burrow-platform`,
+      `${oldTokenPath()}: ${join("mcp-tokens", "startup-suite-platform.runtime-token")} -> ${join("mcp-tokens", "burrow-platform.runtime-token")}`,
+    ]);
+    expectRenamed(tokenSha, tokenIno);
+  });
+
+  test("ATTACH to a live session renames nothing: every file under .hermes byte-identical, no hermes CLI call", async () => {
+    makeManagedPython();
+    expect((await stamp()).exitCode).toBe(0);
+    makePre012Home();
+    const before = treeHashes(root);
+    const n = stubCalls().length;
+    const ni = installerCalls().length;
+    stderr = [];
+    const session = `burrow-${agentNameForRoot(root)}`;
+    const tmux = fakeTmux(`${session}\t100\tbash\n`, "  100     1 bash    bash\n  102   100 hermes  /v/bin/python /v/bin/hermes gateway run\n");
+    expect(await runHermes(stampArgs(), makeDeps({ tmux: tmux.deps }))).toBe(0);
+    expect(stubCalls().length).toBe(n);
+    expect(installerCalls().length).toBe(ni);
+    expect(treeHashes(root)).toEqual(before);
+    expect(tmux.ran.filter((a) => a[1] === "new-session")).toEqual([]);
+    const err = stderr.join("");
+    expect(err).toContain(`attaching to ${session}`);
+    expect(err).toContain(`mcp_servers.${OLD_MCP}`);
+    expect(err).toContain("They are renamed when the agent next starts.");
+  });
+
+  test("--gateway-only (a restore) leaves a pre-0.12.0 home as it is: it runs no installer, so it moves nothing", async () => {
+    makeManagedPython();
+    expect((await stamp()).exitCode).toBe(0);
+    makePre012Home();
+    const before = treeHashes(hermesHome);
+    const n = stubCalls().length;
+    const deps = makeDeps();
+    const o = parseHermesOptions(stampArgs());
+    expect(await runHermes(relaunchArgv([], o, STUB_HERMES).slice(1), deps)).toBe(0);
+    expect(deps.execs.map((e) => e.argv.slice(1, 3))).toEqual([["gateway", "run"]]);
+    expect(stubCalls().length).toBe(n);
+    expect(treeHashes(hermesHome)).toEqual(before);
+  });
+
+  const conflicts: Array<[string, () => void, string, string, string]> = [
+    [
+      "mcp_servers holds startup-suite AND burrow",
+      () => {
+        const cfg = readCfg();
+        cfg.mcp_servers[OLD_MCP] = cfg.mcp_servers.burrow;
+        writeFileSync(cfgFile(), stringifyYaml(cfg));
+      },
+      `${join("REPLACE", "config.yaml")} mcp_servers`,
+      OLD_MCP,
+      "burrow",
+    ],
+    [
+      "plugins/ holds startup-suite-platform AND burrow-platform",
+      () => cpSync(join(hermesHome, "plugins", "burrow-platform"), join(hermesHome, "plugins", OLD_PLUGIN), { recursive: true }),
+      join("REPLACE", "plugins"),
+      OLD_PLUGIN,
+      "burrow-platform",
+    ],
+    [
+      "plugins.enabled lists startup-suite-platform AND burrow-platform",
+      () => {
+        const cfg = readCfg();
+        cfg.plugins.enabled = ["burrow-platform", OLD_PLUGIN];
+        writeFileSync(cfgFile(), stringifyYaml(cfg));
+      },
+      `${join("REPLACE", "config.yaml")} plugins.enabled`,
+      OLD_PLUGIN,
+      "burrow-platform",
+    ],
+    [
+      "mcp-tokens/ holds both token files",
+      () => {
+        copyFileSync(tokenFilePath(hermesHome), oldTokenPath());
+        chmodSync(oldTokenPath(), 0o600);
+      },
+      join("REPLACE", "mcp-tokens"),
+      join("mcp-tokens", "startup-suite-platform.runtime-token"),
+      join("mcp-tokens", "burrow-platform.runtime-token"),
+    ],
+  ];
+
+  for (const [name, plant, where, oldName, newName] of conflicts) {
+    test(`CONFLICT refused with exit 7, byte-identical, nothing started: ${name}`, async () => {
+      makeManagedPython();
+      expect((await stamp()).exitCode).toBe(0);
+      plant();
+      const before = treeHashes(root);
+      const n = stubCalls().length;
+      const ni = installerCalls().length;
+      stderr = [];
+      const tmux = fakeTmux();
+      const deps = makeDeps({ tmux: tmux.deps });
+      expect(await runHermes(stampArgs(), deps)).toBe(7);
+      expect(treeHashes(root)).toEqual(before);
+      expect(writes(stubCalls().slice(n))).toEqual([]);
+      expect(installerCalls().length).toBe(ni);
+      expect(tmux.ran.filter((a) => a[1] === "new-session")).toEqual([]);
+      expect(deps.execs).toEqual([]);
+      expect(stderr.join("")).toContain(`${where.replace("REPLACE", hermesHome)} holds both ${oldName} and ${newName}`);
+    });
+  }
+
+  test("CONFLICT under --stamp-only keeps the contract: exit 2, error code legacy_name_conflict, nothing written", async () => {
+    makeManagedPython();
+    expect((await stamp()).exitCode).toBe(0);
+    copyFileSync(tokenFilePath(hermesHome), oldTokenPath());
+    const before = treeHashes(root);
+    const { result, exitCode } = await stamp();
+    expect(exitCode).toBe(2);
+    expect(result.error?.code).toBe(LEGACY_CONFLICT_CODE);
+    expect(result.changed).toBe(false);
+    expect(treeHashes(root)).toEqual(before);
+  });
+});
+
 describe("--stamp-only as a subprocess: the machine contract", () => {
   async function run(args: string[]) {
     const proc = Bun.spawn(["bun", HERMES_FIXTURE, ...args], {
@@ -1159,8 +1422,8 @@ describe("--stamp-only as a subprocess: the machine contract", () => {
 });
 
 describe("pins", () => {
-  test("the channel is pinned to the commit tagged v0.3.1 on burrow-channel-hermes main (PR #8)", () => {
-    expect(HERMES_CHANNEL_REF).toBe("36e3d5398d724be0fe55232a7df536454ca189c9");
+  test("the channel is pinned to the commit tagged v0.4.0 on burrow-channel-hermes main (PR #9)", () => {
+    expect(HERMES_CHANNEL_REF).toBe("4d64006780bc3c8011d034b20910c0aee06aa4c6");
   });
 
   test("the pin's DEPLOYER comment is present, so the bump is not forgotten at merge", () => {

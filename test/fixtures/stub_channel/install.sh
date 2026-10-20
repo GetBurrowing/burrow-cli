@@ -4,7 +4,7 @@
 # Same argument surface and the same observable contract as the real one at
 # the pinned HERMES_CHANNEL_REF (it takes --python, and registers it as the
 # MCP command, since task 01a0d8f8 stage 6): refuses --token; reads the token from --token-file, else stdin;
-# writes it 0600 to $HERMES_HOME/mcp-tokens/startup-suite-platform.runtime-token
+# writes it 0600 to $HERMES_HOME/mcp-tokens/burrow-platform.runtime-token
 # only when it changed; sets SUITE_* keys in .env in place (never the token);
 # installs and enables the plugin; registers the stdio mcp_servers entry
 # through `hermes config set` only for keys that differ; logs "already ..."
@@ -52,7 +52,7 @@ fi
 [ -n "$TOKEN" ] || die "the runtime token is empty"
 
 mkdir -p "$HH/mcp-tokens"
-TP="$HH/mcp-tokens/startup-suite-platform.runtime-token"
+TP="$HH/mcp-tokens/burrow-platform.runtime-token"
 tmp="$(umask 077 && mktemp "$HH/mcp-tokens/.hsc-token.XXXXXX")"
 printf '%s\n' "$TOKEN" >"$tmp"
 chmod 600 "$tmp"
@@ -95,30 +95,30 @@ env_set SUITE_RUNTIME_TOKEN_FILE "$TP"
 [ "$ENV_CHANGED" = 0 ] || log "wrote Burrow settings to $ENV_FILE (mode 0600)"
 
 SHA="$(git -C "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)" rev-parse HEAD)"
-PD="$HH/plugins/startup-suite-platform"
+PD="$HH/plugins/burrow-platform"
 BUILD="$PD/hermes_suite_channel/_build.py"
 if [ -f "$BUILD" ] && grep -q "^BUILD = \"$SHA\"\$" "$BUILD"; then
-  log "plugin startup-suite-platform already installed at $SHA"
+  log "plugin burrow-platform already installed at $SHA"
 else
   mkdir -p "$PD/hermes_suite_channel"
-  printf 'name: startup-suite-platform\n' >"$PD/plugin.yaml"
+  printf 'name: burrow-platform\n' >"$PD/plugin.yaml"
   printf 'BUILD = "%s"\n' "$SHA" >"$BUILD"
-  log "installing plugin startup-suite-platform at $SHA"
+  log "installing plugin burrow-platform at $SHA"
 fi
-if "$HB" config get plugins.enabled --json 2>/dev/null | grep -q '"startup-suite-platform"'; then
-  log "plugin startup-suite-platform already enabled"
+if "$HB" config get plugins.enabled --json 2>/dev/null | grep -q '"burrow-platform"'; then
+  log "plugin burrow-platform already enabled"
 else
-  "$HB" config set plugins.enabled '["startup-suite-platform"]' >&2
+  "$HB" plugins enable burrow-platform >&2 || die "hermes plugins enable burrow-platform failed"
 fi
 
 MCP="$(printf '%s' "$URL" | sed -e 's#^wss://#https://#' -e 's#^ws://#http://#' -e 's#^\(https*://[^/]*\).*#\1/mcp#')"
 [ -n "$PY" ] || die "the stub requires --python (the CLI always passes it)"
 want_cmd="$PY"
 want_args="[\"$PD/hermes_suite_channel/mcp_bridge.py\",\"--url\",\"$MCP\",\"--token-file\",\"$TP\"]"
-have_cmd="$("$HB" config get mcp_servers.startup-suite.command 2>/dev/null || true)"
-have_args="$("$HB" config get mcp_servers.startup-suite.args --json 2>/dev/null || true)"
-[ "$have_cmd" = "$want_cmd" ] || "$HB" config set mcp_servers.startup-suite.command "$want_cmd" >&2
-[ "$have_args" = "$want_args" ] || "$HB" config set mcp_servers.startup-suite.args "$want_args" >&2
+have_cmd="$("$HB" config get mcp_servers.burrow.command 2>/dev/null || true)"
+have_args="$("$HB" config get mcp_servers.burrow.args --json 2>/dev/null || true)"
+[ "$have_cmd" = "$want_cmd" ] || "$HB" config set mcp_servers.burrow.command "$want_cmd" >&2
+[ "$have_args" = "$want_args" ] || "$HB" config set mcp_servers.burrow.args "$want_args" >&2
 
 log "restart the gateway to load it: hermes gateway restart"
 printf '%s\n' "hermes-suite-channel: installed"

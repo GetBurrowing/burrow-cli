@@ -5,9 +5,15 @@
  * per_folder_wiring.test.ts ("0.11.0: ..."). Every value is fake.
  */
 import { describe, expect, test } from "bun:test";
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join, relative, resolve } from "node:path";
 import {
+  HERMES_MCP_RENAME,
+  HERMES_PLUGIN_RENAME,
+  HERMES_TOKEN_RENAME,
+  hermesLegacyNames,
+  pendingHermesRenames,
   LEGACY_CONTINUE_WRAPPER,
   LEGACY_DEV_CHANNEL,
   LegacyNameConflict,
@@ -28,6 +34,7 @@ import { DEV_CHANNEL_ARGS, paneCommand } from "../src/commands/claude.ts";
 import { CONTINUE_WRAPPER_NAME } from "../src/tmux.ts";
 import { relaunchArgvRename } from "../src/commands/restore.ts";
 import type { RosterEntry } from "../src/roster.ts";
+import { MCP_SERVER_NAME, PLUGIN_NAME, TOKEN_RELPATH } from "../src/commands/hermes.ts";
 
 describe("the names", () => {
   test("the new ids are the ones every writer uses; raw literals, not derived", () => {
@@ -134,7 +141,6 @@ const OLD_LITERAL = /["'`](suite-channel|startup-suite|server:suite-channel|suit
  */
 const OUT_OF_SCOPE: Record<string, string> = {
   "legacy_names.ts": "the one module that spells the old names",
-  "commands/hermes.ts": "hermes-suite-channel's installer registers mcp_servers.startup-suite",
   "commands/openclaw.ts": "the OpenClaw plugin's own channel id",
 };
 
@@ -167,5 +173,79 @@ describe("no other src file spells an old Claude Code name", () => {
     expect([...hits].filter((f) => OUT_OF_SCOPE[f] === undefined)).toEqual([]);
     // A listed file that no longer needs its exemption is removed from the list.
     expect(Object.keys(OUT_OF_SCOPE).filter((f) => !hits.has(f))).toEqual([]);
+  });
+});
+
+/* ------------------------------------------------------------------------- */
+/* Hermes (0.12.0)                                                           */
+/* ------------------------------------------------------------------------- */
+
+describe("the Hermes names (0.12.0)", () => {
+  test("the new side of each pair is what the hermes adapter uses; raw literals", () => {
+    expect(HERMES_MCP_RENAME).toEqual(["startup-suite", "burrow"]);
+    expect(HERMES_PLUGIN_RENAME).toEqual(["startup-suite-platform", "burrow-platform"]);
+    expect(HERMES_TOKEN_RENAME).toEqual([
+      join("mcp-tokens", "startup-suite-platform.runtime-token"),
+      join("mcp-tokens", "burrow-platform.runtime-token"),
+    ]);
+    expect([MCP_SERVER_NAME, PLUGIN_NAME, TOKEN_RELPATH]).toEqual([HERMES_MCP_RENAME[1], HERMES_PLUGIN_RENAME[1], HERMES_TOKEN_RENAME[1]]);
+  });
+
+  function home(files: Record<string, string>): string {
+    const h = mkdtempSync(join(tmpdir(), `burrow-01a158c2-hermes-home-${process.pid}-`));
+    for (const [rel, body] of Object.entries(files)) {
+      mkdirSync(join(h, rel, ".."), { recursive: true });
+      writeFileSync(join(h, rel), body);
+      chmodSync(join(h, rel), 0o600);
+    }
+    return h;
+  }
+  const OLD_TOKEN = join("mcp-tokens", "startup-suite-platform.runtime-token");
+  const NEW_TOKEN = join("mcp-tokens", "burrow-platform.runtime-token");
+
+  test("pending: each old name is planned once; a renamed or empty home plans nothing", () => {
+    const h = home({ [OLD_TOKEN]: "t\n", "plugins/startup-suite-platform/plugin.yaml": "name: x\n" });
+    try {
+      const config = { mcp_servers: { "startup-suite": { command: "py" }, other: {} }, plugins: { enabled: ["startup-suite-platform"] } };
+      expect(pendingHermesRenames(h, config).map((r) => [r.place, r.oldName, r.newName])).toEqual([
+        ["mcp_server", "startup-suite", "burrow"],
+        ["plugin", "startup-suite-platform", "burrow-platform"],
+        ["token_file", OLD_TOKEN, NEW_TOKEN],
+      ]);
+      expect(hermesLegacyNames(h, config)).toHaveLength(4);
+      // POSITIVE CONTROL for "nothing": the same home without the old names.
+      const clean = home({ [NEW_TOKEN]: "t\n", "plugins/burrow-platform/plugin.yaml": "name: x\n" });
+      const fresh = { mcp_servers: { burrow: {} }, plugins: { enabled: ["burrow-platform"] } };
+      expect(pendingHermesRenames(clean, fresh)).toEqual([]);
+      expect(hermesLegacyNames(clean, fresh)).toEqual([]);
+      expect(pendingHermesRenames(clean, null)).toEqual([]);
+      rmSync(clean, { recursive: true, force: true });
+    } finally {
+      rmSync(h, { recursive: true, force: true });
+    }
+  });
+
+  test("old beside new in any one place is a conflict naming the place and both names; the read-only lister never throws", () => {
+    const h = home({ [OLD_TOKEN]: "a\n", [NEW_TOKEN]: "b\n" });
+    try {
+      expect(() => pendingHermesRenames(h, null)).toThrow(LegacyNameConflict);
+      expect(() => pendingHermesRenames(h, null)).toThrow(`${join(h, "mcp-tokens")} holds both ${OLD_TOKEN} and ${NEW_TOKEN}; burrow 0.12.0 reads only`);
+      expect(hermesLegacyNames(h, null)).toEqual([join(h, OLD_TOKEN)]);
+      const both = { mcp_servers: { "startup-suite": {}, burrow: {} } };
+      expect(() => pendingHermesRenames(h, both)).toThrow(`${join(h, "config.yaml")} mcp_servers holds both startup-suite and burrow`);
+      const listed = { plugins: { disabled: ["burrow-platform", "startup-suite-platform"] } };
+      expect(() => pendingHermesRenames(h, listed)).toThrow(`${join(h, "config.yaml")} plugins.disabled holds both startup-suite-platform and burrow-platform`);
+    } finally {
+      rmSync(h, { recursive: true, force: true });
+    }
+  });
+
+  test("the hermes adapter spells no old Hermes name anywhere, comments included", () => {
+    const has = (text: string): boolean => /startup-suite/.test(text);
+    // POSITIVE CONTROL: the check fires on a comment and on a code literal.
+    expect(has("// the startup-suite MCP id")).toBe(true);
+    expect(has(`const X = "startup-suite-platform";`)).toBe(true);
+    expect(has(readFileSync(resolve(SRC, "commands", "hermes.ts"), "utf8"))).toBe(false);
+    expect(statSync(resolve(SRC, "commands", "hermes.ts")).size).toBeGreaterThan(0);
   });
 });
