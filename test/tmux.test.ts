@@ -639,7 +639,7 @@ describe("resolveLaunchSession", () => {
   });
 });
 
-describe("sessionLiveness (0.12.1): unknown is not none", () => {
+describe("sessionLiveness (0.12.2): unknown is not none", () => {
   const deps = (listPanes: { exitCode: number; stdout: string; stderr: string }, ps = { exitCode: 0, stdout: "", stderr: "" }, has = true): TmuxDeps => ({
     env: {},
     which: () => (has ? "/usr/bin/tmux" : null),

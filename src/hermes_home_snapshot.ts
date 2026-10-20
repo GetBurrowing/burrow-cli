@@ -1,7 +1,7 @@
 /**
  * A byte snapshot of the parts of a Hermes home that the start-time rename
  * (legacy_names.ts "Hermes") and the channel installer after it write, so a
- * start that fails part-way can put them back (hermes.ts `apply`, 0.12.1).
+ * start that fails part-way can put them back (hermes.ts `apply`, 0.12.2).
  *
  * WHAT IT COVERS, AND NOTHING ELSE. Restoring puts back:
  *   - config.yaml, .env, plugins/.install-metadata.json and every

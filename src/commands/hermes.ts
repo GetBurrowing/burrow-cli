@@ -141,21 +141,23 @@ type Env = Record<string, string | undefined>;
 /**
  * DEPLOYER: BUMP THIS BEFORE burrow-cli MERGES.
  *
- * This is the commit tagged v0.4.0 on burrow-channel-hermes main (PR #9): the
- * MCP id, plugin name and token path renamed to burrow / burrow-platform /
+ * This is the commit tagged v0.4.1 on burrow-channel-hermes main (PR #10): its
+ * MCP bridge sends `User-Agent: burrow-channel-hermes/<version>`, because
+ * some hosts' access proxies refuse urllib's default Python-urllib UA (403,
+ * error code 1010). It replaced 4d640067 (v0.4.0, PR #9: the MCP id, plugin name and token
+ * path renamed to burrow / burrow-platform /
  * mcp-tokens/burrow-platform.runtime-token, with no alias and no migration in
- * that repo (an existing home is moved by this verb's start path, see
- * legacy_names.ts "Hermes"). PLATFORM_NAME and the result line are unchanged
- * (read at both). It replaced 36e3d539 (v0.3.1, PR #8, product-name copy to
- * Burrow, Burrow rename F), which replaced f1399d77 (v0.3.0,
- * PR #7, BURROW_* names with SUITE_* fallback, Burrow rename C). The installer's
- * result line and PLATFORM_NAME are unchanged between the two (read at both).
- * f1399d77 replaced 71041456 (v0.2.0, PR #6), which replaced d9918533 (PR #3, the
- * #!/bin/sh launcher fix and `--python`). This verb always passes `--python`, which installers before
- * d9918533 refuse, so the pin cannot move to an older commit than that. Pin a commit on main, never a branch tip: a squash
- * merge deletes the branch and the tip would dangle.
+ * that repo; an existing home is moved by this verb's start path, see
+ * legacy_names.ts "Hermes"). Before that: 36e3d539 (v0.3.1, PR #8), f1399d77
+ * (v0.3.0, PR #7), 71041456 (v0.2.0, PR #6), d9918533 (PR #3, the #!/bin/sh
+ * launcher fix and `--python`). PLATFORM_NAME and the installer's result line
+ * are unchanged from f1399d77 to v0.4.1 (v0.4.0 -> v0.4.1 touches no
+ * install.sh). This verb always passes `--python`, which
+ * installers before d9918533 refuse, so the pin cannot move older than that.
+ * Pin a commit on main, never a branch tip: a squash merge deletes the branch
+ * and the tip would dangle.
  */
-export const HERMES_CHANNEL_REF = "4d64006780bc3c8011d034b20910c0aee06aa4c6";
+export const HERMES_CHANNEL_REF = "189683ae8a0c7272221d13d0fef0f4e14bb242e1";
 /** The channel repo's name. Its owner comes from repo_source.ts (SUITE_GITHUB_OWNER). */
 // The repo's own name since Burrow rename C. Its old name, hermes-suite-channel, redirects; nothing relies on that.
 export const HERMES_CHANNEL_REPO_NAME = "burrow-channel-hermes";
@@ -184,7 +186,7 @@ export const WRITER_VERSION = 1;
 export const MCP_SDK_PIN = "mcp==2.0.0";
 
 /**
- * The names burrow-channel-hermes v0.4.0 installs ({@link HERMES_CHANNEL_REF}).
+ * The names burrow-channel-hermes v0.4.0 and later install ({@link HERMES_CHANNEL_REF}).
  * A home an older installer wrote is moved to these on the start path; the old
  * spellings live only in legacy_names.ts.
  */
@@ -1209,7 +1211,7 @@ export function hermesWriter(ctx: { opts: HermesOptions | null }, deps: HermesDe
       const bin = state.bin as string;
       mkdirSync(home, { recursive: true, mode: 0o700 });
 
-      // The checkout first (0.12.1): it writes nothing in the home, so a
+      // The checkout first (0.12.2): it writes nothing in the home, so a
       // clone, fetch or checkout that fails leaves the home untouched.
       const co = actions.find((a) => a.kind === "plugin_checkout");
       if (co !== undefined && co.outcome !== "unchanged") {
@@ -1224,7 +1226,7 @@ export function hermesWriter(ctx: { opts: HermesOptions | null }, deps: HermesDe
 
       // Move a pre-0.12.0 home's names BEFORE the installer, which writes only
       // the new ones: left in place, the old generation would run beside the new.
-      // TRANSACTIONAL (0.12.1): everything from the rename to the end of this
+      // TRANSACTIONAL (0.12.2): everything from the rename to the end of this
       // apply runs against a snapshot (hermes_home_snapshot.ts states exactly
       // which paths it covers). A failure anywhere in it restores them, then
       // rethrows the original error; the home is never left half-moved.
@@ -1515,7 +1517,7 @@ export function oldNamesIn(opts: Pick<HermesOptions, "root" | "hermesHome">): st
 async function attachWithoutStamp(opts: HermesOptions, deps: HermesDeps, names: string[]): Promise<number | null> {
   const session = sessionNameForAgent(agentNameForRoot(opts.root));
   const sessionEnv = harnessChildEnv(deps.env, { HERMES_HOME: opts.hermesHome, TMUX: deps.env.TMUX });
-  // UNKNOWN IS LIVE (0.12.1). With tmux off PATH, or a probe that failed,
+  // UNKNOWN IS LIVE (0.12.2). With tmux off PATH, or a probe that failed,
   // this machine cannot see an agent that may be running, so it renames
   // nothing and starts nothing. Not an attach: there is no session to attach to.
   const live = await sessionLiveness(derivedCandidates(session), deps.tmux ?? liveTmuxDeps(sessionEnv), HERMES_AGENT_COMM);

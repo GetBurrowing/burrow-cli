@@ -789,7 +789,7 @@ describe("refusals and failures", () => {
     expect((await stamp()).exitCode).toBe(0);
     expect(JSON.parse(readFileSync(join(root, ".burrow-stamp.json"), "utf8")).verdict).toBe("pass");
     // A changed model is a planned config set; the installer then fails first.
-    // Through the stub's knob, not by editing the checkout: since 0.12.1 an edited checkout is refused before the installer runs.
+    // Through the stub's knob, not by editing the checkout: since 0.12.2 an edited checkout is refused before the installer runs.
     writeFileSync(join(home, "installer-knob"), "fail-early\n");
     const before = readFileSync(join(hermesHome, "config.yaml"), "utf8");
     const { result, exitCode } = await stamp(stampArgs().map((a) => (a === "wave-model" ? "other-model" : a)));
@@ -1389,7 +1389,7 @@ describe("0.12.0: a pre-0.12.0 Hermes home is renamed on start, never on attach"
 });
 
 /* ------------------------------------------------------------------------- */
-/* 0.12.1: a failed start leaves a pre-0.12.0 home as it was                  */
+/* 0.12.2: a failed start leaves a pre-0.12.0 home as it was                  */
 /* ------------------------------------------------------------------------- */
 
 /** mtime of every FILE under `dir` (directory mtimes are outside the restore's guarantee). */
@@ -1442,7 +1442,7 @@ function expectRenameRan(since: number): void {
   expect(run).toContain(`config unset mcp_servers.${OLD_MCP}`);
 }
 
-describe("0.12.1: a start that fails after the rename restores the pre-0.12.0 home", () => {
+describe("0.12.2: a start that fails after the rename restores the pre-0.12.0 home", () => {
   test("installer exits 1 before writing: the home is byte-identical, the token keeps its inode, exit 1 with channel_install_failed", async () => {
     const before = await oldHome();
     setKnob("fail-early");
@@ -1516,7 +1516,7 @@ describe("0.12.1: a start that fails after the rename restores the pre-0.12.0 ho
   });
 });
 
-describe("0.12.1: a shared channel checkout with local edits is refused before anything is written", () => {
+describe("0.12.2: a shared channel checkout with local edits is refused before anything is written", () => {
   test("a modified TRACKED file refuses with exit 2 and plugin_checkout_dirty; zero Hermes writes; the edit survives", async () => {
     const before = await oldHome();
     const dir = checkoutDir();
@@ -1557,7 +1557,7 @@ describe("0.12.1: a shared channel checkout with local edits is refused before a
   });
 });
 
-describe("0.12.1: when liveness cannot be determined, nothing is renamed", () => {
+describe("0.12.2: when liveness cannot be determined, nothing is renamed", () => {
   const noTmux = (): TmuxDeps => ({ ...fakeTmux().deps, which: () => null });
 
   test("tmux not on PATH: a pre-0.12.0 home is refused with exit 7, zero Hermes calls, byte-identical", async () => {
@@ -1645,8 +1645,8 @@ describe("--stamp-only as a subprocess: the machine contract", () => {
 });
 
 describe("pins", () => {
-  test("the channel is pinned to the commit tagged v0.4.0 on burrow-channel-hermes main (PR #9)", () => {
-    expect(HERMES_CHANNEL_REF).toBe("4d64006780bc3c8011d034b20910c0aee06aa4c6");
+  test("the channel is pinned to the commit tagged v0.4.1 on burrow-channel-hermes main (PR #10)", () => {
+    expect(HERMES_CHANNEL_REF).toBe("189683ae8a0c7272221d13d0fef0f4e14bb242e1");
   });
 
   test("the pin's DEPLOYER comment is present, so the bump is not forgotten at merge", () => {

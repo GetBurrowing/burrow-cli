@@ -13,7 +13,7 @@
 # Each call is recorded under $HOME/installer-calls/<n>/: argv (NUL separated),
 # env (env -0), and stdin (only when the token came from stdin).
 #
-# Failure knob (0.12.1 transactional-start tests): the first word of
+# Failure knob (0.12.2 transactional-start tests): the first word of
 # $HOME/installer-knob, when that file exists:
 #   fail-early   exit 1 before writing anything
 #   fail-late    write every new name (token, .env, plugin, enable, MCP entry), then exit 1

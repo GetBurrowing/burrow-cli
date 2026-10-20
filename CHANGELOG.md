@@ -10,10 +10,7 @@ that matters in the field: is this one newer than what I had?
 Minor for a new capability or a changed default; patch for a fix that changes no
 behaviour anyone was relying on.
 
-## Unreleased
-
-(The release stage gives this section its version number and bumps
-`package.json`.)
+## 0.12.2
 
 **A failed `burrow hermes` start no longer leaves a pre-0.12.0 home
 half-moved.** In 0.12.0 the start renamed the home's Hermes names (MCP entry,
@@ -48,7 +45,8 @@ token path.
   consistent new names, and the stamp records `fail`.
 - **A shared channel checkout with local edits to tracked files is refused**
   (exit 2, `plugin_checkout_dirty`) before anything is written, naming the
-  directory and each modified file. `git checkout --detach <ref>` aborts only
+  directory and each modified file, and giving `git -C <dir> diff` to inspect
+  the edit. `git checkout --detach <ref>` aborts only
   when a modified file differs between HEAD and the ref, and otherwise carries
   the edit into the pinned ref silently. Untracked files do not refuse. The edit
   is never reset, stashed or discarded.
@@ -57,6 +55,18 @@ token path.
   than "no server running", a root still holding old names is refused with
   exit 7 and nothing is written. If the agent is stopped, start it with
   `--no-session`. A root holding no old names starts as before.
+- **Pin: burrow-channel-hermes v0.4.1**,
+  `189683ae8a0c7272221d13d0fef0f4e14bb242e1` (PR #10, a merge commit on main;
+  was v0.4.0, `4d64006`). Its MCP bridge sends
+  `User-Agent: burrow-channel-hermes/<version>`. urllib's default
+  `Python-urllib/3.x` is refused by the access proxy in front of at least one
+  install's host with `403 error code: 1010` (measured 2026-10-20), which is why
+  a hand-edited bridge sat in one machine's shared checkout. That edit is
+  exactly what the dirty-checkout refusal above now catches: inspect it with
+  `git -C ~/.local/share/burrow/burrow-channel-hermes diff`, then discard it
+  yourself (`git -C <dir> checkout -- <file>`) once you no longer need it. The
+  CLI never does that for you.
+- **Rollback:** `BURROW_CLI_REF=v0.12.1 burrow update` reinstalls 0.12.1.
 
 ## 0.12.1
 
