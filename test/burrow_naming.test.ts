@@ -35,8 +35,8 @@ describe("the package says burrow", () => {
   test("name, version and description", () => {
     const pkg = JSON.parse(readFileSync(join(REPO, "package.json"), "utf8"));
     expect(pkg.name).toBe("burrow-cli");
-    expect(pkg.version).toBe("0.10.3");
-    expect(VERSION).toBe("0.10.3");
+    expect(pkg.version).toBe("0.11.0");
+    expect(VERSION).toBe("0.11.0");
     expect(pkg.bin).toEqual({ burrow: "./src/cli.ts" });
     expect(pkg.description).toBe("Connects a machine to a Burrow install, then sets up and runs its agent harness");
     expect(CLI_NAME).toBe("burrow");
@@ -208,7 +208,9 @@ describe("README", () => {
     }
     expect(section).toContain("**The `suite` command is gone (0.10.0).**");
     expect(section).not.toContain("suite keeps working");
-    expect(section).toContain("`startup-suite` and `suite-channel`");
+    expect(section).toContain("### The 0.11.0 rename: MCP server ids, config key, launch flag");
+    expect(section).toContain("| MCP server id `suite-channel` | `burrow-channel` |");
+    expect(section).toContain("| MCP server id `startup-suite` | `burrow` |");
     // The one-shot migration, named by the files it leaves (from the code, not retyped).
     expect(section).toContain("State moves once, on the first 0.9 run.");
     expect(section).toContain(`\`${BREADCRUMB_FILENAME}\``);

@@ -52,7 +52,8 @@ import {
   readAgentSecrets,
 } from "../agent_connections.ts";
 import { claimsPhrase, inventoryRows, parseClaudeJson, type InventoryRow, type InventorySource } from "../agent_inventory.ts";
-import { projectKeys } from "../claude_wiring.ts";
+import { localEntries, projectKeys } from "../claude_wiring.ts";
+import { registeredId } from "../legacy_names.ts";
 import { parseRoster, rosterPath } from "../roster.ts";
 import { burrowName, suiteName, type FallbackSuffix } from "../env_names.ts";
 import {
@@ -789,7 +790,7 @@ export async function runChecks(deps: DoctorDeps): Promise<CheckResult[]> {
         value: version,
         detail: `needs ≥ ${CLAUDE_VERSION_FLOOR}`,
         consequence: [
-          "The suite-channel plugin needs a newer Claude Code; on this build the",
+          "The burrow-channel plugin needs a newer Claude Code; on this build the",
           "channel loads and then never receives a message.",
         ],
         remedy: "claude update",
@@ -818,7 +819,7 @@ export async function runChecks(deps: DoctorDeps): Promise<CheckResult[]> {
           status: "fail",
           value: "not on PATH",
           consequence: [
-            "The channel plugin is run by bun, so the suite-channel MCP entry",
+            "The channel plugin is run by bun, so the burrow-channel MCP entry",
             "fails to start and Burrow sees this runtime as offline.",
           ],
           remedy: "curl -fsSL https://bun.sh/install | bash",
@@ -832,8 +833,14 @@ export async function runChecks(deps: DoctorDeps): Promise<CheckResult[]> {
         },
   );
 
+  // A folder whose agent has not restarted since 0.11.0 still has its entries
+  // under the old ids (legacy_names.ts); it is checked under what it has.
+  const local = localEntries(deps.env, deps.cwd);
+  const channelId = registeredId(local, CHANNEL_SERVER);
+  const toolsId = registeredId(local, TOOLS_SERVER);
+
   // 5. The plugin checkout, AND the path the MCP entry actually records ---
-  const entry = claudePath === null ? null : await deps.run([claudePath, "mcp", "get", CHANNEL_SERVER]);
+  const entry = claudePath === null ? null : await deps.run([claudePath, "mcp", "get", channelId]);
   checks.push(pluginCheck(deps, claudePath, entry));
 
   // 6-8. Credentials, their AGREEMENT, and the channel's health -----------
@@ -843,10 +850,10 @@ export async function runChecks(deps: DoctorDeps): Promise<CheckResult[]> {
   // The tools entry is fetched ONCE, here, and shared with the tools check
   // below: the token comparison and the probe read the same entry, so they can
   // never disagree about what is registered.
-  const toolsEntry = claudePath === null ? null : await deps.run([claudePath, "mcp", "get", TOOLS_SERVER]);
+  const toolsEntry = claudePath === null ? null : await deps.run([claudePath, "mcp", "get", toolsId]);
   checks.push(tokensCheck(claudePath, entry, toolsEntry));
 
-  checks.push(await channelCheck(deps, claudePath, pluginOk));
+  checks.push(await channelCheck(deps, claudePath, pluginOk, channelId));
 
   // 9. The tools endpoint — an AUTHENTICATED call, not a reachability ping ---
   checks.push(await toolsCheck(deps, claudePath, toolsEntry));
@@ -1280,6 +1287,7 @@ async function channelCheck(
   deps: DoctorDeps,
   claudePath: string | null,
   pluginOk: boolean,
+  channelId: string = CHANNEL_SERVER,
 ): Promise<CheckResult> {
   if (claudePath === null) {
     return { id: "channel", label: "channel", status: "skip", reason: "needs the claude cli" };
@@ -1287,7 +1295,7 @@ async function channelCheck(
   if (!pluginOk) {
     return { id: "channel", label: "channel", status: "skip", reason: "needs a working plugin path" };
   }
-  const status = await channelStatus(deps, claudePath);
+  const status = await channelStatus(deps, claudePath, channelId);
   if (status.state === "connected") {
     return { id: "channel", label: "channel", status: "pass", value: "connected" };
   }
@@ -1355,14 +1363,14 @@ async function channelCheck(
  * parser looking only for `✘` reads that as green. Anything not positively
  * readable AS CONNECTED is not-connected or unparseable.
  */
-export async function channelStatus(deps: DoctorDeps, claudePath: string): Promise<ServerStatus> {
+export async function channelStatus(deps: DoctorDeps, claudePath: string, id: string = CHANNEL_SERVER): Promise<ServerStatus> {
   const r = await deps.run([claudePath, "mcp", "list"]);
-  return parseServerStatus(`${r.stdout}\n${r.stderr}`, CHANNEL_SERVER);
+  return parseServerStatus(`${r.stdout}\n${r.stderr}`, id);
 }
 
-export async function toolsStatus(deps: DoctorDeps, claudePath: string): Promise<ServerStatus> {
+export async function toolsStatus(deps: DoctorDeps, claudePath: string, id: string = TOOLS_SERVER): Promise<ServerStatus> {
   const r = await deps.run([claudePath, "mcp", "list"]);
-  return parseServerStatus(`${r.stdout}\n${r.stderr}`, TOOLS_SERVER);
+  return parseServerStatus(`${r.stdout}\n${r.stderr}`, id);
 }
 
 /**

@@ -5,6 +5,11 @@
  * The fixtures are real `tmux capture-pane -p` output from Claude Code 2.1.288
  * on Linux, captured at 80 and 120 columns (the folder path was rewritten to
  * /srv/agents/work; nothing else was edited). See src/claude_dialogs.ts.
+ *
+ * The dev-channels captures name `server:suite-channel`, the flag value before
+ * 0.11.0. {@link fixture} reads them with the 0.11.0 value substituted — the
+ * screen a 0.11.0 launch is shown; {@link capture} reads them verbatim, and the
+ * verbatim screen must HOLD.
  */
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
@@ -17,8 +22,11 @@ import {
   classifyPane,
   dialogCaptureArgv,
   dialogKeysArgv,
+  BURROW_CHANNEL,
   type DialogIo,
 } from "../src/claude_dialogs.ts";
+import { LEGACY_DEV_CHANNEL } from "../src/legacy_names.ts";
+import { CHANNEL_SERVER } from "../src/commands/init.ts";
 import type { RunResult } from "../src/tmux.ts";
 import { runRestore, type RestoreDeps } from "../src/commands/restore.ts";
 import { serializeRoster } from "../src/roster.ts";
@@ -26,7 +34,8 @@ import { runWatch, type WatchDeps } from "../src/commands/watch.ts";
 import { emptyConfig } from "../src/config.ts";
 
 const DIR = resolve(import.meta.dir, "fixtures/claude-code-2.1.288-dialogs");
-const fixture = (name: string): string => readFileSync(resolve(DIR, `${name}.txt`), "utf8");
+const capture = (name: string): string => readFileSync(resolve(DIR, `${name}.txt`), "utf8");
+const fixture = (name: string): string => capture(name).replaceAll(LEGACY_DEV_CHANNEL, BURROW_CHANNEL);
 const CTX = { cwd: "/srv/agents/work", home: "/home/agent" };
 
 describe("each recorded dialog produces exactly the expected keys", () => {
@@ -47,6 +56,11 @@ describe("each recorded dialog produces exactly the expected keys", () => {
       expect(classifyPane(fixture(file), CTX)).toEqual({ kind: "answer", dialog: dialog as never, keys });
     });
   }
+
+  test("the channel answered is the one the launch flag loads: server:<CHANNEL_SERVER>", () => {
+    expect(BURROW_CHANNEL).toBe(`server:${CHANNEL_SERVER}`);
+    expect(capture("dev-channels.80")).toContain(LEGACY_DEV_CHANNEL);
+  });
 
   test("the input box reads as ready, not as a dialog", () => {
     expect(classifyPane(fixture("ready.120"), CTX)).toEqual({ kind: "ready" });
@@ -108,10 +122,16 @@ describe("anything not known word for word gets no keys", () => {
     expect(classifyPane(fixture("trust-folder.80"), {})).toMatchObject({ kind: "hold", dialog: "trust-folder" });
   });
 
-  test("the dev-channels warning naming a channel besides suite's", () => {
+  test("the dev-channels warning naming the pre-0.11.0 channel, verbatim as captured", () => {
+    for (const name of ["dev-channels.80", "dev-channels.120", "dev-channels.80.cursor-exit"]) {
+      expect(classifyPane(capture(name), CTX)).toMatchObject({ kind: "hold", dialog: "dev-channels" });
+    }
+  });
+
+  test("the dev-channels warning naming a channel besides burrow's", () => {
     const pane = fixture("dev-channels.80").replace(
-      "Channels: server:suite-channel",
-      "Channels: server:suite-channel, plugin:other@somewhere",
+      `Channels: ${BURROW_CHANNEL}`,
+      `Channels: ${BURROW_CHANNEL}, plugin:other@somewhere`,
     );
     expect(classifyPane(pane, CTX)).toMatchObject({ kind: "hold", dialog: "dev-channels" });
   });

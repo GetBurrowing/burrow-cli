@@ -34,6 +34,7 @@ import type { RosterEntry } from "./roster.ts";
 import { STAMP_FILE } from "./stamp.ts";
 import { prefixTwin, sessionNameCandidates, type SessionState } from "./tmux.ts";
 import { CHANNEL_SERVER, TOOLS_SERVER } from "./commands/init.ts";
+import { registeredId, serverEntry } from "./legacy_names.ts";
 import { entryValue } from "./env_names.ts";
 
 /** The per-folder config file stamped and DeepSeek agents carry in their root. Mirrors deepseek.ts AGENT_CONFIG_FILE. */
@@ -77,11 +78,11 @@ export function lastVerdict(text: string | null): string {
 
 /** One folder's Burrow entries, as identity only. Never a token. */
 export interface EntryIdentity {
-  /** suite-channel env BURROW_RUNTIME_ID, else SUITE_RUNTIME_ID, or null. */
+  /** burrow-channel (or, unmigrated, suite-channel) env BURROW_RUNTIME_ID, else SUITE_RUNTIME_ID, or null. */
   runtimeId: string | null;
-  /** suite-channel env BURROW_URL, else SUITE_URL, or null. */
+  /** The same entry's BURROW_URL, else SUITE_URL, or null. */
   channelUrl: string | null;
-  /** startup-suite url, or null. */
+  /** burrow (or, unmigrated, startup-suite) url, or null. */
   toolsUrl: string | null;
 }
 
@@ -99,8 +100,9 @@ const str = (v: unknown): string | null => (typeof v === "string" && v.trim() !=
 function identityOf(servers: unknown): EntryIdentity | null {
   if (typeof servers !== "object" || servers === null) return null;
   const map = servers as Record<string, unknown>;
-  const channel = map[CHANNEL_SERVER] as { env?: Record<string, unknown> } | undefined;
-  const tools = map[TOOLS_SERVER] as { url?: unknown } | undefined;
+  // Either generation of ids: a folder whose agent has not restarted since 0.11.0 has the old ones.
+  const channel = serverEntry(map, CHANNEL_SERVER) as { env?: Record<string, unknown> } | undefined;
+  const tools = serverEntry(map, TOOLS_SERVER) as { url?: unknown } | undefined;
   const hasChannel = typeof channel === "object" && channel !== null;
   const hasTools = typeof tools === "object" && tools !== null;
   if (!hasChannel && !hasTools) return null;
@@ -132,11 +134,12 @@ export function parseClaudeJson(text: string): ClaudeJsonView | null {
   const userScope: ClaudeJsonView["userScope"] = [];
   if (typeof raw.mcpServers === "object" && raw.mcpServers !== null) {
     const top = raw.mcpServers as Record<string, unknown>;
-    for (const name of [CHANNEL_SERVER, TOOLS_SERVER]) {
+    for (const canonical of [CHANNEL_SERVER, TOOLS_SERVER]) {
+      const name = registeredId(top, canonical);
       const entry = top[name];
       if (typeof entry !== "object" || entry === null) continue;
       const env = (entry as { env?: Record<string, unknown> }).env;
-      userScope.push({ name, runtimeId: name === CHANNEL_SERVER ? (entryValue(env, "RUNTIME_ID") ?? null) : null });
+      userScope.push({ name, runtimeId: canonical === CHANNEL_SERVER ? (entryValue(env, "RUNTIME_ID") ?? null) : null });
     }
   }
   return { projects, userScope };

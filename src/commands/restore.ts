@@ -21,6 +21,7 @@ import {
   upsertEntry,
 } from "../roster.ts";
 import {
+  CONTINUE_WRAPPER_NAME,
   LEGACY_SESSION_PREFIX,
   type TmuxDeps,
   currentPrefixName,
@@ -36,6 +37,8 @@ import { resolveTmux } from "../halt.ts";
 import { runsUnmanagedCli } from "../migrate.ts";
 import { answerLaunchDialogs, liveDialogIo, type AnswerResult, type DialogIo } from "../claude_dialogs.ts";
 import { CLI_NAME } from "../version.ts";
+import { isLegacyContinueWrapper, renamedLaunchArgv } from "../legacy_names.ts";
+import { CHANNEL_SERVER } from "./init.ts";
 
 export interface RestoreDeps {
   tmux: TmuxDeps;
@@ -179,7 +182,7 @@ export async function runningSessions(
     // plus positional arguments, and splitting them on whitespace (below) would
     // record a command that cannot be replayed. The claude process under it is
     // what gets adopted, exactly as for a pane that runs claude directly.
-    const kids = descendants(procs, [Number(pid)]).filter((k) => !isContinueWrapper(k));
+    const kids = descendants(procs, [Number(pid)]).filter((k) => !isContinueWrapper(k) && !isLegacyContinueWrapper(k.args));
     // The stamp relaunch first: it is the pane's own process in a `suite
     // hermes` / `suite openclaw` session, and the command that re-creates it.
     // Its gateway child is only a fallback, for a gateway started by hand.
@@ -211,6 +214,21 @@ export function relaunchRename(entry: RosterEntry, env: Record<string, string | 
   const s = command.indexOf("-s");
   if (s !== -1 && command[s + 1] === entry.session) command[s + 1] = session;
   return { ...entry, session, command };
+}
+
+/**
+ * The roster entry a `claude` entry recorded before 0.11.0 is replayed as: its
+ * `server:suite-channel` flag value and `suite-claude-continue` wrapper name
+ * replaced by today's, and nothing else changed. Null when nothing changes.
+ *
+ * Replayed as recorded, the old flag would name a channel server the 0.11.0
+ * start (restoreWirer, which runs first) has just renamed, and the agent would
+ * come up without its channel.
+ */
+export function relaunchArgvRename(entry: RosterEntry): RosterEntry | null {
+  if (entry.kind !== "claude") return null;
+  const command = renamedLaunchArgv(entry.command, `server:${CHANNEL_SERVER}`, CONTINUE_WRAPPER_NAME);
+  return command.every((a, i) => a === entry.command[i]) ? null : { ...entry, command };
 }
 
 export interface RestoreResult {
@@ -254,7 +272,9 @@ export async function runRestore(
   const result: RestoreResult = { started: [], skipped: [], failed: [] };
   const plan = restorePlan(entries, live);
 
-  // A DEAD `suite-` entry comes back as `burrow-` (relaunchRename). Every
+  // A DEAD `suite-` entry comes back as `burrow-` (relaunchRename), and a dead
+  // claude entry recorded before 0.11.0 with today's channel flag and wrapper
+  // name (relaunchArgvRename). Every
   // rename is applied in ONE roster write, before any replay, so the roster
   // never names a session that is about to be created under another name. An
   // entry whose burrow name already has its own roster entry is superseded by
@@ -264,9 +284,14 @@ export async function runRestore(
   const renamed = new Map<RosterEntry, RosterEntry | "superseded">();
   for (const d of plan) {
     if (d.action !== "start") continue;
-    const next = relaunchRename(d.entry, env);
+    const named = relaunchRename(d.entry, env);
+    if (named !== null && recorded.has(named.session)) {
+      renamed.set(d.entry, "superseded");
+      continue;
+    }
+    const next = relaunchArgvRename(named ?? d.entry) ?? named;
     if (next === null) continue;
-    renamed.set(d.entry, recorded.has(next.session) ? "superseded" : next);
+    renamed.set(d.entry, next);
   }
   if (opts.apply && renamed.size > 0) {
     const rewritten: RosterEntry[] = [];
@@ -296,7 +321,8 @@ export async function runRestore(
       continue;
     }
     const entry = r ?? recordedEntry;
-    const as = r === undefined ? "" : ` as ${entry.session}`;
+    const renamedSession = entry.session !== recordedEntry.session;
+    const as = renamedSession ? ` as ${entry.session}` : "";
     if (!opts.apply) {
       deps.log(`${recordedEntry.session}: would start${as} (${reason})`);
       result.started.push(entry.session);
@@ -319,7 +345,7 @@ export async function runRestore(
     const { exitCode, stderr } = await deps.tmux.run(argv);
     if (exitCode === 0) {
       result.started.push(entry.session);
-      deps.log(`${entry.session}: started in ${entry.cwd}${r === undefined ? "" : ` (recorded as ${recordedEntry.session})`}`);
+      deps.log(`${entry.session}: started in ${entry.cwd}${renamedSession ? ` (recorded as ${recordedEntry.session})` : ""}`);
       if (entry.kind === "claude" && deps.dialogs !== undefined) {
         answering.push(answerLaunchDialogs(deps.dialogs, { session: entry.session, cwd: entry.cwd, home }));
       }

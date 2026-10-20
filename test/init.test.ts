@@ -32,6 +32,8 @@ import {
   userScopeLines,
   pluginRepo,
   CLAUDE_CODE_CHANNEL_REF,
+  ConvergenceFailed,
+  LEGACY_ALIASES,
 } from "../src/commands/init.ts";
 import { CLAUDE_MD } from "../src/claude_md.ts";
 import { DEPS_MARKER, ensureClaudeWiring, type WiringResult } from "../src/claude_wiring.ts";
@@ -344,9 +346,10 @@ describe("init on a machine where nothing is installed", () => {
     // is one entry per machine, so a second agent's init re-pointed the first.
     expect(channel).toContain("-s");
     expect(channel?.[channel.indexOf("-s") + 1]).toBe("local");
-    expect(channel).toContain(`SUITE_URL=wss://suite.example.invalid/runtime/ws`);
-    expect(channel).toContain(`SUITE_RUNTIME_ID=${RUNTIME_ID}`);
-    expect(channel).toContain("SUITE_ALLOW_PERMISSION_RELAY=0");
+    expect(channel).toContain(`BURROW_URL=wss://suite.example.invalid/runtime/ws`);
+    expect(channel).toContain(`BURROW_RUNTIME_ID=${RUNTIME_ID}`);
+    expect(channel).toContain("BURROW_ALLOW_PERMISSION_RELAY=0");
+    expect(channel?.some((a) => a.startsWith("SUITE_"))).toBe(false);
     // ABSOLUTE path: a relative one resolves against Claude's cwd and breaks
     // everywhere except the directory init happened to run in.
     const last = channel?.[channel.length - 1] ?? "";
@@ -1008,7 +1011,7 @@ describe("mcp add argv", () => {
     expect(argv.slice(-3)).toEqual(["--", "bun", entry.indexPath]);
   });
 
-  test("the channel entry carries all 8 env names: BURROW_* and SUITE_* for each of 4, one value per pair", () => {
+  test("the channel entry carries exactly 4 env names, all BURROW_*: no SUITE_* copy (0.11.0)", () => {
     const argv = channelAddArgs(entry);
     const env: Record<string, string> = {};
     for (let i = 0; i < argv.length; i++) {
@@ -1018,26 +1021,14 @@ describe("mcp add argv", () => {
     }
     // A raw list, not derived from the code under test.
     expect(Object.keys(env).sort()).toEqual(
-      [
-        "BURROW_ALLOW_PERMISSION_RELAY",
-        "BURROW_RUNTIME_ID",
-        "BURROW_TOKEN",
-        "BURROW_URL",
-        "SUITE_ALLOW_PERMISSION_RELAY",
-        "SUITE_RUNTIME_ID",
-        "SUITE_TOKEN",
-        "SUITE_URL",
-      ].sort(),
+      ["BURROW_ALLOW_PERMISSION_RELAY", "BURROW_RUNTIME_ID", "BURROW_TOKEN", "BURROW_URL"].sort(),
     );
-    for (const suffix of ["URL", "RUNTIME_ID", "TOKEN", "ALLOW_PERMISSION_RELAY"]) {
-      expect(env[`BURROW_${suffix}`]).toBe(env[`SUITE_${suffix}`] as string);
-    }
-    expect(env.SUITE_URL).toBe(channelWsUrl(SUITE_URL));
-    expect(env.SUITE_RUNTIME_ID).toBe(RUNTIME_ID);
-    expect(env.SUITE_ALLOW_PERMISSION_RELAY).toBe("0");
-    // The server name never changes: allowlists name mcp__startup-suite__ and server:suite-channel.
-    expect(argv[3]).toBe("suite-channel");
-    expect(toolsAddArgs(SUITE_URL, TOKEN, [])[3]).toBe("startup-suite");
+    expect(env.BURROW_URL).toBe(channelWsUrl(SUITE_URL));
+    expect(env.BURROW_RUNTIME_ID).toBe(RUNTIME_ID);
+    expect(env.BURROW_ALLOW_PERMISSION_RELAY).toBe("0");
+    // The server ids are every tool's prefix (mcp__burrow__*, mcp__burrow-channel__*). Raw literals.
+    expect(argv[3]).toBe("burrow-channel");
+    expect(toolsAddArgs(SUITE_URL, TOKEN, [])[3]).toBe("burrow");
   });
 
   test("a relative entrypoint is refused outright", () => {
@@ -1121,7 +1112,7 @@ describe("${ENV_VAR} interpolation, settled empirically", () => {
       tokenLiteral: envReference("SUITE_TOKEN"),
       indexPath: "/abs/src/index.ts",
     });
-    expect(argv).toContain("SUITE_TOKEN=${SUITE_TOKEN}");
+    expect(argv).toContain("BURROW_TOKEN=${SUITE_TOKEN}");
     expect(argv.join(" ")).not.toContain(TOKEN);
   });
 });
@@ -1242,7 +1233,7 @@ describe("MCP entries are per agent directory", () => {
   type Raw = { mcpServers?: Record<string, { url?: string; env?: Record<string, string> }>; projects: Record<string, { mcpServers: Record<string, { url?: string; env?: Record<string, string> }> }> };
   const read = (file: string): Raw => JSON.parse(readFileSync(file, "utf8")) as Raw;
 
-  test("KITE: a stale local startup-suite and suite-channel naming the OLD host converge to the new host", async () => {
+  test("KITE: a stale local burrow and burrow-channel naming the OLD host converge to the new host", async () => {
     const { home, agent, file } = scratch((dir) => ({
       projects: { [dir]: { mcpServers: { [TOOLS_SERVER]: oldTools, [CHANNEL_SERVER]: oldChannel } } },
     }));
@@ -1250,9 +1241,9 @@ describe("MCP entries are per agent directory", () => {
     const lines = await registerServers({ run: stubRun(home, calls), cwd: agent, env: { HOME: home } }, invocations(), RUNTIME_ID, SUITE_URL);
     const local = read(file).projects[agent]?.mcpServers ?? {};
     expect(local[TOOLS_SERVER]?.url).toBe(toolsHttpUrl(SUITE_URL));
-    expect(local[CHANNEL_SERVER]?.env?.SUITE_URL).toBe(channelWsUrl(SUITE_URL));
     expect(local[CHANNEL_SERVER]?.env?.BURROW_URL).toBe(channelWsUrl(SUITE_URL));
-    expect(local[CHANNEL_SERVER]?.env?.SUITE_RUNTIME_ID).toBe(RUNTIME_ID);
+    expect(local[CHANNEL_SERVER]?.env?.BURROW_RUNTIME_ID).toBe(RUNTIME_ID);
+    expect(Object.keys(local[CHANNEL_SERVER]?.env ?? {}).filter((k) => k.startsWith("SUITE_"))).toEqual([]);
     expect(Object.keys(local).sort()).toEqual([CHANNEL_SERVER, TOOLS_SERVER].sort());
     const said = lines.join("\n");
     expect(said).toContain("replaced");
@@ -1261,10 +1252,10 @@ describe("MCP entries are per agent directory", () => {
     rmSync(home, { recursive: true, force: true });
   });
 
-  test("KELLY: a user-scope `suite` naming the old host, and a local `burrow`, are removed and each removal is printed", async () => {
+  test("KELLY: a user-scope `suite` naming the old host, and a local `suite`, are removed and each removal is printed", async () => {
     const { home, agent, file } = scratch((dir) => ({
       mcpServers: { suite: oldTools },
-      projects: { [dir]: { mcpServers: { burrow: oldTools, [TOOLS_SERVER]: oldTools } } },
+      projects: { [dir]: { mcpServers: { suite: oldTools, [TOOLS_SERVER]: oldTools } } },
     }));
     const calls: Array<{ argv: string[]; cwd?: string }> = [];
     const lines = await registerServers({ run: stubRun(home, calls), cwd: agent, env: { HOME: home } }, invocations(), RUNTIME_ID, SUITE_URL);
@@ -1275,12 +1266,35 @@ describe("MCP entries are per agent directory", () => {
     const removed = lines.filter((l) => l.includes("removed"));
     expect(removed).toHaveLength(2);
     expect(removed.find((l) => l.includes("suite") && l.includes("user scope"))).toContain("old.example.invalid");
-    expect(removed.find((l) => l.includes("burrow") && l.includes("local scope"))).toContain("old.example.invalid");
+    expect(removed.find((l) => l.includes("suite") && l.includes("local scope"))).toContain("old.example.invalid");
     expect(said).not.toContain(OLD_TOKEN);
     expect(said).not.toContain(TOKEN);
     // The ONLY user-scope call is that alias removal: canonical user entries are never touched.
     const userCalls = calls.filter((c) => c.argv.includes("user"));
     expect(userCalls.map((c) => c.argv)).toEqual([["claude", "mcp", "remove", "suite", "-s", "user"]]);
+    rmSync(home, { recursive: true, force: true });
+  });
+
+  test("`burrow` is the tools id since 0.11.0, NOT an alias: a local `burrow` is never removed", () => {
+    expect(TOOLS_SERVER).toBe("burrow");
+    expect(LEGACY_ALIASES as readonly string[]).not.toContain("burrow");
+  });
+
+  test("a pre-0.11.0 id left beside the new ones does not converge: local is named for the next start, user is named with its remedy", async () => {
+    const { home, agent } = scratch((dir) => ({
+      mcpServers: { "suite-channel": oldChannel },
+      projects: { [dir]: { mcpServers: { "startup-suite": oldTools } } },
+    }));
+    const failed = await registerServers({ run: stubRun(home, []), cwd: agent, env: { HOME: home } }, invocations(), RUNTIME_ID, SUITE_URL).then(
+      () => null,
+      (e: unknown) => e,
+    );
+    expect(failed).toBeInstanceOf(ConvergenceFailed);
+    const message = (failed as Error).message;
+    expect(message).toContain("startup-suite: local scope, renamed to burrow at this agent's next start");
+    expect(message).toContain("suite-channel: user scope");
+    expect(message).toContain("claude mcp remove suite-channel -s user");
+    expect(message).not.toContain(OLD_TOKEN);
     rmSync(home, { recursive: true, force: true });
   });
 

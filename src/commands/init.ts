@@ -44,7 +44,8 @@ import { promptConnection } from "../connection.ts";
 import { canonicalDir, writeAgentConnection } from "../agent_connections.ts";
 import { nextCommand, row } from "../ui.ts";
 import { httpsCloneUrl, sshCloneUrl, type Env } from "../repo_source.ts";
-import { bothNames, burrowName, entryValue, suiteName, type FallbackSuffix } from "../env_names.ts";
+import { burrowName, entryValue, suiteName, type FallbackSuffix } from "../env_names.ts";
+import { SERVER_RENAMES, serverEntry } from "../legacy_names.ts";
 import {
   type SupervisorIo,
   type SupervisorResult,
@@ -177,8 +178,15 @@ export function pluginRepo(env: Env = process.env): string {
 }
 /** The checkout directory under `<data>/burrow`; migrate.ts CHECKOUT_DIR_MAP renames the old one to it. */
 export const PLUGIN_DIRNAME = "burrow-channel-claude-code";
-export const CHANNEL_SERVER = "suite-channel";
-export const TOOLS_SERVER = "startup-suite";
+/**
+ * The two MCP server ids, renamed from `suite-channel` / `startup-suite` in
+ * 0.11.0. Claude Code names every tool `mcp__<id>__<tool>`, so these ids are
+ * the prefix of every Burrow tool name an agent, a subagent allowlist or a
+ * hook sees. An agent folder still holding the old ids is renamed on its next
+ * START (legacy_names.ts), never under a running agent.
+ */
+export const CHANNEL_SERVER = "burrow-channel";
+export const TOOLS_SERVER = "burrow";
 
 /**
  * The scope both MCP entries are registered at. `local`, NOT `user`.
@@ -552,10 +560,10 @@ export function channelAddArgs(entry: ChannelEntry): string[] {
   if (!entry.indexPath.startsWith("/")) {
     throw new Error(`the plugin entrypoint must be an absolute path, got: ${entry.indexPath}`);
   }
-  // BOTH NAMES, ONE VALUE. The pinned channel plugin reads only `SUITE_*`
-  // today, so those stay; `BURROW_*` is written alongside so a plugin that has
-  // moved to the new names reads the same entry. Readers go BURROW-first (see
-  // `entryValue` in env_names.ts); staleness demands the two agree.
+  // BURROW_* ONLY (0.11.0). The pinned channel plugin reads `BURROW_*`
+  // first (burrow-channel-claude-code src/env.ts), so the `SUITE_*` copies
+  // earlier versions wrote beside them are no longer written. An entry that
+  // still has them is renamed at the agent's next start (legacy_names.ts).
   const pairs: Array<[FallbackSuffix, string]> = [
     ["URL", channelWsUrl(entry.suiteUrl)],
     ["RUNTIME_ID", entry.runtimeId],
@@ -563,9 +571,7 @@ export function channelAddArgs(entry: ChannelEntry): string[] {
     ["ALLOW_PERMISSION_RELAY", "0"],
   ];
   const env: Array<[string, string]> = [];
-  for (const [suffix, value] of pairs) {
-    for (const [name, v] of Object.entries(bothNames(suffix, value))) env.push([name, v]);
-  }
+  for (const [suffix, value] of pairs) env.push([burrowName(suffix), value]);
   return stdioAddArgs(CHANNEL_SERVER, MCP_SCOPE, env, ["bun", entry.indexPath]);
 }
 
@@ -786,7 +792,7 @@ export function userScopeLines(found: { present: boolean; runtimeId: string | nu
 }
 
 /* ------------------------------------------------------------------------- */
-/* Convergence: one startup-suite, one suite-channel, no legacy alias         */
+/* Convergence: one burrow, one burrow-channel, no legacy alias              */
 /* ------------------------------------------------------------------------- */
 
 /**
@@ -798,10 +804,10 @@ export function userScopeLines(found: { present: boolean; runtimeId: string | nu
  * user-scope entry is SHADOWED in this folder by the local one we just wrote,
  * so leaving it costs this folder nothing. An alias never shares a name with
  * ours, so it is never shadowed: it loads a second tools namespace (e.g.
- * `mcp__suite__*`) beside `mcp__startup-suite__*`, pointing wherever it
+ * `mcp__suite__*`) beside `mcp__burrow__*`, pointing wherever it
  * points. A real host had a user-scope `suite` naming an install it had left.
  */
-export const LEGACY_ALIASES = ["suite", "burrow"] as const;
+export const LEGACY_ALIASES = ["suite"] as const;
 
 /** An MCP entry as `~/.claude.json` stores it. Holds tokens: never print one. */
 export interface StoredEntry {
@@ -888,6 +894,14 @@ export function convergenceProblems(view: ScopeView, host: string | null): strin
   for (const name of LEGACY_ALIASES) {
     if (view.local[name] !== undefined) problems.push(`${name}: local scope, ${hostPhrase(view.local[name] as StoredEntry)}`);
     if (view.user[name] !== undefined) problems.push(`${name}: user scope, ${hostPhrase(view.user[name] as StoredEntry)}`);
+  }
+  // A pre-0.11.0 id still visible here loads a second copy of the same
+  // server under its old prefix. Local ones are renamed at the agent's start
+  // (legacy_names.ts); a user-scope one is shared by every folder on the
+  // machine and is reported, never removed.
+  for (const [oldName, newName] of SERVER_RENAMES) {
+    if (view.local[oldName] !== undefined) problems.push(`${oldName}: local scope, renamed to ${newName} at this agent's next start`);
+    if (view.user[oldName] !== undefined) problems.push(`${oldName}: user scope, ${hostPhrase(view.user[oldName] as StoredEntry)}; remove it with claude mcp remove ${oldName} -s user`);
   }
   return problems;
 }
@@ -1057,7 +1071,7 @@ const ENV_REF = /^\$\{([A-Za-z_][A-Za-z0-9_]*)\}$/;
 /**
  * Read a folder's connection out of its own `.mcp.json`. Pure.
  *
- * Takes the channel entry's SUITE_RUNTIME_ID and SUITE_TOKEN, and the tools
+ * Takes the channel entry's BURROW_RUNTIME_ID and BURROW_TOKEN, and the tools
  * entry's URL (the suite URL is that minus a trailing `/mcp`) and headers.
  * REFUSES — naming fields, never values — when either entry is missing, a field
  * is missing, the two entries name different hosts, or the channel token and
@@ -1077,8 +1091,9 @@ export function adoptMcpJson(text: string): AdoptResult {
     return { ok: false, problems: [`${MCP_JSON} is not valid JSON`] };
   }
   const problems: string[] = [];
-  const channel = servers[CHANNEL_SERVER] as { env?: Record<string, unknown> } | undefined;
-  const tools = servers[TOOLS_SERVER] as { url?: unknown; headers?: Record<string, unknown> } | undefined;
+  // A folder's .mcp.json may still use the pre-0.11.0 ids; adopting reads it, never renames it.
+  const channel = serverEntry(servers, CHANNEL_SERVER) as { env?: Record<string, unknown> } | undefined;
+  const tools = serverEntry(servers, TOOLS_SERVER) as { url?: unknown; headers?: Record<string, unknown> } | undefined;
   if (typeof channel !== "object" || channel === null) problems.push(`the ${CHANNEL_SERVER} entry is missing`);
   if (typeof tools !== "object" || tools === null) problems.push(`the ${TOOLS_SERVER} entry is missing`);
   if (problems.length > 0) return { ok: false, problems };
@@ -1094,8 +1109,8 @@ export function adoptMcpJson(text: string): AdoptResult {
   const authKey = Object.keys(headers).find((k) => k.toLowerCase() === "authorization");
   const bearer = /^bearer\s+(.+)$/i.exec(str(authKey === undefined ? "" : headers[authKey]))?.[1]?.trim() ?? "";
 
-  if (runtimeId === "") problems.push(`${CHANNEL_SERVER} env SUITE_RUNTIME_ID is missing`);
-  if (channelToken === "") problems.push(`${CHANNEL_SERVER} env SUITE_TOKEN is missing`);
+  if (runtimeId === "") problems.push(`${CHANNEL_SERVER} env BURROW_RUNTIME_ID is missing`);
+  if (channelToken === "") problems.push(`${CHANNEL_SERVER} env BURROW_TOKEN is missing`);
   if (toolsUrl === "") problems.push(`${TOOLS_SERVER} url is missing`);
   if (bearer === "") problems.push(`${TOOLS_SERVER} Authorization bearer is missing`);
   if (problems.length > 0) return { ok: false, problems };
@@ -1104,13 +1119,13 @@ export function adoptMcpJson(text: string): AdoptResult {
   if (toolsHost === null) return { ok: false, problems: [`${TOOLS_SERVER} url is not a URL`] };
   if (channelUrl !== "") {
     const channelHost = hostOf(channelUrl);
-    if (channelHost === null) return { ok: false, problems: [`${CHANNEL_SERVER} env SUITE_URL is not a URL`] };
+    if (channelHost === null) return { ok: false, problems: [`${CHANNEL_SERVER} env BURROW_URL is not a URL`] };
     if (channelHost !== toolsHost) {
-      problems.push(`${CHANNEL_SERVER} SUITE_URL and ${TOOLS_SERVER} url name different hosts`);
+      problems.push(`${CHANNEL_SERVER} BURROW_URL and ${TOOLS_SERVER} url name different hosts`);
     }
   }
   if (fingerprint(channelToken) !== fingerprint(bearer)) {
-    problems.push(`${CHANNEL_SERVER} SUITE_TOKEN and ${TOOLS_SERVER} Authorization bearer differ`);
+    problems.push(`${CHANNEL_SERVER} BURROW_TOKEN and ${TOOLS_SERVER} Authorization bearer differ`);
   }
   if (problems.length > 0) return { ok: false, problems };
 

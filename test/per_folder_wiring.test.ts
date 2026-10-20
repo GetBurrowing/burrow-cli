@@ -19,7 +19,7 @@ import {
   readAgentSecrets,
   writeAgentConnection,
 } from "../src/agent_connections.ts";
-import { restoreWirer, runClaude, WIRING_FAILED_EXIT, type ClaudeDeps } from "../src/commands/claude.ts";
+import { RENAME_REFUSED_EXIT, restoreWirer, runClaude, WIRING_FAILED_EXIT, type ClaudeDeps } from "../src/commands/claude.ts";
 import {
   CHANNEL_SERVER,
   MCP_JSON,
@@ -40,7 +40,14 @@ import { emptyConfig, serializeConfig } from "../src/config.ts";
 import { configDir } from "../src/paths.ts";
 import { rosterPath, serializeRoster, type RosterEntry } from "../src/roster.ts";
 import { createStore, spawnWithSecrets, TOKEN_KEY, type Prompter } from "../src/secrets.ts";
-import { newSessionArgv, sessionNameFor, sessionNameFromConfig, type RunResult, type TmuxDeps } from "../src/tmux.ts";
+import {
+  newSessionArgv,
+  sessionCandidatesFromConfig,
+  sessionNameFor,
+  sessionNameFromConfig,
+  type RunResult,
+  type TmuxDeps,
+} from "../src/tmux.ts";
 import { cleanupCleanEnvs, createCleanEnv, stubsFor, type CleanEnv } from "./clean-env/fixture.ts";
 import { canary, scanTexts, scanTree } from "./leak-scan.ts";
 
@@ -154,10 +161,10 @@ function namedBy(bx: Box, dir: string, agent: Agent): { runtime: string; url: st
   const ch = servers[CHANNEL_SERVER];
   const tl = servers[TOOLS_SERVER];
   return {
-    runtime: ch?.env?.SUITE_RUNTIME_ID ?? "",
-    url: ch?.env?.SUITE_URL ?? "",
+    runtime: ch?.env?.BURROW_RUNTIME_ID ?? "",
+    url: ch?.env?.BURROW_URL ?? "",
     tools: tl?.url ?? "",
-    tokenMatches: ch?.env?.SUITE_TOKEN === agent.token && tl?.headers?.Authorization === `Bearer ${agent.token}`,
+    tokenMatches: ch?.env?.BURROW_TOKEN === agent.token && tl?.headers?.Authorization === `Bearer ${agent.token}`,
   };
 }
 
@@ -367,7 +374,7 @@ describe("init --from-mcp-json", () => {
     );
     expect(r.ok).toBe(false);
     if (!r.ok) {
-      expect(r.problems.join("\n")).toContain("SUITE_RUNTIME_ID is missing");
+      expect(r.problems.join("\n")).toContain("BURROW_RUNTIME_ID is missing");
       expect(scanTexts({ problems: r.problems.join("\n") }, secret)).toEqual([]);
     }
   });
@@ -829,23 +836,294 @@ describe("registration converges on one startup-suite and one suite-channel (01a
     expectNoLeaks(bx, [A.token]);
   });
 
-  test("UPGRADE: a 0.7.3 entry pair carrying only SUITE_* reads CURRENT, so the upgrade rewrites nothing", async () => {
+});
+
+/* ------------------------------------------------------------------------- */
+/* 0.11.0: the last suite names, renamed at an agent's START, never under it   */
+/* ------------------------------------------------------------------------- */
+
+const OLD_CHANNEL = "suite-channel";
+const OLD_TOOLS = "startup-suite";
+
+/**
+ * Put a wired folder back exactly as 0.10.3 left it: local entries under the
+ * old ids with BURROW_* AND SUITE_* env (or SUITE_* only, as an entry from
+ * 0.7.3 still is on one real host), the record's url under `suiteUrl`, a
+ * `.mcp.json` under the old ids, and settings that enable them.
+ */
+function asOf0103(bx: Box, dir: string, opts: { suiteOnly?: boolean } = {}): void {
+  const raw = JSON.parse(readFileSync(claudeJson(bx), "utf8")) as {
+    projects: Record<string, { mcpServers: Record<string, { env?: Record<string, string> }> }>;
+  };
+  const servers = raw.projects[dir]?.mcpServers ?? {};
+  const ch = servers[CHANNEL_SERVER] as { env: Record<string, string> };
+  for (const [k, v] of Object.entries({ ...ch.env })) {
+    if (!k.startsWith("BURROW_")) continue;
+    ch.env[`SUITE_${k.slice("BURROW_".length)}`] = v;
+    if (opts.suiteOnly) delete ch.env[k];
+  }
+  const tools = servers[TOOLS_SERVER];
+  (raw.projects[dir] as { mcpServers: Record<string, unknown> }).mcpServers = { [OLD_TOOLS]: tools, [OLD_CHANNEL]: ch };
+  writeFileSync(claudeJson(bx), JSON.stringify(raw, null, 2), { mode: 0o600 });
+
+  const record = agentConfigPath(bx.fx.env, dir);
+  writeFileSync(record, readFileSync(record, "utf8").replace('"burrowUrl"', '"suiteUrl"'), { mode: 0o600 });
+
+  writeFileSync(
+    resolve(dir, ".mcp.json"),
+    `${JSON.stringify({ mcpServers: { [OLD_CHANNEL]: { command: "bun", args: ["/x/src/index.ts"], env: { SUITE_RUNTIME_ID: "rt-mcpjson" } }, [OLD_TOOLS]: { type: "http", url: "https://one.example.invalid/mcp" } } }, null, 2)}\n`,
+  );
+  mkdirSync(resolve(dir, ".claude"), { recursive: true });
+  writeFileSync(
+    resolve(dir, ".claude", "settings.local.json"),
+    `${JSON.stringify({ enabledMcpjsonServers: [OLD_CHANNEL, OLD_TOOLS, "xcode"], hooks: { Stop: [] } }, null, 2)}\n`,
+  );
+}
+
+/** a/ initialised and wired by a 0.11.0 start (init writes no MCP entries; the first start does). */
+async function wired(bx: Box, A: Agent): Promise<void> {
+  await initIn(bx, bx.a, A);
+  await restoreOnce(bx, rosterFor(bx, [bx.a]), []);
+  expectNames(bx, bx.a, A);
+}
+
+/** Every file the rename may touch, by bytes. */
+function renameSurface(bx: Box, dir: string): Array<Buffer | "absent"> {
+  return [
+    claudeJson(bx),
+    agentConfigPath(bx.fx.env, dir),
+    resolve(configDir(bx.fx.env), "config.json"),
+    resolve(dir, ".mcp.json"),
+    resolve(dir, ".claude", "settings.local.json"),
+  ].map(bytesOrAbsent);
+}
+
+/** A tmux on which `dir`'s agent session is LIVE: its pane runs claude. */
+function liveTmux(bx: Box, dir: string, calls: string[][]): TmuxDeps {
+  const names = sessionCandidatesFromConfig(agentConfigFor(bx.fx.env, dir), dir);
+  return {
+    env: {},
+    which: (name) => (name === "tmux" || name === "claude" ? `/fixture/bin/${name}` : null),
+    run: async (argv): Promise<RunResult> => {
+      calls.push(argv);
+      if (argv[1] === "list-panes") return { exitCode: 0, stdout: names.map((n, i) => `${n}\t${100 + i}\tclaude\n`).join(""), stderr: "" };
+      return { exitCode: 0, stdout: "", stderr: "" };
+    },
+  };
+}
+
+/** `burrow claude` in `dir` against `tmux`, interactively (not -p), with the stub claude for wiring. */
+async function launchIn(bx: Box, dir: string, tmux: TmuxDeps, force = false): Promise<{ code: number; err: string[]; execs: string[][] }> {
+  const store = createStore();
+  const err: string[] = [];
+  const execs: string[][] = [];
+  const deps: ClaudeDeps = {
+    tmux,
+    env: bx.fx.env,
+    cwd: dir,
+    store,
+    config: agentConfigFor(bx.fx.env, dir),
+    statePath: resolve(bx.fx.root, "state.json"),
+    color: false,
+    platform: "linux",
+    prompter: mute(),
+    sleep: async () => {},
+    out: (l) => void bx.output.push(l),
+    err: (l) => {
+      err.push(l);
+      bx.output.push(l);
+    },
+    exec: async (argv) => (execs.push(argv), 0),
+    wiring: { run: (argv, opts) => spawnWithSecrets(argv, store, { ...opts, env: bx.fx.env }), isTTY: false, canPrompt: false },
+  };
+  const code = await runClaude(deps, { userArgs: [], force });
+  return { code, err, execs };
+}
+
+describe("0.11.0: the suite names are renamed on an agent's START, and never under a running one", () => {
+  test("START (restore at boot): ids, env, config key, .mcp.json, settings lists and the recorded launch flag all move; the agent comes up on them", async () => {
     const { A } = agents();
     const bx = box();
-    await initIn(bx, bx.a, A);
-    await restoreOnce(bx, rosterFor(bx, [bx.a]), []);
-    // Strip every BURROW_* name: exactly what 0.7.3 wrote.
-    const raw = JSON.parse(readFileSync(claudeJson(bx), "utf8")) as {
-      projects: Record<string, { mcpServers: Record<string, { env?: Record<string, string> }> }>;
+    await wired(bx, A);
+    asOf0103(bx, bx.a);
+    // A roster entry exactly as 0.10.3 recorded it: old flag, old wrapper $0.
+    const session = sessionNameFor({ naming: "cwd", cwd: bx.a, runtimeId: A.runtime });
+    const recorded: RosterEntry = {
+      session,
+      command: newSessionArgv({
+        session,
+        command: ["/bin/sh", "-c", "exec \"$@\"", "suite-claude-continue", "claude", "--dangerously-load-development-channels", "server:suite-channel", "--continue"],
+        cwd: bx.a,
+      }),
+      cwd: bx.a,
+      kind: "claude",
+      recordedAt: "2026-10-19T00:00:00.000Z",
     };
-    const ch = raw.projects[bx.a]?.mcpServers[CHANNEL_SERVER] as { env: Record<string, string> };
-    for (const k of Object.keys(ch.env)) if (k.startsWith("BURROW_")) delete ch.env[k];
-    writeFileSync(claudeJson(bx), JSON.stringify(raw), { mode: 0o600 });
-    const bytes = readFileSync(claudeJson(bx));
-    const before = adds(bx).length;
-    await restoreOnce(bx, rosterFor(bx, [bx.a]), []);
-    expect(adds(bx).length).toBe(before);
-    expect(readFileSync(claudeJson(bx)).equals(bytes)).toBe(true);
+    const ft = fakeTmux();
+    const written: string[] = [];
+    const log: string[] = [];
+    const r = await runRestore(
+      {
+        tmux: ft.tmux,
+        readRoster: () => serializeRoster([recorded]),
+        writeRoster: (_p, c) => void written.push(c),
+        now: () => new Date("2026-10-20T00:00:00Z"),
+        log: (l) => void log.push(l),
+        wire: restoreWirer(bx.fx.env, (l) => void log.push(l)),
+      },
+      bx.fx.home,
+      { apply: true },
+    );
+    expect(r.failed).toEqual([]);
+    expect(r.started).toEqual([session]);
+
+    // ~/.claude.json: the new ids only, the channel env BURROW_* only, the values unchanged.
+    expectNames(bx, bx.a, A);
+    const local = (JSON.parse(readFileSync(claudeJson(bx), "utf8")) as { projects: Record<string, { mcpServers: Record<string, { env?: Record<string, string> }> }> })
+      .projects[bx.a]?.mcpServers ?? {};
+    expect(Object.keys(local).sort()).toEqual(["burrow", "burrow-channel"]);
+    expect(Object.keys(local["burrow-channel"]?.env ?? {}).sort()).toEqual(
+      ["BURROW_ALLOW_PERMISSION_RELAY", "BURROW_RUNTIME_ID", "BURROW_TOKEN", "BURROW_URL"],
+    );
+    // The record's key.
+    const record = JSON.parse(readFileSync(agentConfigPath(bx.fx.env, bx.a), "utf8")) as Record<string, unknown>;
+    expect(Object.keys(record)).toEqual(["dir", "burrowUrl", "runtimeId", "headerNames"]);
+    expect(record.burrowUrl).toBe(A.url);
+    // .mcp.json and the settings list, in the same start.
+    const mcpJson = JSON.parse(readFileSync(resolve(bx.a, ".mcp.json"), "utf8")) as { mcpServers: Record<string, { env?: Record<string, string> }> };
+    expect(Object.keys(mcpJson.mcpServers)).toEqual(["burrow-channel", "burrow"]);
+    expect(mcpJson.mcpServers["burrow-channel"]?.env).toEqual({ BURROW_RUNTIME_ID: "rt-mcpjson" });
+    const settings = JSON.parse(readFileSync(resolve(bx.a, ".claude", "settings.local.json"), "utf8")) as Record<string, unknown>;
+    expect(settings).toEqual({ enabledMcpjsonServers: ["burrow-channel", "burrow", "xcode"], hooks: { Stop: [] } });
+
+    // The replay carries the new flag and wrapper, and the roster was rewritten to them before it.
+    const replay = ft.calls.find((c) => c[1] === "new-session") ?? [];
+    expect(replay).toContain("server:burrow-channel");
+    expect(replay).toContain("burrow-claude-continue");
+    expect(replay.join("\n")).not.toMatch(/suite-channel|suite-claude-continue/);
+    expect(written).toHaveLength(1);
+    expect(written[0]).not.toMatch(/suite-channel|suite-claude-continue/);
+    expect(log.join("\n")).toContain("suite-channel -> burrow-channel");
+    expectNoLeaks(bx, [A.token], [resolve(bx.a, ".mcp.json")]);
+  });
+
+  test("START from a terminal (burrow claude): a SUITE_*-only channel entry comes up with BURROW_* names and the launch names server:burrow-channel", async () => {
+    const { A } = agents();
+    const bx = box();
+    await wired(bx, A);
+    asOf0103(bx, bx.a, { suiteOnly: true });
+    const calls: string[][] = [];
+    const ft = fakeTmux();
+    const tmux: TmuxDeps = { ...ft.tmux, run: async (argv) => (calls.push(argv), ft.tmux.run(argv)) };
+    const r = await launchIn(bx, bx.a, tmux);
+    expect(r.err.join("\n")).not.toContain("refusing");
+    expectNames(bx, bx.a, A);
+    const create = calls.find((c) => c[1] === "new-session") ?? [];
+    expect(create).toContain("server:burrow-channel");
+    expect(create).toContain("burrow-claude-continue");
+    expect(renameSurface(bx, bx.a).map((b) => (b === "absent" ? "" : b.toString())).join("\n")).not.toMatch(/"suiteUrl"|"suite-channel"|"startup-suite"|"SUITE_/);
+  });
+
+  test("ATTACH to a live agent: NOTHING is renamed or registered, byte for byte, and it says so", async () => {
+    const { A } = agents();
+    const bx = box();
+    await wired(bx, A);
+    asOf0103(bx, bx.a);
+    const before = renameSurface(bx, bx.a);
+    const mcpBefore = bx.fx.log().filter((l) => l.startsWith("claude\tmcp")).length;
+    const calls: string[][] = [];
+    const r = await launchIn(bx, bx.a, liveTmux(bx, bx.a, calls));
+    expect(r.code).toBe(0);
+    const after = renameSurface(bx, bx.a);
+    for (let i = 0; i < before.length; i++) expect(same(before[i] as Buffer, after[i] as Buffer)).toBe(true);
+    expect(bx.fx.log().filter((l) => l.startsWith("claude\tmcp")).length).toBe(mcpBefore);
+    expect(calls.some((c) => c[1] === "new-session")).toBe(false);
+    expect(r.err.join("\n")).toContain("renamed at its next start, not under a running agent");
+  });
+
+  test("`burrow claude new` beside a live agent still on the old names is REFUSED; nothing renamed, nothing started", async () => {
+    const { A } = agents();
+    const bx = box();
+    await wired(bx, A);
+    asOf0103(bx, bx.a);
+    const before = renameSurface(bx, bx.a);
+    const calls: string[][] = [];
+    const r = await launchIn(bx, bx.a, liveTmux(bx, bx.a, calls), true);
+    expect(r.code).toBe(RENAME_REFUSED_EXIT);
+    const after = renameSurface(bx, bx.a);
+    for (let i = 0; i < before.length; i++) expect(same(before[i] as Buffer, after[i] as Buffer)).toBe(true);
+    expect(calls.some((c) => c[1] === "new-session")).toBe(false);
+  });
+
+  const conflicts: Array<[string, (bx: Box, dir: string) => void, string]> = [
+    [
+      "a local scope holding suite-channel AND burrow-channel",
+      (bx, dir) => {
+        const raw = JSON.parse(readFileSync(claudeJson(bx), "utf8")) as { projects: Record<string, { mcpServers: Record<string, unknown> }> };
+        const servers = raw.projects[dir]?.mcpServers as Record<string, unknown>;
+        servers["burrow-channel"] = servers[OLD_CHANNEL];
+        writeFileSync(claudeJson(bx), JSON.stringify(raw), { mode: 0o600 });
+      },
+      "holds both suite-channel and burrow-channel",
+    ],
+    [
+      "a record holding suiteUrl AND burrowUrl",
+      (bx, dir) => {
+        const record = agentConfigPath(bx.fx.env, dir);
+        const raw = JSON.parse(readFileSync(record, "utf8")) as Record<string, unknown>;
+        writeFileSync(record, JSON.stringify({ ...raw, burrowUrl: "https://two.example.invalid" }), { mode: 0o600 });
+      },
+      "holds both suiteUrl and burrowUrl",
+    ],
+    [
+      "a .mcp.json holding startup-suite AND burrow",
+      (_bx, dir) => {
+        const file = resolve(dir, ".mcp.json");
+        const raw = JSON.parse(readFileSync(file, "utf8")) as { mcpServers: Record<string, unknown> };
+        raw.mcpServers.burrow = raw.mcpServers[OLD_TOOLS];
+        writeFileSync(file, JSON.stringify(raw));
+      },
+      "holds both startup-suite and burrow",
+    ],
+    [
+      "a settings list naming suite-channel AND burrow-channel",
+      (_bx, dir) => {
+        writeFileSync(resolve(dir, ".claude", "settings.local.json"), JSON.stringify({ enabledMcpjsonServers: [OLD_CHANNEL, "burrow-channel"] }));
+      },
+      "holds both suite-channel and burrow-channel",
+    ],
+  ];
+  for (const [name, make, says] of conflicts) {
+    test(`REFUSED, not merged: ${name}; the start stops, names it, and changes NOTHING`, async () => {
+      const { A } = agents();
+      const bx = box();
+      await wired(bx, A);
+      asOf0103(bx, bx.a);
+      make(bx, bx.a);
+      const before = renameSurface(bx, bx.a);
+      const calls: string[][] = [];
+      const ft = fakeTmux();
+      const r = await launchIn(bx, bx.a, { ...ft.tmux, run: async (argv) => (calls.push(argv), ft.tmux.run(argv)) });
+      expect(r.code).toBe(RENAME_REFUSED_EXIT);
+      expect(r.err.join("\n")).toContain(says);
+      expect(r.err.join("\n")).toContain("nothing was renamed");
+      const after = renameSurface(bx, bx.a);
+      for (let i = 0; i < before.length; i++) expect(same(before[i] as Buffer, after[i] as Buffer)).toBe(true);
+      expect(calls.some((c) => c[1] === "new-session")).toBe(false);
+      expectNoLeaks(bx, [A.token], [resolve(bx.a, ".mcp.json")]);
+    });
+  }
+
+  test("a folder still on the old names reads the same before its start: status, the record, the attach's session name", async () => {
+    const { A } = agents();
+    const bx = box();
+    await wired(bx, A);
+    const nameBefore = sessionNameFromConfig(agentConfigFor(bx.fx.env, bx.a), bx.a);
+    asOf0103(bx, bx.a);
+    const record = readAgentConnection(bx.fx.env, bx.a).connection?.record;
+    expect(record?.suiteUrl).toBe(A.url);
+    expect(record?.runtimeId).toBe(A.runtime);
+    expect(sessionNameFromConfig(agentConfigFor(bx.fx.env, bx.a), bx.a)).toBe(nameBefore);
   });
 });
 

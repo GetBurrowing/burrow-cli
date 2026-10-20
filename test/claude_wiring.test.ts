@@ -255,7 +255,7 @@ describe("burrow claude wires this folder from the saved connection", () => {
 
     const added = adds(fx);
     expect(added.map((a) => a[3]).sort()).toEqual([CHANNEL_SERVER, TOOLS_SERVER].sort());
-    expect(added.find((a) => a[3] === CHANNEL_SERVER)).toContain(`SUITE_TOKEN=${rotated}`);
+    expect(added.find((a) => a[3] === CHANNEL_SERVER)).toContain(`BURROW_TOKEN=${rotated}`);
   });
 });
 

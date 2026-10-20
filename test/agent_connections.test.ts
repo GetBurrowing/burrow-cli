@@ -258,11 +258,11 @@ describe("the named regression", () => {
     const channel = added.find((p) => p[3] === CHANNEL_SERVER) ?? [];
     const tools = added.find((p) => p[3] === TOOLS_SERVER) ?? [];
     const mask = (p: string[]): string[] => p.map((a) => (/TOKEN=|Bearer /.test(a) ? "<token masked>" : a));
-    expect(mask(channel)).toContain(`SUITE_RUNTIME_ID=${A.runtime}`);
-    expect(mask(channel)).toContain(`SUITE_URL=${channelWsUrl(A.url)}`);
+    expect(mask(channel)).toContain(`BURROW_RUNTIME_ID=${A.runtime}`);
+    expect(mask(channel)).toContain(`BURROW_URL=${channelWsUrl(A.url)}`);
     expect(mask(tools)).toContain(toolsHttpUrl(A.url));
     // Tokens compared, never printed: a boolean, not the value.
-    expect(channel.includes(`SUITE_TOKEN=${A.token}`)).toBe(true);
+    expect(channel.includes(`BURROW_TOKEN=${A.token}`)).toBe(true);
     expect(added.some((p) => p.join("\t").includes(B.token))).toBe(false);
     expect(added.some((p) => p.join("\t").includes(B.runtime))).toBe(false);
 
@@ -338,7 +338,7 @@ describe("migration from the 0.7.0 single machine connection", () => {
     expect(readAgentConnection(bx.fx.env, bx.b).connection?.record.runtimeId).toBe(C.runtime);
     expect(readAgentConnection(bx.fx.env, bx.a).connection).toBeNull();
     const channel = addsShown(bx).find((p) => p[3] === CHANNEL_SERVER) ?? [];
-    expect(channel).toContain(`SUITE_RUNTIME_ID=${C.runtime}`);
+    expect(channel).toContain(`BURROW_RUNTIME_ID=${C.runtime}`);
     // The legacy connection is still there, still B, still assigned to nobody.
     expect(legacyConnection(bx.fx.env)?.runtimeId).toBe(B.runtime);
     expectNoLeaks(bx, [A.token, B.token, C.token]);
@@ -417,7 +417,7 @@ describe("the store", () => {
       ...({ token: secret, headers: { Authorization: secret } } as object),
     });
     expect(scanText("record", body, secret)).toEqual([]);
-    expect(Object.keys(JSON.parse(body))).toEqual(["dir", "suiteUrl", "runtimeId", "headerNames"]);
+    expect(Object.keys(JSON.parse(body))).toEqual(["dir", "burrowUrl", "runtimeId", "headerNames"]);
     expect(() =>
       serializeAgentRecord({ dir: "/x", suiteUrl: "u", runtimeId: "r", headerNames: [], tokenEnv: secret.replace("_", "-") }),
     ).toThrow();

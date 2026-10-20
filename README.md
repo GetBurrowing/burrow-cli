@@ -129,8 +129,9 @@ folder A's connection: each folder's record is its own file pair (see
 [Credentials and config](#credentials-and-config)). `burrow init` in `$HOME`
 warns that agents in other folders will not use that record.
 
-**`--from-mcp-json`** reads the folder's own `.mcp.json` — the `suite-channel`
-entry's `BURROW_RUNTIME_ID` and `BURROW_TOKEN` (or their `SUITE_*` names), the `startup-suite` entry's URL
+**`--from-mcp-json`** reads the folder's own `.mcp.json` — the `burrow-channel`
+entry's `BURROW_RUNTIME_ID` and `BURROW_TOKEN` (or their `SUITE_*` names), the `burrow` entry's URL
+(a `.mcp.json` still under the pre-0.11.0 ids `suite-channel` / `startup-suite` is read the same)
 (the Burrow URL is that minus `/mcp`) and headers — and saves that as the
 folder's connection, so no token passes through an argv, a shell or a terminal.
 It refuses, naming fields and never values, and writes nothing, when either
@@ -164,7 +165,7 @@ what is missing or stale:
 * **the channel plugin** — cloned once and `bun install`ed. An existing
   checkout is used as it is, not pulled, so a launch never depends on the
   network;
-* **both MCP entries** — `suite-channel` and `startup-suite`, registered at
+* **both MCP entries** — `burrow-channel` and `burrow`, registered at
   local scope from the saved connection. An entry that already matches is left
   alone. Written entries are health-checked, because written is not connected;
 * **`CLAUDE.md`** — described below.
@@ -265,8 +266,8 @@ from Burrow itself is the *credential*, while an HTML login page from something
 in front of Burrow means the request never reached the application at all and the
 credential was never evaluated.
 
-**Both entries should carry one credential.** `suite-channel` keeps it in
-`BURROW_TOKEN` and `SUITE_TOKEN`, `startup-suite` in an `Authorization: Bearer` header. When both
+**Both entries should carry one credential.** `burrow-channel` keeps it in
+`BURROW_TOKEN`, `burrow` in an `Authorization: Bearer` header. When both
 point at the same Burrow host and the two values differ, at least one is wrong —
 and the wrong one produces a server that registers and exposes nothing. The
 `token match` check compares them by non-reversible fingerprint, so neither
@@ -284,7 +285,7 @@ disagreement fails as `cross-wired`, naming the folder and each source's runtime
 id (`recorded rt-a, entry rt-b, .mcp.json rt-a`). Runtime ids are not secrets,
 and no token is read. The remedy is `cd <dir> && burrow init`, or
 `burrow init --from-mcp-json` when the folder has a `.mcp.json`. A user-scope
-`suite-channel` or `startup-suite` entry (top-level `mcpServers` in
+`burrow-channel` or `burrow` entry (top-level `mcpServers` in
 `~/.claude.json`) also fails, because it applies to every folder that has no
 local entry of its own. The check reads `~/.claude.json` directly and never runs
 `claude mcp get` or `claude mcp list`: those health-check the channel by
@@ -812,11 +813,12 @@ wins and nothing is printed. The list is hand-written in `src/env_names.ts`
 | `BURROW_CLI_ALLOW_NO_TMUX` | `SUITE_CLI_ALLOW_NO_TMUX` |
 | `BURROW_CLI_ALLOW_NO_CODEX` | `SUITE_CLI_ALLOW_NO_CODEX` |
 
-Values this CLI **writes** for other programs (the channel MCP entry's env, the
-launcher's exports, the installer's environment during `burrow update`) are
-written under **both** names. The pinned channel plugins and an older CLI
-reached by a pinned `burrow update` read only `SUITE_*`. A harness child never
-receives either prefix.
+Values this CLI **writes** for other programs (the launcher's exports, the
+installer's environment during `burrow update`) are written under **both**
+names: an older CLI reached by a pinned `burrow update` reads only `SUITE_*`.
+The Claude Code channel MCP entry is the exception from 0.11.0: it carries
+`BURROW_*` only, because the pinned channel plugin reads `BURROW_*` first. A
+harness child never receives either prefix.
 
 **State moves once, on the first 0.9 run.** Before 0.9.0 the CLI kept its
 library and plugin checkouts in `<data>/suite`, its roster and session logs in
@@ -855,17 +857,59 @@ scans the old directories again:
 New tmux sessions are `burrow-*`. A live `suite-*` session is still found,
 attached and restored, and a stale one comes back as `burrow-*`.
 
-**MCP server names are unchanged: `startup-suite` and `suite-channel`.** Every
-agent's permission allowlists, skills and `CLAUDE.md` name the
-`mcp__startup-suite__*` tools, and Claude Code's channel dialog is keyed on
-`server:suite-channel`. `burrow init` registers exactly those two names and
-removes leftover `suite` or `burrow` alias entries, printing each removal.
+**MCP server ids were unchanged by 0.8.0; 0.11.0 renames them.** See
+[The 0.11.0 rename](#the-0110-rename-mcp-server-ids-config-key-launch-flag).
 
 **Still named `suite`, on purpose:** the `--suite-url` flag (`--burrow-url`
 is accepted too, and wins), the `SUITE_CONVENTIONS.md` file in folders that
 already have it, and the `SUITE_CONVENTIONS` export of `src/claude_md.ts`
 (an alias of `BURROW_CONVENTIONS`, the same string), which core's agent-host
 imports from the installed library.
+
+### The 0.11.0 rename: MCP server ids, config key, launch flag
+
+0.11.0 renames the last names this CLI wrote that still said `suite`. There is
+no dual support: every writer writes only the new name, and the first START of
+each agent renames what is there.
+
+| Before 0.11.0 | From 0.11.0 | Where |
+| --- | --- | --- |
+| MCP server id `suite-channel` | `burrow-channel` | `~/.claude.json` local scope, `<folder>/.mcp.json`, `enabledMcpjsonServers` / `disabledMcpjsonServers` in `<folder>/.claude/settings*.json` |
+| MCP server id `startup-suite` | `burrow` | the same three places |
+| `--dangerously-load-development-channels server:suite-channel` | `server:burrow-channel` | the launch argv, and a restore roster recorded before 0.11.0 |
+| config key `suiteUrl` | `burrowUrl` | `~/.config/burrow/agents/*.json`, `~/.config/burrow/config.json`, an agent root's `burrow.json` |
+| pane wrapper `$0` `suite-claude-continue` | `burrow-claude-continue` | the `--continue` fallback shell |
+| channel entry env `SUITE_URL`, `SUITE_RUNTIME_ID`, `SUITE_TOKEN`, `SUITE_ALLOW_PERMISSION_RELAY` | `BURROW_*` only | the channel entry; the pinned plugin reads `BURROW_*` first |
+
+**Claude Code names every MCP tool `mcp__<server id>__<tool>`, so this renames
+every Burrow tool:** `mcp__startup-suite__task_ack` becomes
+`mcp__burrow__task_ack`, and `mcp__suite-channel__suite_reply` becomes
+`mcp__burrow-channel__suite_reply` (the plugin's own tool names, `suite_reply`
+and the rest, are unchanged). Anything outside this CLI that names a tool by
+its full name has to move at the same restart: subagent `tools:` allowlists,
+`permissions` allow-lists, hooks that match tool names, and `CLAUDE.md` text.
+Claude Code re-reads subagent files and settings while a session runs, so
+editing them before the restart breaks the RUNNING agent's subagents; edit them
+with the agent stopped, then start it.
+
+**On a start only.** `burrow claude` renames when no session for the folder is
+live, and so does `burrow restore` (it only starts absent sessions). Attaching
+to a live agent, `burrow claude -p`, and `burrow claude new` beside a live agent
+rename nothing; the last one is refused while the folder still has old names.
+Until its start, a folder's old names are read, never written, by status,
+doctor and the attach. Other harnesses rename the config key at their own start
+(`deepseek`, `codex`, `hermes`, `openclaw`, in the same place as the 0.10.2 file
+rename).
+
+**Both names present is refused, not merged.** A local scope, `.mcp.json`,
+settings list or config file holding an old name beside its new one stops the
+start (exit 7), naming the file and both names, and nothing is renamed: every
+place is checked before any changes. Remove one and start again.
+
+**Not renamed by 0.11.0:** user-scope entries (shared by every folder; an old
+one is reported by the convergence check, with the command to remove it); the
+MCP ids Codex, Hermes and OpenClaw register for themselves (`startup-suite`,
+`suite-channel` in their own configs); the `--suite-url` flag.
 
 **The repo is `burrow-cli`; it was `suite-cli` before 0.9.0.** GitHub
 redirects the old name after a repo rename, but nothing here relies on that:
@@ -1139,7 +1183,7 @@ commands later.
 ## `burrow claude`
 
 `burrow claude [...]` runs
-`claude --dangerously-load-development-channels server:suite-channel
+`claude --dangerously-load-development-channels server:burrow-channel
 --dangerously-skip-permissions --continue <your args>`
 inside the session for this directory. Channel plugins must be on Anthropic's
 allowlist to load normally; until this one is approved every session needs that
@@ -1242,7 +1286,7 @@ on it — and the wiring warns when it names a different runtime; this directory
 local entry takes precedence here regardless.
 
 Being written is not being connected, so after writing an entry the wiring health-checks
-with `claude mcp list` and requires both `suite-channel` and `startup-suite` to
+with `claude mcp list` and requires both `burrow-channel` and `burrow` to
 report connected. A status line it cannot parse is a **failure that prints the
 raw line**, never a green result on an assumption.
 

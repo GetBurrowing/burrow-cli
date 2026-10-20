@@ -10,6 +10,60 @@ that matters in the field: is this one newer than what I had?
 Minor for a new capability or a changed default; patch for a fix that changes no
 behaviour anyone was relying on.
 
+## 0.11.0
+
+**The last `suite` names this CLI wrote are renamed, on each agent's next
+start.** No dual support: writers write only the new names, and a folder
+holding an old name beside its new one is refused, not merged.
+
+| Before | From 0.11.0 |
+| --- | --- |
+| MCP server id `suite-channel` | `burrow-channel` |
+| MCP server id `startup-suite` | `burrow` |
+| `--dangerously-load-development-channels server:suite-channel` | `server:burrow-channel` |
+| config key `suiteUrl` | `burrowUrl` |
+| pane wrapper `suite-claude-continue` | `burrow-claude-continue` |
+| channel entry `SUITE_*` env copies | not written; `BURROW_*` only |
+
+- **Every Burrow tool's name changes with the server id.** Claude Code names
+  tools `mcp__<server id>__<tool>`: `mcp__startup-suite__task_ack` is now
+  `mcp__burrow__task_ack`, `mcp__suite-channel__suite_reply` is
+  `mcp__burrow-channel__suite_reply`. Subagent `tools:` allowlists, settings
+  allow-lists, hooks and `CLAUDE.md` text that spell the old prefix must move
+  at the SAME restart as the agent. Claude Code hot-reloads subagent files and
+  settings, so editing them while the old agent runs breaks its subagents.
+- **The rename runs on a start only** (`src/legacy_names.ts`, the one module
+  that spells the old names): `burrow claude` with no live session for the
+  folder, and `burrow restore`. It renames the folder's local-scope entries in
+  `~/.claude.json` (through `claude mcp remove` + `add-json`), its
+  `.mcp.json`, the `enabledMcpjsonServers` / `disabledMcpjsonServers` lists in
+  its `.claude/settings*.json`, its record's and the machine config's
+  `suiteUrl` key, and moves the channel entry's `SUITE_*` env to `BURROW_*`.
+  All in one start: renaming the local entries alone would unshadow a
+  `.mcp.json` still enabled under the old ids and connect the agent twice.
+- **Never under a running agent** (the 0.10.3 rule). An attach, `-p`, and
+  `burrow claude new` beside a live session rename nothing; `new` is refused
+  (exit 7) while the folder still has old names. Until then status, doctor and
+  the attach read the old names read-only.
+- **Refused, not merged:** an old name beside its new one anywhere above
+  stops the start with exit 7, naming the file and both names. Every place is
+  checked before any is changed, so nothing is renamed.
+- **Restore** rewrites a roster entry recorded with `server:suite-channel` or
+  `suite-claude-continue` before replaying it; replayed as recorded, the
+  agent would come up without its channel. Adoption still skips a pre-0.11.0
+  fallback shell.
+- **The dev-channels dialog** is answered for `server:burrow-channel` only. A
+  session launched with the old flag holds for a human.
+- **`burrow` is no longer a legacy alias** that convergence removes; it is the
+  tools id. A leftover `suite` alias is still removed. An old id left at
+  local scope fails convergence as "renamed at the next start"; at user scope
+  it is reported with the `claude mcp remove` command, never removed.
+- **Other harnesses** rename the `suiteUrl` key in `burrow.json` (and the
+  codex bridge in its folder record) at their own start, beside the 0.10.2
+  file rename. Their own MCP ids (Codex's `-c mcp_servers.startup-suite`,
+  hermes-suite-channel's `mcp_servers.startup-suite`, OpenClaw's channel id)
+  are not renamed by this release.
+
 ## 0.10.3
 
 **Fix: an attach no longer renames an agent root under its running agent.**

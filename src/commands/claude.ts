@@ -3,7 +3,7 @@
  *
  * WHY THE WRAPPER EXISTS AT ALL. Channel plugins must be on Anthropic's
  * allowlist to load normally; until this one is approved, every session needs
- * `--dangerously-load-development-channels server:suite-channel`. The wrapper
+ * `--dangerously-load-development-channels server:burrow-channel`. The wrapper
  * injects it so that when the plugin IS allowlisted the flag disappears from
  * one place and nobody's muscle memory changes.
  *
@@ -26,12 +26,23 @@
 import { mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 import type { SuiteConfig } from "../config.ts";
-import { agentConfig, agentConfigFor, readAgentConnection } from "../agent_connections.ts";
+import { agentConfig, agentConfigFor, agentConfigPath, canonicalDir, readAgentConnection } from "../agent_connections.ts";
 import { resolveTmux } from "../halt.ts";
-import { statePath } from "../paths.ts";
+import { configPath, statePath } from "../paths.ts";
 import { createStore, spawnWithSecrets, ttyPrompter, type CredentialStore, type Prompter } from "../secrets.ts";
 import { ensureConnection, ensureToken, loadSavedSecrets } from "../connection.ts";
-import { ensureClaudeWiring, localEntries, needsRegistration, planMcp } from "../claude_wiring.ts";
+import {
+  conflictLines,
+  ensureClaudeWiring,
+  hasPending,
+  localEntries,
+  needsRegistration,
+  pendingClaudeRenames,
+  planMcp,
+  renameClaudeNames,
+  type PendingRenames,
+} from "../claude_wiring.ts";
+import { LegacyNameConflict, serverEntry } from "../legacy_names.ts";
 import { type RestoreDeps, liveRestoreDeps, recordLaunch } from "./restore.ts";
 import type { RosterEntry } from "../roster.ts";
 import { type SupervisorIo, ensureSupervision, installedBinary, liveSupervisorIo } from "../supervisor.ts";
@@ -118,6 +129,13 @@ export const SESSION_DIED_EXIT = 5;
 export const WIRING_FAILED_EXIT = 6;
 
 /**
+ * The 0.11.0 rename was refused: something holds an old name beside its new
+ * one, or a second session was asked for beside a live agent that still runs
+ * on the old names. Nothing was renamed and nothing was started.
+ */
+export const RENAME_REFUSED_EXIT = 7;
+
+/**
  * How long to let a freshly created agent settle before judging it.
  *
  * Measured against the real failure: Claude printed its refusal and exited
@@ -198,8 +216,13 @@ export async function ensureAgent(deps: ClaudeDeps): Promise<number | null> {
   return null;
 }
 
-/** The injected flag, as separate argv elements. Removed once allowlisted. */
-export const DEV_CHANNEL_ARGS = ["--dangerously-load-development-channels", "server:suite-channel"] as const;
+/**
+ * The injected flag, as separate argv elements. Removed once allowlisted.
+ * Its value names the channel's MCP server id, `server:burrow-channel` since
+ * 0.11.0 (`server:suite-channel` before; a restore roster recorded with the
+ * old value is rewritten before replay, restore.ts).
+ */
+export const DEV_CHANNEL_ARGS = ["--dangerously-load-development-channels", `server:${CHANNEL_SERVER}`] as const;
 
 /**
  * The Burrow participation flags.
@@ -694,7 +717,7 @@ export async function runClaude(deps: ClaudeDeps, options: ClaudeOptions): Promi
   // work: `suite init` then `suite claude`, or `suite claude` straight away.
   let config = deps.config;
   if (deps.wiring !== undefined) {
-    const wired = await wireClaude(deps, deps.wiring);
+    const wired = await wireClaude(deps, deps.wiring, await wireMode(deps, options));
     if (typeof wired === "number") return wired;
     config = wired;
   }
@@ -924,6 +947,29 @@ export async function runClaude(deps: ClaudeDeps, options: ClaudeOptions): Promi
   return finish(await deps.exec(enter.argv));
 }
 
+/**
+ * What this run will do to the folder's agent, decided BEFORE any wiring:
+ *
+ *   start   no live session for this folder: Claude Code is about to read its
+ *           config from scratch, so the 0.11.0 rename may run;
+ *   attach  a live session exists and this run attaches to it: rename nothing;
+ *   beside  `burrow claude new` beside a live session: rename nothing;
+ *   print   `-p`: a one-shot that never touches tmux, so it cannot know
+ *           whether an agent runs here: rename nothing.
+ *
+ * Sessions are looked up under the names the launch itself would use (the
+ * folder's saved naming), read-only: a stale twin is not recycled here.
+ */
+export type WireMode = "start" | "attach" | "beside" | "print";
+
+export async function wireMode(deps: Pick<ClaudeDeps, "config" | "cwd" | "tmux">, options: ClaudeOptions): Promise<WireMode> {
+  if (isNonInteractive(options.userArgs)) return "print";
+  for (const name of sessionCandidatesFromConfig(deps.config, deps.cwd, options.explicitSession)) {
+    if ((await detectState(name, deps.tmux)) === "live") return options.force ? "beside" : "attach";
+  }
+  return "start";
+}
+
 export interface WiringIo {
   run: Runner;
   /** Whether a spinner may draw (stdout AND stderr are terminals). */
@@ -959,7 +1005,7 @@ export interface WiringIo {
  */
 export type WireDeps = Pick<ClaudeDeps, "env" | "cwd" | "prompter" | "store" | "err" | "config">;
 
-export async function wireClaude(deps: WireDeps, wiring: WiringIo): Promise<SuiteConfig | number> {
+export async function wireClaude(deps: WireDeps, wiring: WiringIo, mode: WireMode = "start"): Promise<SuiteConfig | number> {
   const io = { env: deps.env, prompter: deps.prompter, store: deps.store, out: deps.err };
   // Every unwired launch names the folder: several agents share a machine, and
   // a warning that says only "this folder" cannot be told apart in a log that
@@ -971,6 +1017,44 @@ export async function wireClaude(deps: WireDeps, wiring: WiringIo): Promise<Suit
   };
   try {
     const found = readAgentConnection(deps.env, deps.cwd).connection;
+
+    // THE 0.11.0 RENAME, on a start only (legacy_names.ts). Checked before
+    // anything else reads the folder, so a refusal leaves it exactly as it was.
+    const configFiles = [found?.path ?? agentConfigPath(deps.env, canonicalDir(deps.cwd)), configPath(deps.env)];
+    let pending: PendingRenames;
+    try {
+      pending = pendingClaudeRenames(deps.env, deps.cwd, configFiles);
+    } catch (error) {
+      if (!(error instanceof LegacyNameConflict)) throw error;
+      for (const line of conflictLines(error)) deps.err(line);
+      return RENAME_REFUSED_EXIT;
+    }
+    if (hasPending(pending)) {
+      if (mode === "beside") {
+        deps.err(
+          `${CLI_NAME}: refusing a second session in ${deps.cwd}: its running agent still uses the pre-0.11.0 names, ` +
+            `which are renamed only when it next starts. Stop it, then run ${CLI_NAME} claude.`,
+        );
+        return RENAME_REFUSED_EXIT;
+      }
+      if (mode !== "start") {
+        // Attach (or -p): the running agent keeps its names until it restarts.
+        // No wiring either: wiring would register the new ids beside the old.
+        deps.err(`${CLI_NAME}: ${deps.cwd} still uses the pre-0.11.0 names; they are renamed at its next start, not under a running agent.`);
+        return found !== null ? agentConfig(deps.env, found.record) : deps.config;
+      }
+      try {
+        for (const line of await renameClaudeNames({ env: deps.env, run: wiring.run, cwd: deps.cwd }, configFiles)) deps.err(line);
+      } catch (error) {
+        if (error instanceof LegacyNameConflict) {
+          for (const line of conflictLines(error)) deps.err(line);
+          return RENAME_REFUSED_EXIT;
+        }
+        deps.err(`${CLI_NAME}: could not rename ${deps.cwd}'s pre-0.11.0 names: ${error instanceof Error ? error.message : String(error)}`);
+        return WIRING_FAILED_EXIT;
+      }
+    }
+
     let config: SuiteConfig;
     let dir: string;
     if (found !== null) {
@@ -980,7 +1064,7 @@ export async function wireClaude(deps: WireDeps, wiring: WiringIo): Promise<Suit
       loadSavedSecrets(deps.env, dir, config, deps.store);
     } else {
       const entries = localEntries(deps.env, deps.cwd);
-      if (entries === null || entries[CHANNEL_SERVER] !== undefined || entries[TOOLS_SERVER] !== undefined) {
+      if (entries === null || serverEntry(entries, CHANNEL_SERVER) !== undefined || serverEntry(entries, TOOLS_SERVER) !== undefined) {
         // (b)
         deps.err(
           `${CLI_NAME}: no saved connection for ${deps.cwd}; its Claude entries were left as they are. Run ${CLI_NAME} init in ${deps.cwd}`,
