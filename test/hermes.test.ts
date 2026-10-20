@@ -35,6 +35,7 @@ import {
   findHermesPython,
   lookupKey,
   gatewayArgv,
+  isTimeoutClassMcpFailure,
   parseConfigCheck,
   parseHermesOptions,
   parseHermesInstallDir,
@@ -1603,6 +1604,86 @@ describe("0.12.2: when liveness cannot be determined, nothing is renamed", () =>
     expect(deps.execs).toHaveLength(1);
     expect(deps.execs[0]?.argv).toContain("--gateway-only");
     expect(stderr.join("")).toContain("tmux is not installed");
+  });
+});
+
+describe("0.12.3: one retry of `hermes mcp test`, for a connect timeout and nothing else", () => {
+  // MEASURED on rock at fdec926e (task 01a15abb): the line a 30 s connect timeout prints.
+  const TIMEOUT_LINE =
+    "✗ Connection failed (32.1s): Connecting to MCP server 'burrow' timed out after 30s (bounded by connect_timeout; an OAuth login also by oauth.timeout); CancelledError";
+  const mcpCalls = (): StubCall[] => stubCalls().filter((c) => c.argv[0] === "mcp" && c.argv[1] === "test");
+  const seq = (modes: string[]): void => writeFileSync(join(home, "hermes-stub-knobs.json"), JSON.stringify({ mcpSeq: modes }));
+
+  test("the classifier takes the measured timeout line and refuses every other failure", () => {
+    expect(isTimeoutClassMcpFailure(parseMcpTest(1, `\n  Testing 'burrow'...\n  ${TIMEOUT_LINE}\n`, ""))).toBe(true);
+    expect(isTimeoutClassMcpFailure({ command: "c", exit_code: 1, verdict: "fail", raw: "✗ Connection failed (30.0s): CancelledError" })).toBe(true);
+    expect(isTimeoutClassMcpFailure(parseMcpTest(1, "  ✗ Connection failed (0.6s): Burrow MCP answered HTTP 401\n", ""))).toBe(false);
+    expect(isTimeoutClassMcpFailure(parseMcpTest(1, "  ✗ Connection failed (7.8s): Connection closed\n", ""))).toBe(false);
+    expect(isTimeoutClassMcpFailure(parseMcpTest(3, "  ✗ Server 'burrow' not found in config.\n", ""))).toBe(false);
+    expect(isTimeoutClassMcpFailure(parseMcpTest(0, "  ✓ Connected (1ms)\n  ✓ Tools discovered: 0\n", ""))).toBe(false);
+    expect(isTimeoutClassMcpFailure(parseMcpTest(0, "  ✓ Connected (1ms)\n  ✓ Tools discovered: 2\n", ""))).toBe(false);
+    // The words alone, outside a `✗ Connection failed` line, are not a timeout.
+    expect(isTimeoutClassMcpFailure({ command: "c", exit_code: 1, verdict: "fail", raw: "✗ Burrow MCP answered HTTP 401: timed out after 30s" })).toBe(false);
+    // A timeout line with a nonzero exit other than 1 is not the measured shape.
+    expect(isTimeoutClassMcpFailure({ command: "c", exit_code: 2, verdict: "fail", raw: TIMEOUT_LINE })).toBe(false);
+  });
+
+  test("a first test that times out and a second that passes is exit 0, with exactly two calls", async () => {
+    makeManagedPython();
+    seq(["timeout", "ok"]);
+    const { result, exitCode } = await stamp();
+    expect(exitCode).toBe(0);
+    expect(result.ok).toBe(true);
+    expect(result.validation.verdict).toBe("pass");
+    expect(result.validation.checks.find((c) => c.command === "hermes mcp test burrow")?.verdict).toBe("pass");
+    expect(mcpCalls()).toHaveLength(2);
+    expect(stderr.join("")).toContain("hermes mcp test burrow timed out (✗ Connection failed (32.1s)");
+    expect(stderr.join("")).toContain("retrying once");
+  });
+
+  test("two timeouts in a row are validation_failed after exactly two calls, never a third", async () => {
+    makeManagedPython();
+    seq(["timeout", "timeout", "ok"]);
+    const { result, exitCode } = await stamp();
+    expect(exitCode).toBe(1);
+    expect(result.ok).toBe(false);
+    expect(result.error?.code).toBe("validation_failed");
+    const check = result.validation.checks.find((c) => c.command === "hermes mcp test burrow");
+    expect(check).toMatchObject({ verdict: "fail", exit_code: 1 });
+    expect(check?.raw).toContain("timed out after 30s");
+    expect(mcpCalls()).toHaveLength(2);
+  });
+
+  test("an auth error is not retried: exactly one call, and the 401 is what is reported", async () => {
+    makeManagedPython();
+    seq(["auth", "ok"]);
+    const { result, exitCode } = await stamp();
+    expect(exitCode).toBe(1);
+    expect(result.error?.code).toBe("validation_failed");
+    expect(result.validation.checks.find((c) => c.command === "hermes mcp test burrow")?.raw).toContain("HTTP 401");
+    expect(mcpCalls()).toHaveLength(1);
+    expect(stderr.join("")).not.toContain("retrying once");
+  });
+
+  test("a refused connection, 0 tools and unparseable output are not retried either", async () => {
+    for (const mode of ["fail", "zero", "garbage"]) {
+      rmSync(join(home, "hermes-stub.jsonl"), { force: true });
+      rmSync(join(home, "mcp-test-calls"), { force: true });
+      rmSync(root, { recursive: true, force: true });
+      makeManagedPython();
+      seq([mode, "ok"]);
+      const { exitCode } = await stamp();
+      expect({ mode, exitCode }).toEqual({ mode, exitCode: 1 });
+      expect({ mode, calls: mcpCalls().length }).toEqual({ mode, calls: 1 });
+    }
+  });
+
+  test("a first test that passes is run once", async () => {
+    makeManagedPython();
+    seq(["ok", "timeout"]);
+    const { exitCode } = await stamp();
+    expect(exitCode).toBe(0);
+    expect(mcpCalls()).toHaveLength(1);
   });
 });
 

@@ -544,6 +544,27 @@ export function parseMcpTest(exitCode: number, stdout: string, stderr: string): 
   return { command, exit_code: exitCode, verdict: "pass" };
 }
 
+/**
+ * A failed `hermes mcp test` that is a CONNECT TIMEOUT, and nothing else.
+ * Hermes bounds the stdio connect (bridge spawn, `initialize`, `tools/list`)
+ * by `connect_timeout`, 30 s; a timeout prints, MEASURED on rock at fdec926e
+ * (task 01a15abb, a dingus dry run on 0.12.2):
+ *
+ *   ✗ Connection failed (32.1s): Connecting to MCP server 'burrow' timed out
+ *     after 30s (bounded by connect_timeout; an OAuth login also by
+ *     oauth.timeout); CancelledError
+ *
+ * In that run no request reached the Burrow endpoint (its log holds no
+ * `POST /mcp` for the whole 30 s), and the 21 other tests in that procedure
+ * all passed, the 14 that printed a time connecting in 1.2 to 1.6 s. So a
+ * timeout is a transient stall on the way out, worth one more try. An auth error, a closed connection, a missing
+ * server (exit 3) or 0 tools is an answer, and retrying it would only hide it.
+ */
+export function isTimeoutClassMcpFailure(check: ValidationCheck): boolean {
+  if (check.verdict !== "fail" || check.exit_code !== 1 || check.raw === undefined) return false;
+  return /^✗\s*Connection failed \([\d.]+s\):.*(?:timed out after \d+(?:\.\d+)?s|\bCancelledError\b)/.test(check.raw);
+}
+
 /* ------------------------------------------------------------------------- */
 /* config.yaml, read by parsing                                               */
 /* ------------------------------------------------------------------------- */
@@ -1266,8 +1287,18 @@ export function hermesWriter(ctx: { opts: HermesOptions | null }, deps: HermesDe
     async validate() {
       const bin = state.bin as string;
       const cc = await spawn([bin, "config", "check"]);
-      const mt = await spawn([bin, "mcp", "test", MCP_SERVER_NAME]);
-      const checks = [parseConfigCheck(cc.exitCode, cc.stdout, cc.stderr), parseMcpTest(mt.exitCode, mt.stdout, mt.stderr)];
+      const mcpTest = async (): Promise<ValidationCheck> => {
+        const mt = await spawn([bin, "mcp", "test", MCP_SERVER_NAME]);
+        return parseMcpTest(mt.exitCode, mt.stdout, mt.stderr);
+      };
+      let mcp = await mcpTest();
+      // ONE retry, for a connect timeout only (see isTimeoutClassMcpFailure).
+      // The 30 s bound is Hermes's and stays as it is.
+      if (isTimeoutClassMcpFailure(mcp)) {
+        deps.stderr(`${CLI_NAME}: ${mcp.command} timed out (${redact(mcp.raw ?? "", state.secrets)}); retrying once\n`);
+        mcp = await mcpTest();
+      }
+      const checks = [parseConfigCheck(cc.exitCode, cc.stdout, cc.stderr), mcp];
       for (const c of checks) if (c.raw !== undefined) c.raw = redact(c.raw, state.secrets);
       const verdict: ValidationVerdict = { verdict: "pass", checks };
       return verdict;
