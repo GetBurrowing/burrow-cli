@@ -116,6 +116,7 @@ import {
   type DeepseekDeps,
 } from "./deepseek.ts";
 import { CLI_NAME } from "../version.ts";
+import { migrateAgentRootOrSay } from "../agent_root_names.ts";
 
 type Env = Record<string, string | undefined>;
 
@@ -1325,6 +1326,7 @@ export function gatewayEnv(deps: Pick<HermesDeps, "env">, opts: HermesOptions): 
 }
 
 async function runGateway(opts: HermesOptions, deps: HermesDeps): Promise<number> {
+  if (!migrateAgentRootOrSay(opts.root, deps.stderr, CLI_NAME)) return EXIT_REFUSED;
   const record = await readStampRecord(opts.root);
   if (record === null || record.harness !== "hermes" || record.verdict !== "pass") {
     deps.stderr(`${CLI_NAME}: ${join(opts.root, STAMP_FILE)} records no passing hermes stamp; run ${CLI_NAME} hermes without --gateway-only first\n`);

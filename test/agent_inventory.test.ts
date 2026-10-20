@@ -378,13 +378,13 @@ describe("status --json", () => {
     void B;
   });
 
-  test("a stamped agent's verdict and kind come from the roster; runtime from its own suite.json", async () => {
+  test("a stamped agent's verdict and kind come from the roster; runtime from its own burrow.json", async () => {
     const bx = box();
     writeFileSync(
       resolve(bx.c, ROOT_CONFIG_FILE),
       serializeConfig({ ...emptyConfig(), suiteUrl: "https://three.example.invalid", runtimeId: "rt-h-0000" }),
     );
-    writeFileSync(resolve(bx.c, ".suite-stamp.json"), JSON.stringify({ verdict: "pass" }));
+    writeFileSync(resolve(bx.c, ".burrow-stamp.json"), JSON.stringify({ verdict: "pass" }));
     writeRoster(bx, [{ session: "suite-h", command: ["tmux"], cwd: bx.c, kind: "hermes", recordedAt: "" }]);
     const d = await doc(bx, bx.c);
     expect(d.agents).toHaveLength(1);

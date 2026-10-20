@@ -419,7 +419,7 @@ export interface StatusAgentRow {
   /** From the roster, or null for an agent never launched. */
   kind: InventoryRow["kind"];
   root: string;
-  /** The folder's record, else its own local Claude entry, else its suite.json. Never the legacy connection. */
+  /** The folder's record, else its own local Claude entry, else its burrow.json. Never the legacy connection. */
   runtime_id: string | null;
   suite_url: string | null;
   state: InventoryRow["state"];

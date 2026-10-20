@@ -191,7 +191,7 @@ describe("every exit code is driven", () => {
 
   test("2: operator headers", async () => {
     mkdirSync(root, { recursive: true });
-    writeFileSync(join(root, "suite.json"), serializeConfig({ ...emptyConfig(), headerNames: ["X-Example-Id"] }));
+    writeFileSync(join(root, "burrow.json"), serializeConfig({ ...emptyConfig(), headerNames: ["X-Example-Id"] }));
     const r = await run(baseArgs());
     expect(r.code).toBe(2);
     expect((r.doc.error as { code: string }).code).toBe("headers_unsupported");

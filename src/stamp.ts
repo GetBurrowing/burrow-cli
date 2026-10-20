@@ -11,12 +11,12 @@
  * warning (`config shape unverified for <harness> <ver>`), never a failure —
  * and there is deliberately no drift detection or auto-fix here. Upstream
  * config-shape detection, when it exists, plugs into `measuredHarnessVersions`
- * and the `.suite-stamp.json` record rather than into a writer's body.
+ * and the `.burrow-stamp.json` record rather than into a writer's body.
  *
  * ORDER, so that a refusal leaves nothing behind:
  *
  *   1. stdin carries nothing              (else exit 2)
- *   2. the root's suite.json names no operator headers (else exit 2; these
+ *   2. the root's burrow.json names no operator headers (else exit 2; these
  *      plugins cannot forward them)
  *   3. a token ref is given or recorded, and validates by stat/platform
  *   4. suite URL and runtime id are known
@@ -26,11 +26,11 @@
  *   7. plan, then apply only the actions that are not `unchanged`; each
  *      action reports whether it was APPLIED, measured, not assumed
  *   8. validate; unparseable output is a failure carrying the raw line
- *   9. record `.suite-stamp.json`, only if its bytes changed — with verdict
+ *   9. record `.burrow-stamp.json`, only if its bytes changed — with verdict
  *      `fail` when any step after the first write failed
  *
- * Nothing here writes `.suite-state.json`: a stamp stores no secret of its
- * own. The identity in `<root>/suite.json` holds the REF, never the value.
+ * Nothing here writes `.burrow-state.json`: a stamp stores no secret of its
+ * own. The identity in `<root>/burrow.json` holds the REF, never the value.
  */
 import { createHash } from "node:crypto";
 import { mkdir } from "node:fs/promises";
@@ -70,9 +70,10 @@ import {
   type TokenRef,
 } from "./token_ref.ts";
 import { CLI_NAME } from "./version.ts";
+import { AgentRootConflict, migrateAgentRoot } from "./agent_root_names.ts";
 
-export const IDENTITY_FILE = "suite.json";
-export const STAMP_FILE = ".suite-stamp.json";
+export const IDENTITY_FILE = "burrow.json";
+export const STAMP_FILE = ".burrow-stamp.json";
 
 type Env = Record<string, string | undefined>;
 
@@ -133,7 +134,7 @@ export interface StampRequest {
   name: string;
   suiteUrl?: string;
   runtimeId?: string;
-  /** The `--token-ref` string, when given. Otherwise the ref recorded in suite.json is reused. */
+  /** The `--token-ref` string, when given. Otherwise the ref recorded in burrow.json is reused. */
   tokenRef?: string;
   keychainService?: string;
   nonSecret?: Record<string, unknown>;
@@ -285,6 +286,15 @@ async function runStampInner(
   const root = req.root;
   result.agent = { name: req.name, root, runtime_id: req.runtimeId ?? "" };
 
+  // The first 0.10.2 run in a pre-0.10.2 root renames its `suite` files, before
+  // anything in it is read. A conflict refuses here, before any write.
+  try {
+    for (const r of migrateAgentRoot(root)) io.stderr(`${CLI_NAME}: renamed ${r.from} -> ${r.to}\n`);
+  } catch (e) {
+    if (e instanceof AgentRootConflict) throw refused("agent_root_conflict", e.message);
+    throw e;
+  }
+
   const identityPath = join(root, IDENTITY_FILE);
   const identityText = await readText(identityPath);
   let existing: SuiteConfig | null = null;
@@ -306,7 +316,7 @@ async function runStampInner(
 
   const refString = req.tokenRef ?? existing?.tokenRef;
   if (refString === undefined || refString === "") {
-    throw refused("token_ref_required", "--token-ref is required (none given and none recorded in suite.json)");
+    throw refused("token_ref_required", "--token-ref is required (none given and none recorded in burrow.json)");
   }
   const keychainService = req.keychainService ?? (req.tokenRef === undefined ? existing?.keychainService : undefined);
   const ref = parseTokenRef(refString, { keychainService });
@@ -408,7 +418,7 @@ async function runStampInner(
  * may throw a {@link StampFailure}, so a refused flag still yields a document.
  *
  * A run that fails AFTER it began writing to the root records `fail` in
- * `.suite-stamp.json`, so an older `pass` cannot outlive it: `suite status`
+ * `.burrow-stamp.json`, so an older `pass` cannot outlive it: `burrow status`
  * would otherwise report the last good stamp, and `--gateway-only` would
  * launch on a root in an unknown state. A refusal before any write leaves the
  * record, and every other file, as it was.

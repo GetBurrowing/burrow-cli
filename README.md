@@ -310,7 +310,7 @@ cd ~/agents/oddjob && burrow deepseek
 ```
 
 Without `--root`, the current directory is the agent root when it holds its own
-`suite.json` (only the directory itself, not a parent of it). Otherwise the
+`burrow.json` (only the directory itself, not a parent of it). Otherwise the
 machine config is used. If that agent's tmux session is live, the command
 attaches to it. If the session is stale, it is recycled.
 
@@ -328,8 +328,18 @@ neighbour:
 
 | File | Holds |
 | --- | --- |
-| `<root>/suite.json` | Burrow URL, runtime id, header **names**. No secret |
-| `<root>/.suite-state.json` | The runtime token, header values, and an optional `env` block. Mode `0600` |
+| `<root>/burrow.json` | Burrow URL, runtime id, header **names**. No secret |
+| `<root>/.burrow-state.json` | The runtime token, header values, and an optional `env` block. Mode `0600` |
+
+**Roots from before 0.10.2** carry `suite.json`, `.suite-stamp.json`,
+`.suite-state.json`, `.suite-codex/` and `.dsh/suite.patch.yml`. The first
+0.10.2 run of a verb in that root renames each one to its `burrow` name, in
+place, keeping its mode and owner, before anything in it is read. The verbs
+read only the new names. If both the old and the new name exist, the verb
+refuses, names both paths, and renames nothing. A root whose agent is running
+keeps its old names until that agent next starts; `burrow codex` renames only
+from the bridge process, so attaching never moves `.suite-codex/` out from
+under a running bridge.
 
 The `env` block is the agent's model setup: `OPENROUTER_API_KEY`, and `DSH_`
 settings such as `DSH_PROVIDER`, `DSH_MODEL`, `DSH_CONTEXT_WINDOW` and
@@ -391,7 +401,7 @@ burrow hermes --root ~/agents/scribe \
 | Flag | Meaning |
 | --- | --- |
 | `--root DIR` | Required. The agent root; its directory name is the agent name |
-| `--suite-url URL`, `--runtime-id ID` | The Burrow runtime. Recorded in `<root>/suite.json`, so a re-run may omit them |
+| `--suite-url URL`, `--runtime-id ID` | The Burrow runtime. Recorded in `<root>/burrow.json`, so a re-run may omit them |
 | `--token-ref REF`, `--keychain-service SVC` | The runtime token, by reference only (see [token refs](#token-refs)) |
 | `--model-base-url URL`, `--model ID` | Required. The inference endpoint and model id |
 | `--model-provider PROVIDER` | Optional Hermes provider override. Defaults to `openai-codex` for the official ChatGPT Codex backend, otherwise `custom` |
@@ -409,8 +419,8 @@ What it writes, and with what mode:
 
 | Path | Written by | Mode | Holds |
 | --- | --- | --- | --- |
-| `<root>/suite.json` | this CLI | default (`0644` under a `022` umask) | Burrow URL, runtime id, the token **ref**. No secret |
-| `<root>/.suite-stamp.json` | this CLI | default | Stamp record: harness, writer and harness version, plugin ref, inputs digest, token ref, last verdict. A run that fails after its first write records `fail`, so an older `pass` never outlives it and `--gateway-only` refuses the root. A refusal before any write leaves it as it was. No secret |
+| `<root>/burrow.json` | this CLI | default (`0644` under a `022` umask) | Burrow URL, runtime id, the token **ref**. No secret |
+| `<root>/.burrow-stamp.json` | this CLI | default | Stamp record: harness, writer and harness version, plugin ref, inputs digest, token ref, last verdict. A run that fails after its first write records `fail`, so an older `pass` never outlives it and `--gateway-only` refuses the root. A refusal before any write leaves it as it was. No secret |
 | `$HERMES_HOME/mcp-tokens/startup-suite-platform.runtime-token` | the channel installer | `0600` | The runtime token: the one sanctioned copy |
 | `$HERMES_HOME/.env` | the channel installer; this CLI adds `CUSTOM_MODEL_API_KEY` | `0600` for this CLI's write | Channel keys; the model key when `--model-api-key-ref` is given |
 | `$HERMES_HOME/config.yaml` | `hermes config set` (model keys, headless policy, the toolset key); the channel installer (`mcp_servers.startup-suite`) | Hermes's own | Model routing; `approvals.mode: off` and `hooks_auto_accept: true` when absent; `platform_toolsets.startup_suite` unless `--full-toolset` |
@@ -510,8 +520,8 @@ What it writes, and with what mode:
 
 | Path | Written by | Mode | Holds |
 | --- | --- | --- | --- |
-| `<root>/suite.json` | this CLI | default | Burrow URL, runtime id, the token ref. No secret |
-| `<root>/.suite-stamp.json` | this CLI | default | Stamp record, as for Hermes. No secret |
+| `<root>/burrow.json` | this CLI | default | Burrow URL, runtime id, the token ref. No secret |
+| `<root>/.burrow-stamp.json` | this CLI | default | Stamp record, as for Hermes. No secret |
 | `<root>/.openclaw/` | this CLI | `0700` | OpenClaw's state directory |
 | `<root>/.openclaw/openclaw.json` | `openclaw onboard` / `openclaw config set` | OpenClaw's own | `gateway.port`, `plugins.load.paths`, `plugins.allow`, the plugin and channel entries, the account (its `token` is the **ref string**), one route binding |
 | `~/.local/share/burrow/burrow-channel-openclaw` | this CLI (`git`, `npm ci`) | git's / npm's | The channel checkout pinned to one commit, and its dependencies |
@@ -562,7 +572,7 @@ burrow codex                    connection, Codex login, then tmux session burro
     runtime connection.
 - **One persistent thread per Burrow space.** A space is a conversation, and
   each task already dispatches into its own execution space. Thread ids are
-  saved in `<root>/.suite-codex/threads.json`, so a restart resumes them with
+  saved in `<root>/.burrow-codex/threads.json`, so a restart resumes them with
   `thread/resume`. Turns run one at a time per space and in parallel across
   spaces.
 - **Replies are the agent's.** Codex's final message is not posted. The agent
@@ -599,7 +609,7 @@ plugin checkouts and any managed harness install. Those are programs, not agent
 state.
 
 **The header limitation.** Neither channel plugin can forward extra HTTP
-headers. A root whose `suite.json` names operator headers (for a deployment
+headers. A root whose `burrow.json` names operator headers (for a deployment
 behind an access proxy) is refused with exit `2` and `headers_unsupported`,
 before anything is written.
 
@@ -669,7 +679,7 @@ resolver.
 ### Idempotence
 
 A re-run with identical inputs changes nothing, reports every action
-`unchanged`, and returns `changed: false`. `.suite-stamp.json` is rewritten only
+`unchanged`, and returns `changed: false`. `.burrow-stamp.json` is rewritten only
 when its bytes would change. The inputs digest covers the token **ref**, not the
 value, so rotating the token behind the same ref leaves the digest alone. For
 OpenClaw that is the whole story, because the plugin reads the ref itself. For
@@ -687,7 +697,7 @@ Hermes env ships `ruamel.yaml`, because Hermes needs it to read its own config.
 1. **Upstream config-shape detection.** Each writer declares the harness
    versions its config shape was measured against. Any other version gets one
    warning and no drift detection. Detection belongs in `measuredHarnessVersions`
-   and the `.suite-stamp.json` record, not inside a writer.
+   and the `.burrow-stamp.json` record, not inside a writer.
 2. **A keychain resolver in hermes-suite-channel**, so the Hermes token needs
    no `0600` file.
 3. **The OpenClaw secret-contract SecretRef**, as an alternative to the
@@ -731,7 +741,7 @@ Each `agents` row:
 | `session` | string | Always a string. The roster's session, or for an agent never launched, the name `burrow claude` would give it |
 | `kind` | string or null | `claude`, `deepseek`, `hermes`, `openclaw` or `codex` from the roster; null for an agent never launched |
 | `root` | string | The agent folder |
-| `runtime_id` | string or null | The folder's record, else its own local Claude entry, else its own `suite.json`. Never the legacy or machine connection |
+| `runtime_id` | string or null | The folder's record, else its own local Claude entry, else its own `burrow.json`. Never the legacy or machine connection |
 | `suite_url` | string or null | The install URL, from the same sources in the same order |
 | `state` | string | `live`, `stale` or `none`. A roster agent with no session is `stale`, never `none`; a folder with no roster entry is `none` unless a session by its name exists |
 | `channel` | string | `unknown` for now. The channel state-file read is a later addition |

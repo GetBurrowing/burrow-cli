@@ -7,7 +7,7 @@
  *   the folder store  (agent_connections)  which runtime each folder is federated as
  *   ~/.claude.json    local-scope entries  which runtime each folder's Claude ACTUALLY joins as
  *
- * plus each folder's own `.mcp.json` and `suite.json`, read for comparison.
+ * plus each folder's own `.mcp.json` and `burrow.json`, read for comparison.
  *
  * THE INVENTORY IS PURE. Everything it reads arrives in an {@link InventorySource}
  * built by {@link liveInventorySource}; nothing here touches the disk, the
@@ -19,7 +19,7 @@
  * credentials on the floor, so no row, verdict or report line can contain one.
  *
  * NO RUNTIME ID COMES FROM THE LEGACY CONNECTION. A row's runtime id is the
- * folder's record, else its own local Claude entry, else its own `suite.json`.
+ * folder's record, else its own local Claude entry, else its own `burrow.json`.
  * The 0.7.0 machine connection identifies no folder, so it is reported beside
  * the rows (as `legacy`) and never inside one.
  *
@@ -37,14 +37,14 @@ import { CHANNEL_SERVER, TOOLS_SERVER } from "./commands/init.ts";
 import { entryValue } from "./env_names.ts";
 
 /** The per-folder config file stamped and DeepSeek agents carry in their root. Mirrors deepseek.ts AGENT_CONFIG_FILE. */
-export const ROOT_CONFIG_FILE = "suite.json";
+export const ROOT_CONFIG_FILE = "burrow.json";
 export const MCP_JSON_FILE = ".mcp.json";
 
 /* ------------------------------------------------------------------------- */
 /* Shared with `suite status`                                                 */
 /* ------------------------------------------------------------------------- */
 
-/** The verbs whose agents are stamped (and so have a `.suite-stamp.json`). */
+/** The verbs whose agents are stamped (and so have a `.burrow-stamp.json`). */
 export const STAMPED_KINDS: readonly RosterEntry["kind"][] = ["hermes", "openclaw"];
 
 /**
@@ -57,7 +57,7 @@ export function recordedState(detected: SessionState): SessionState {
 }
 
 /**
- * The last stamp verdict recorded in `<root>/.suite-stamp.json`. Only the
+ * The last stamp verdict recorded in `<root>/.burrow-stamp.json`. Only the
  * verdict is read out: the record also carries the token REF, and status has
  * no reason to print even that.
  */
@@ -233,7 +233,7 @@ export interface InventorySource {
   claudeJson: ClaudeJsonView | null;
   /** The machine-level session naming rule (config.json), for a never-launched agent's session name. */
   sessionNaming: "cwd" | "runtime";
-  /** A file's text, or null. Never throws. Used for `.mcp.json`, `suite.json` and the stamp record. */
+  /** A file's text, or null. Never throws. Used for `.mcp.json`, `burrow.json` and the stamp record. */
   readFile(path: string): string | null;
   /** The canonical form of a folder. Default: as given. */
   canon?(dir: string): string;

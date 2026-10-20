@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
-import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -600,7 +600,7 @@ describe("actions are measured, not planned", () => {
     writeFileSync(join(home, "openclaw-stub-knobs.json"), JSON.stringify({ doctor: "error" }));
     const { exitCode } = await stamp();
     expect(exitCode).toBe(1);
-    expect(JSON.parse(readFileSync(join(root, ".suite-stamp.json"), "utf8")).verdict).toBe("fail");
+    expect(JSON.parse(readFileSync(join(root, ".burrow-stamp.json"), "utf8")).verdict).toBe("fail");
     const o = parseOpenclawOptions(stampArgs());
     const relaunch = relaunchArgv(["/opt/suite/bun", "/opt/suite/src/cli.ts"], o, STUB_OPENCLAW, FIRST_STAMP_PORT);
     expect(await runOpenclaw(relaunch.slice(3), makeDeps())).toBe(2);
@@ -625,7 +625,7 @@ describe("actions are measured, not planned", () => {
       expect(result.error?.code).toBe("port_in_use");
       expect(result.actions).toEqual([{ kind: "harness_install", target: expect.stringContaining(OPENCLAW_PACKAGE), outcome: "written", applied: true }]);
       expect(result.changed).toBe(true);
-      expect(existsSync(join(root, ".suite-stamp.json"))).toBe(false);
+      expect(existsSync(join(root, ".burrow-stamp.json"))).toBe(false);
     } finally {
       await new Promise<void>((ok) => (server as Server).close(() => ok()));
     }
@@ -762,7 +762,7 @@ describe("ports", () => {
 describe("refusals and failures", () => {
   test("operator headers are refused with exit 2 before any harness call", async () => {
     mkdirSync(root, { recursive: true });
-    writeFileSync(join(root, "suite.json"), serializeConfig({ ...emptyConfig(), headerNames: ["X-Example-Id"] }));
+    writeFileSync(join(root, "burrow.json"), serializeConfig({ ...emptyConfig(), headerNames: ["X-Example-Id"] }));
     const { result, exitCode } = await stamp();
     expect(exitCode).toBe(2);
     expect(result.error?.code).toBe("headers_unsupported");
@@ -924,6 +924,41 @@ describe("the gateway session", () => {
     const code = await runOpenclaw(["--root", root, "--gateway-only", "--openclaw", STUB_OPENCLAW, "--gateway-port", "18800"], deps);
     expect(code).toBe(2);
     expect(deps.execs).toEqual([]);
+  });
+
+  test("0.10.2: a root stamped under the `suite` names is renamed by --gateway-only and still passes its gate", async () => {
+    expect((await stamp()).exitCode).toBe(0);
+    const stampBytes = readFileSync(join(root, ".burrow-stamp.json"), "utf8");
+    const identityBytes = readFileSync(join(root, "burrow.json"), "utf8");
+    // Put the root back as 0.10.1 left it.
+    renameSync(join(root, "burrow.json"), join(root, "suite.json"));
+    renameSync(join(root, ".burrow-stamp.json"), join(root, ".suite-stamp.json"));
+    const deps = makeDeps();
+    const o = parseOpenclawOptions(stampArgs());
+    const relaunch = relaunchArgv(["/opt/burrow/bun", "/opt/burrow/src/cli.ts"], o, STUB_OPENCLAW, FIRST_STAMP_PORT);
+    expect(await runOpenclaw(relaunch.slice(3), deps)).toBe(0);
+    expect(deps.execs).toHaveLength(1);
+    expect(deps.execs[0]?.argv).toEqual(gatewayArgv(STUB_OPENCLAW, FIRST_STAMP_PORT, []));
+    expect(existsSync(join(root, "suite.json"))).toBe(false);
+    expect(existsSync(join(root, ".suite-stamp.json"))).toBe(false);
+    expect(readFileSync(join(root, ".burrow-stamp.json"), "utf8")).toBe(stampBytes);
+    expect(readFileSync(join(root, "burrow.json"), "utf8")).toBe(identityBytes);
+    // The digest names no file in the root: a re-stamp finds the record and identity unchanged.
+    const again = await stamp();
+    expect(again.exitCode).toBe(0);
+    expect(again.result.actions.find((a) => a.kind === "stamp_record")?.outcome).toBe("unchanged");
+    expect(again.result.actions.find((a) => a.kind === "identity")?.outcome).toBe("unchanged");
+  });
+
+  test("0.10.2: --gateway-only refuses a root holding both names, renames nothing, starts nothing", async () => {
+    expect((await stamp()).exitCode).toBe(0);
+    cpSync(join(root, "burrow.json"), join(root, "suite.json"));
+    const deps = makeDeps();
+    const o = parseOpenclawOptions(stampArgs());
+    expect(await runOpenclaw(relaunchArgv([], o, STUB_OPENCLAW, FIRST_STAMP_PORT).slice(1), deps)).toBe(2);
+    expect(deps.execs).toEqual([]);
+    expect(existsSync(join(root, "suite.json"))).toBe(true);
+    expect(stderr.join("")).toContain("both exist");
   });
 
   test("with a model key, the gateway env carries CUSTOM_API_KEY and its argv does not", async () => {

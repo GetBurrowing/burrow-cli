@@ -104,6 +104,7 @@ import {
 } from "./deepseek.ts";
 import { shellJoin } from "./hermes.ts";
 import { CLI_NAME } from "../version.ts";
+import { migrateAgentRootOrSay } from "../agent_root_names.ts";
 
 type Env = Record<string, string | undefined>;
 
@@ -1239,6 +1240,7 @@ async function execGateway(opts: OpenclawOptions, deps: OpenclawDeps, bin: strin
 }
 
 async function runGateway(opts: OpenclawOptions, deps: OpenclawDeps): Promise<number> {
+  if (!migrateAgentRootOrSay(opts.root, deps.stderr, CLI_NAME)) return EXIT_REFUSED;
   const record = await readStampRecord(opts.root);
   if (record === null || record.harness !== "openclaw" || record.verdict !== "pass") {
     deps.stderr(`${CLI_NAME}: ${join(opts.root, STAMP_FILE)} records no passing openclaw stamp; run ${CLI_NAME} openclaw without --gateway-only first\n`);

@@ -49,6 +49,7 @@ import {
 } from "../tmux.ts";
 import { type RestoreDeps, liveRestoreDeps, recordLaunch } from "./restore.ts";
 import { CLI_NAME } from "../version.ts";
+import { holdsLegacyIdentity, migrateAgentRootOrSay } from "../agent_root_names.ts";
 
 export const AGENT = "deepseek";
 
@@ -106,10 +107,13 @@ export function agentNameFromRuntimeId(runtimeId: string): string {
 }
 
 /** The per-agent config file inside an agent root. Holds no secret. */
-export const AGENT_CONFIG_FILE = "suite.json";
+export const AGENT_CONFIG_FILE = "burrow.json";
 
 /** The per-agent credential file inside an agent root. Mode 0600. */
-export const AGENT_STATE_FILE = ".suite-state.json";
+export const AGENT_STATE_FILE = ".burrow-state.json";
+
+/** The dsh patch this verb renders into `<root>/.dsh/` on every run. */
+export const AGENT_PATCH_FILE = "burrow.patch.yml";
 
 /**
  * The tmux session an agent's harness runs in.
@@ -219,7 +223,7 @@ export function renderPatch(pluginPath: string, headerNames: string[]): string {
           # DECLARED FROM THE SAME EXPRESSION THAT SELECTS IT. Naming a model
           # the route does not declare fails at the first turn with
           # UNKNOWN_MODEL. An agent root that sets DSH_MODEL (its own
-          # .suite-state.json \`env\`) would otherwise select a model this route
+          # .burrow-state.json \`env\`) would otherwise select a model this route
           # has never heard of.
           - id: !!js process.env.DSH_MODEL || 'moonshotai/kimi-k3'
             contextWindow: !!js Number(process.env.DSH_CONTEXT_WINDOW || 1000000)
@@ -454,13 +458,20 @@ export async function runDeepseek(args: string[], deps: DeepseekDeps): Promise<n
   // is how an agent ends up connecting as its neighbour.
   //
   // WHICH ROOT. `--root` wins. Otherwise the directory the verb was run from
-  // is the root when it carries its own suite.json — `cd ~/agents/oddjob &&
+  // is the root when it carries its own burrow.json — `cd ~/agents/oddjob &&
   // suite deepseek` is how a human reaches an agent, the same way `suite
   // claude` keys off the cwd. Only the cwd itself counts: an ancestor of an
   // agent root is not that agent.
-  const explicitRoot = options.root ?? cwdAgentRoot(deps.cwd?.() ?? process.cwd());
+  //
+  // A pre-0.10.2 root still carries the `suite` names: the root (or a cwd
+  // that holds the old identity) is renamed first, so it is found below.
+  const sayRaw = (line: string) => deps.stderr.write(line);
+  const cwdNow = deps.cwd?.() ?? process.cwd();
+  const candidate = options.root ?? (holdsLegacyIdentity(cwdNow) ? cwdNow : undefined);
+  if (candidate !== undefined && !migrateAgentRootOrSay(candidate, sayRaw, CLI_NAME)) return 1;
+  const explicitRoot = options.root ?? cwdAgentRoot(cwdNow);
   const rootConfig = explicitRoot === undefined ? null : await readAgentConfig(explicitRoot);
-  // Without a suite.json, THIS AGENT FOLDER's record (the root, else the
+  // Without a burrow.json, THIS AGENT FOLDER's record (the root, else the
   // cwd) — never the legacy machine-level connection. src/agent_connections.ts.
   const agentDir = explicitRoot ?? deps.cwd?.() ?? process.cwd();
   const found = rootConfig === null ? readAgentConnection(process.env, agentDir).connection : null;
@@ -508,6 +519,7 @@ export async function runDeepseek(args: string[], deps: DeepseekDeps): Promise<n
 
   const name = agentNameFromRuntimeId(config.runtimeId);
   const root = explicitRoot ?? agentRoot(name);
+  if (root !== candidate && !migrateAgentRootOrSay(root, sayRaw, CLI_NAME)) return 1;
 
   // The agent's own environment: its model provider, model and key. Secret
   // values are registered in the store BEFORE any argv is checked, so the
@@ -534,7 +546,7 @@ export async function runDeepseek(args: string[], deps: DeepseekDeps): Promise<n
     return 1;
   }
 
-  const patchPath = join(root, ".dsh", "suite.patch.yml");
+  const patchPath = join(root, ".dsh", AGENT_PATCH_FILE);
   await Bun.write(patchPath, renderPatch(pluginPath, config.headerNames));
 
   // The headless profile's startup plugin requires a task even though the
@@ -596,7 +608,7 @@ export async function runDeepseek(args: string[], deps: DeepseekDeps): Promise<n
 
 /**
  * The agent root the cwd names, if any: the cwd itself when it holds a
- * suite.json, otherwise undefined. Deliberately not a walk up the tree.
+ * burrow.json, otherwise undefined. Deliberately not a walk up the tree.
  */
 export function cwdAgentRoot(cwd: string): string | undefined {
   return existsSync(join(cwd, AGENT_CONFIG_FILE)) ? cwd : undefined;
@@ -613,7 +625,7 @@ export interface AgentEnv {
 }
 
 /**
- * The `env` block of an agent root's .suite-state.json.
+ * The `env` block of an agent root's .burrow-state.json.
  *
  * This is where a root declares its MODEL credential, which is a different
  * thing from its Burrow one: the runtime token authenticates the agent to
