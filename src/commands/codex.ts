@@ -46,6 +46,7 @@ import { agentNameFromRuntimeId, liveDeepseekDeps, loadCredentials, runInSession
 import { liveRestoreDeps, loadRoster, recordLaunch, type RestoreDeps } from "./restore.ts";
 import { ensureSupervision, installedBinary, liveSupervisorIo, type SupervisorIo } from "../supervisor.ts";
 import { VERSION, CLI_NAME } from "../version.ts";
+import { migrateAgentRootOrSay } from "../agent_root_names.ts";
 import { AppServerClient, processTransport } from "../codex/app_server.ts";
 import { CodexBridge, type ApprovalPolicy } from "../codex/bridge.ts";
 import { PhoenixChannel, socketUrl, type SocketLike } from "../codex/phoenix.ts";
@@ -297,6 +298,10 @@ export async function runCodex(args: string[], deps: CodexDeps): Promise<number>
   }
 
   if (opts.noSession) {
+    // Only the bridge process renames the root's pre-0.10.2 names: it is the
+    // one that writes `.burrow-codex/`, and an attaching run must not move the
+    // directory out from under a bridge already running in this root.
+    if (!migrateAgentRootOrSay(root, (line) => deps.stderr.write(line), `${CLI_NAME} codex`)) return 2;
     const run = deps.runBridge ?? runBridge;
     return await run({
       config,
@@ -357,9 +362,11 @@ export async function runCodex(args: string[], deps: CodexDeps): Promise<number>
 /* ------------------------------------------------------------------------- */
 
 export const THREADS_FILE = "threads.json";
+/** The bridge's own state directory inside the agent root. */
+export const CODEX_STATE_DIR = ".burrow-codex";
 
 export function threadsPath(root: string): string {
-  return join(root, ".suite-codex", THREADS_FILE);
+  return join(root, CODEX_STATE_DIR, THREADS_FILE);
 }
 
 export function loadThreads(root: string): Record<string, string> {
@@ -375,7 +382,7 @@ export function loadThreads(root: string): Record<string, string> {
 
 export function saveThreads(root: string, threads: Record<string, string>): void {
   const p = threadsPath(root);
-  mkdirSync(join(root, ".suite-codex"), { recursive: true, mode: 0o700 });
+  mkdirSync(join(root, CODEX_STATE_DIR), { recursive: true, mode: 0o700 });
   writeFileSync(p, `${JSON.stringify({ version: 1, threads }, null, 2)}\n`);
 }
 

@@ -3,7 +3,7 @@
  * suite-channel MCP server and its socket to the bridge, and the verb itself.
  */
 import { afterAll, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PhoenixChannel, redactUrl, socketUrl, type SocketLike } from "../src/codex/phoenix.ts";
@@ -19,6 +19,8 @@ import {
   runCodex,
   type BridgeInput,
   type CodexDeps,
+  loadThreads,
+  threadsPath,
 } from "../src/commands/codex.ts";
 import { kindFromArgv, parseRoster, serializeRoster } from "../src/roster.ts";
 import { writeAgentConnection } from "../src/agent_connections.ts";
@@ -346,6 +348,38 @@ describe("suite codex: login and launch", () => {
       sandbox: "workspace-write",
     });
     expect(t.bridges[0]!.config.runtimeId).toBe("oddjob-codex");
+  });
+
+  test("0.10.2: the bridge process renames .suite-codex/ to .burrow-codex/ before it starts, and the threads come with it", async () => {
+    const t = await deps();
+    const agent = join(t.home, "agent");
+    mkdirSync(join(agent, ".suite-codex"), { mode: 0o700 });
+    writeFileSync(join(agent, ".suite-codex", "threads.json"), JSON.stringify({ version: 1, threads: { sp: "th" } }));
+    expect(await runCodex(["--no-session"], t.d)).toBe(0);
+    expect(existsSync(join(agent, ".suite-codex"))).toBe(false);
+    expect(statSync(join(agent, ".burrow-codex")).mode & 0o777).toBe(0o700);
+    expect(threadsPath(agent)).toBe(join(agent, ".burrow-codex", "threads.json"));
+    expect(loadThreads(agent)).toEqual({ sp: "th" });
+  });
+
+  test("0.10.2: an attaching (session) run never renames .suite-codex/ under a running bridge", async () => {
+    const t = await deps({ tmux: { env: {}, which: () => null, run: async () => ({ exitCode: 1, stdout: "", stderr: "" }) } });
+    const agent = join(t.home, "agent");
+    mkdirSync(join(agent, ".suite-codex"));
+    expect(await runCodex([], t.d)).toBe(0);
+    expect(t.bridges).toEqual([]);
+    expect(existsSync(join(agent, ".suite-codex"))).toBe(true);
+    expect(existsSync(join(agent, ".burrow-codex"))).toBe(false);
+  });
+
+  test("0.10.2: both .suite-codex/ and .burrow-codex/ present: the bridge refuses and is never started", async () => {
+    const t = await deps();
+    const agent = join(t.home, "agent");
+    mkdirSync(join(agent, ".suite-codex"));
+    mkdirSync(join(agent, ".burrow-codex"));
+    expect(await runCodex(["--no-session"], t.d)).toBe(2);
+    expect(t.bridges).toEqual([]);
+    expect(t.err.join("")).toContain("both exist");
   });
 
   test("without --no-session: a tmux session burrow-<agent> running this CLI again, recorded for restore", async () => {

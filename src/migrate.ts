@@ -1473,7 +1473,7 @@ function rewriteOpenclaw(rw: Rw, root: string, dev: boolean): void {
   st.rewritten.push({ ...entry, reason: "openclaw config set" });
 }
 
-/** `<root>/.dsh/*.yml|yaml|json`: the deepseek verb renders suite.patch.yml naming `<data>/.../deepseek`. */
+/** `<root>/.dsh/*.yml|yaml|json`: the deepseek verb renders its patch naming `<data>/.../deepseek`. */
 function rewriteDsh(rw: Rw, root: string, dev: boolean): void {
   const { d, st } = rw;
   const env = d.env;

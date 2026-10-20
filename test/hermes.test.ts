@@ -2,11 +2,13 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } fr
 import {
   chmodSync,
   copyFileSync,
+  cpSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
   readdirSync,
+  renameSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -723,7 +725,7 @@ describe("refusals and failures", () => {
 
   test("operator headers are refused with exit 2 before any harness call", async () => {
     mkdirSync(root, { recursive: true });
-    writeFileSync(join(root, "suite.json"), serializeConfig({ ...emptyConfig(), headerNames: ["X-Example-Id"] }));
+    writeFileSync(join(root, "burrow.json"), serializeConfig({ ...emptyConfig(), headerNames: ["X-Example-Id"] }));
     const { result, exitCode } = await stamp();
     expect(exitCode).toBe(2);
     expect(result.error?.code).toBe("headers_unsupported");
@@ -777,7 +779,7 @@ describe("refusals and failures", () => {
   test("a failed channel install reports no write it did not make, and records `fail` over an earlier pass", async () => {
     makeManagedPython();
     expect((await stamp()).exitCode).toBe(0);
-    expect(JSON.parse(readFileSync(join(root, ".suite-stamp.json"), "utf8")).verdict).toBe("pass");
+    expect(JSON.parse(readFileSync(join(root, ".burrow-stamp.json"), "utf8")).verdict).toBe("pass");
     // A changed model is a planned config set; the installer then fails first.
     const installer = join(channelCheckoutDir(makeDeps().env), "install.sh");
     writeFileSync(installer, `#!/usr/bin/env bash\necho "hermes-suite-channel: error: /bin/sh is older than Python 3.8" >&2\nexit 1\n`);
@@ -789,7 +791,7 @@ describe("refusals and failures", () => {
     expect(model).toMatchObject({ outcome: "repaired", applied: false });
     expect(readFileSync(join(hermesHome, "config.yaml"), "utf8")).toBe(before);
     for (const a of result.actions) if (a.kind !== "stamp_record" && a.kind !== "identity") expect(a.applied && a.outcome !== "unchanged").toBe(false);
-    expect(JSON.parse(readFileSync(join(root, ".suite-stamp.json"), "utf8")).verdict).toBe("fail");
+    expect(JSON.parse(readFileSync(join(root, ".burrow-stamp.json"), "utf8")).verdict).toBe("fail");
     expect(result.actions.at(-1)).toMatchObject({ kind: "stamp_record", outcome: "repaired", applied: true });
     // --gateway-only now refuses to launch the root.
     const o = parseHermesOptions(stampArgs());
@@ -1016,6 +1018,61 @@ describe("the gateway session", () => {
     const code = await runHermes(["--root", root, "--gateway-only", "--hermes", STUB_HERMES], deps);
     expect(code).toBe(2);
     expect(deps.execs).toEqual([]);
+  });
+
+  test("0.10.2: a root stamped under the `suite` names is renamed by --gateway-only and still passes its gate", async () => {
+    makeManagedPython();
+    expect((await stamp()).exitCode).toBe(0);
+    const stampBytes = readFileSync(join(root, ".burrow-stamp.json"), "utf8");
+    const identityBytes = readFileSync(join(root, "burrow.json"), "utf8");
+    // Put the root back as 0.10.1 left it.
+    renameSync(join(root, "burrow.json"), join(root, "suite.json"));
+    renameSync(join(root, ".burrow-stamp.json"), join(root, ".suite-stamp.json"));
+    const deps = makeDeps();
+    const o = parseHermesOptions(stampArgs());
+    const relaunch = relaunchArgv(["/opt/burrow/bun", "/opt/burrow/src/cli.ts"], o, STUB_HERMES);
+    expect(await runHermes(relaunch.slice(3), deps)).toBe(0);
+    expect(deps.execs).toHaveLength(1);
+    expect(deps.execs[0]?.argv).toEqual(gatewayArgv(STUB_HERMES, []));
+    expect(existsSync(join(root, "suite.json"))).toBe(false);
+    expect(existsSync(join(root, ".suite-stamp.json"))).toBe(false);
+    expect(readFileSync(join(root, ".burrow-stamp.json"), "utf8")).toBe(stampBytes);
+    expect(readFileSync(join(root, "burrow.json"), "utf8")).toBe(identityBytes);
+    // The digest names no file in the root: a re-stamp finds the record and identity unchanged.
+    const again = await stamp();
+    expect(again.exitCode).toBe(0);
+    expect(again.result.actions.find((a) => a.kind === "stamp_record")?.outcome).toBe("unchanged");
+    expect(again.result.actions.find((a) => a.kind === "identity")?.outcome).toBe("unchanged");
+  });
+
+  test("0.10.2: a stamp run renames a `suite`-named root before reading its identity; the record is unchanged", async () => {
+    makeManagedPython();
+    expect((await stamp()).exitCode).toBe(0);
+    const stampBytes = readFileSync(join(root, ".burrow-stamp.json"), "utf8");
+    renameSync(join(root, "burrow.json"), join(root, "suite.json"));
+    renameSync(join(root, ".burrow-stamp.json"), join(root, ".suite-stamp.json"));
+    // No --token-ref: the ref must come from the renamed identity.
+    const args = stampArgs();
+    const i = args.indexOf("--token-ref");
+    const noRef = i < 0 ? args : [...args.slice(0, i), ...args.slice(i + 2)];
+    const r = await stamp(noRef);
+    expect(r.exitCode).toBe(0);
+    expect(r.result.actions.find((a) => a.kind === "stamp_record")?.outcome).toBe("unchanged");
+    expect(r.result.actions.find((a) => a.kind === "identity")?.outcome).toBe("unchanged");
+    expect(readFileSync(join(root, ".burrow-stamp.json"), "utf8")).toBe(stampBytes);
+    expect(existsSync(join(root, "suite.json"))).toBe(false);
+  });
+
+  test("0.10.2: --gateway-only refuses a root holding both names, renames nothing, starts nothing", async () => {
+    makeManagedPython();
+    expect((await stamp()).exitCode).toBe(0);
+    cpSync(join(root, ".burrow-stamp.json"), join(root, ".suite-stamp.json"));
+    const deps = makeDeps();
+    const o = parseHermesOptions(stampArgs());
+    expect(await runHermes(relaunchArgv([], o, STUB_HERMES).slice(1), deps)).toBe(2);
+    expect(deps.execs).toEqual([]);
+    expect(existsSync(join(root, ".suite-stamp.json"))).toBe(true);
+    expect(stderr.join("")).toContain("both exist");
   });
 
   test("--stamp-only never starts a session: no gateway run, no tmux server under TMUX_TMPDIR", async () => {

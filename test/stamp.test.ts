@@ -159,14 +159,14 @@ describe("validation verdicts", () => {
   });
 });
 
-describe("identity in suite.json", () => {
-  test("records refs, never values, and no .suite-state.json is written", async () => {
+describe("identity in burrow.json", () => {
+  test("records refs, never values, and no .burrow-state.json is written", async () => {
     const { result, writer } = await stamp({ needsValue: true });
     expect(result.ok).toBe(true);
     const identity = parseConfig(readFileSync(join(root, IDENTITY_FILE), "utf8"));
     expect(identity.tokenRef).toBe(`file:${tokenPath}`);
     expect(identity.runtimeId).toBe("fake-01a0d8f8-rt");
-    expect(existsSync(join(root, ".suite-state.json"))).toBe(false);
+    expect(existsSync(join(root, ".burrow-state.json"))).toBe(false);
     // The writer DID get the value in memory — so the clean scan below is meaningful.
     expect(writer.seen.tokenValue).toBe(token);
     expect(scanTexts({ seen: writer.seen.tokenValue ?? "" }, token).length).toBeGreaterThan(0);
@@ -227,7 +227,7 @@ describe("identity in suite.json", () => {
     expect(result.changed).toBe(true);
   });
 
-  test("operator headers in suite.json are refused (exit 2), naming the limitation", async () => {
+  test("operator headers in burrow.json are refused (exit 2), naming the limitation", async () => {
     mkdirSync(root, { recursive: true });
     const cfg = { ...emptyConfig(), suiteUrl: "u", runtimeId: "r", headerNames: ["X-Example-Id"] };
     writeFileSync(join(root, IDENTITY_FILE), serializeConfig(cfg));
@@ -269,7 +269,7 @@ describe("actions report what happened, and a failed stamp records fail", () => 
     expect(exitCode).toBe(1);
     expect(result.error?.code).toBe("fake_failed");
     expect(result.actions.map((a) => [a.kind, a.target.split("/").pop(), a.outcome, a.applied])).toEqual([
-      ["identity", "suite.json", "repaired", true],
+      ["identity", "burrow.json", "repaired", true],
       ["config_set", "fake-harness.json:account", "repaired", true],
       ["config_set", "fake-harness.json:second", "written", false],
       ["stamp_record", STAMP_FILE, "repaired", true],

@@ -6,8 +6,8 @@
  *
  *   A. the cwd was ignored: `cd ~/agents/oddjob && suite deepseek` fell back
  *      to the machine config and said "Run `suite init` first", although the
- *      folder carried its own suite.json and credentials
- *   B. the agent root's `.suite-state.json` `env` block was never read, so
+ *      folder carried its own burrow.json and credentials
+ *   B. the agent root's `.burrow-state.json` `env` block was never read, so
  *      OPENROUTER_API_KEY (and DSH_MODEL, DSH_PERMISSION_MODE, ...) never
  *      reached dsh, and every turn failed with MISSING_CREDENTIAL
  *   C. from the folder, a LIVE session must be attached to and a STALE one
@@ -16,7 +16,7 @@
  * Every value below is fake.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type DeepseekDeps, runDeepseek } from "../src/commands/deepseek.ts";
@@ -37,11 +37,11 @@ let root = "";
 function writeAgent(dir: string, runtimeId: string, env: Record<string, string> | undefined): void {
   mkdirSync(dir, { recursive: true });
   writeFileSync(
-    join(dir, "suite.json"),
+    join(dir, "burrow.json"),
     JSON.stringify({ suiteUrl: "https://suite.example.invalid", runtimeId, headerNames: [] }),
   );
   writeFileSync(
-    join(dir, ".suite-state.json"),
+    join(dir, ".burrow-state.json"),
     JSON.stringify({ token: FAKE_TOKEN, headers: {}, ...(env === undefined ? {} : { env }) }),
     { mode: 0o600 },
   );
@@ -136,7 +136,7 @@ function deps(opts: {
   return { d, c };
 }
 
-describe("A: the cwd is the agent root when it carries suite.json", () => {
+describe("A: the cwd is the agent root when it carries burrow.json", () => {
   test("run from the agent folder with no --root and no machine config, it starts as that agent", async () => {
     const { d, c } = deps({ cwd: root });
     const code = await runDeepseek(["--no-session"], d);
@@ -245,7 +245,7 @@ describe("B: the agent root's env block reaches the harness", () => {
   test("the generated patch declares the model DSH_MODEL selects, by expression", async () => {
     const { d } = deps({ cwd: base });
     expect(await runDeepseek(["--root", root, "--no-session"], d)).toBe(0);
-    const patch = await Bun.file(join(root, ".dsh", "suite.patch.yml")).text();
+    const patch = await Bun.file(join(root, ".dsh", "burrow.patch.yml")).text();
     expect(patch).toContain("- id: !!js process.env.DSH_MODEL || 'moonshotai/kimi-k3'");
     for (const s of SECRETS) expect(patch).not.toContain(s);
   });
@@ -330,5 +330,48 @@ describe("D: launches are recorded for restore-on-boot", () => {
     // And the create itself still happened — the assertion is that recording
     // stayed absent, not the launch.
     expect(c.tmuxCalls.some((a) => a[1] === "new-session")).toBe(true);
+  });
+});
+
+describe("0.10.2: a pre-0.10.2 root is renamed on its first run, then found", () => {
+  /** Put the agent back as 0.10.1 left it: the `suite` names, and a stale patch. */
+  function legacy(dir: string): void {
+    renameSync(join(dir, "burrow.json"), join(dir, "suite.json"));
+    renameSync(join(dir, ".burrow-state.json"), join(dir, ".suite-state.json"));
+    mkdirSync(join(dir, ".dsh"), { recursive: true });
+    writeFileSync(join(dir, ".dsh", "suite.patch.yml"), "stale: true\n");
+  }
+
+  test("from the agent folder (cwd), with no --root: renamed, found, started with its own key; state stays 0600", async () => {
+    legacy(root);
+    const { d, c } = deps({ cwd: root });
+    expect(await runDeepseek(["--no-session"], d)).toBe(0);
+    for (const n of ["suite.json", ".suite-state.json", join(".dsh", "suite.patch.yml")]) expect(existsSync(join(root, n))).toBe(false);
+    expect(existsSync(join(root, "burrow.json"))).toBe(true);
+    expect(statSync(join(root, ".burrow-state.json")).mode & 0o777).toBe(0o600);
+    expect(c.stderr).toContain(`renamed ${join(root, "suite.json")} -> ${join(root, "burrow.json")}`);
+    expect(c.execs[0]?.env.SUITE_RUNTIME_ID).toBe("oddjob-dsh");
+    expect(c.execs[0]?.env.OPENROUTER_API_KEY).toBe(FAKE_OR_KEY);
+    const patch = join(root, ".dsh", "burrow.patch.yml");
+    expect(c.execs[0]?.argv).toContain(patch);
+    expect(readFileSync(patch, "utf8")).not.toBe("stale: true\n");
+  });
+
+  test("with --root: the same", async () => {
+    legacy(root);
+    const { d, c } = deps({ cwd: base });
+    expect(await runDeepseek(["--root", root, "--no-session"], d)).toBe(0);
+    expect(existsSync(join(root, "suite.json"))).toBe(false);
+    expect(c.execs[0]?.env.OPENROUTER_API_KEY).toBe(FAKE_OR_KEY);
+  });
+
+  test("both names present: refused, both named, nothing renamed, nothing started", async () => {
+    copyFileSync(join(root, "burrow.json"), join(root, "suite.json"));
+    const { d, c } = deps({ cwd: root });
+    expect(await runDeepseek(["--no-session"], d)).toBe(1);
+    expect(c.stderr).toContain(join(root, "suite.json"));
+    expect(c.stderr).toContain(join(root, "burrow.json"));
+    expect(c.execs).toHaveLength(0);
+    expect(existsSync(join(root, "suite.json"))).toBe(true);
   });
 });

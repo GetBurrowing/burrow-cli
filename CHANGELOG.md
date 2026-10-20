@@ -10,6 +10,34 @@ that matters in the field: is this one newer than what I had?
 Minor for a new capability or a changed default; patch for a fix that changes no
 behaviour anyone was relying on.
 
+## 0.10.2
+
+The last `suite` names in an agent root are now `burrow` names. There is no
+dual read: the first 0.10.2 run in each root renames what is there.
+
+| Before | From 0.10.2 |
+| --- | --- |
+| `suite.json` | `burrow.json` |
+| `.suite-stamp.json` | `.burrow-stamp.json` |
+| `.suite-state.json` | `.burrow-state.json` (still `0600`) |
+| `.suite-codex/` | `.burrow-codex/` |
+| `.dsh/suite.patch.yml` | `.dsh/burrow.patch.yml` |
+
+- **One-shot rename, in place** (`src/agent_root_names.ts`). Old present and
+  new absent: `rename(2)`, which keeps mode and owner. Both present: the verb
+  refuses, names both paths, and renames nothing (every entry is checked
+  before any moves). Already migrated: nothing happens.
+- **Where it runs:** wherever a verb resolves the agent root, before it reads
+  it. That means the stamp (`hermes`, `openclaw`, including `--stamp-only`),
+  their `--gateway-only` relaunch, `deepseek` (its `--root`, a cwd that holds
+  the old identity, and the default `~/agents/<name>`), and the `codex` bridge
+  process. `burrow status` and `burrow update` never rename. A root whose
+  agent is running keeps its old names until that agent's next start.
+- **A stamp survives the rename.** The inputs digest covers harness, writer
+  version, Burrow URL, runtime id, token ref and the verb's non-secret inputs.
+  None of those names a file in the root, so a renamed root still passes the
+  `--gateway-only` gate without a restamp.
+
 ## 0.10.1
 
 The agent-host features from core task 01a10322, which shipped only on the
