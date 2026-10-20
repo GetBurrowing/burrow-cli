@@ -1063,6 +1063,35 @@ describe("the gateway session", () => {
     expect(existsSync(join(root, "suite.json"))).toBe(false);
   });
 
+  test("0.10.3: attaching to a LIVE session in a `suite`-named root stamps nothing and renames nothing", async () => {
+    makeManagedPython();
+    expect((await stamp()).exitCode).toBe(0);
+    renameSync(join(root, "burrow.json"), join(root, "suite.json"));
+    renameSync(join(root, ".burrow-stamp.json"), join(root, ".suite-stamp.json"));
+    const stampBytes = readFileSync(join(root, ".suite-stamp.json"), "utf8");
+    const session = `suite-${agentNameForRoot(root)}`;
+    const tmux = fakeTmux(`${session}\t100\tbash\n`, "  100     1 bash    bash\n  102   100 hermes  /v/bin/python /v/bin/hermes gateway run\n");
+    expect(await runHermes(stampArgs(), makeDeps({ tmux: tmux.deps }))).toBe(0);
+    expect(stderr.join("")).toContain(`attaching to ${session}`);
+    expect(tmux.ran.filter((a) => a[1] === "new-session")).toEqual([]);
+    expect(existsSync(join(root, "suite.json"))).toBe(true);
+    expect(readFileSync(join(root, ".suite-stamp.json"), "utf8")).toBe(stampBytes);
+    expect(existsSync(join(root, "burrow.json"))).toBe(false);
+    expect(existsSync(join(root, ".burrow-stamp.json"))).toBe(false);
+  });
+
+  test("0.10.3 positive control: with NO live session the same run stamps, renames and starts", async () => {
+    makeManagedPython();
+    expect((await stamp()).exitCode).toBe(0);
+    renameSync(join(root, "burrow.json"), join(root, "suite.json"));
+    renameSync(join(root, ".burrow-stamp.json"), join(root, ".suite-stamp.json"));
+    const tmux = fakeTmux();
+    expect(await runHermes(stampArgs(), makeDeps({ tmux: tmux.deps }))).toBe(0);
+    expect(tmux.ran.filter((a) => a[1] === "new-session")).toHaveLength(1);
+    expect(existsSync(join(root, "suite.json"))).toBe(false);
+    expect(existsSync(join(root, "burrow.json"))).toBe(true);
+  });
+
   test("0.10.2: --gateway-only refuses a root holding both names, renames nothing, starts nothing", async () => {
     makeManagedPython();
     expect((await stamp()).exitCode).toBe(0);

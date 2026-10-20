@@ -49,7 +49,7 @@ import {
 } from "../tmux.ts";
 import { type RestoreDeps, liveRestoreDeps, recordLaunch } from "./restore.ts";
 import { CLI_NAME } from "../version.ts";
-import { holdsLegacyIdentity, migrateAgentRootOrSay } from "../agent_root_names.ts";
+import { holdsLegacyIdentity, migrateAgentRootOrSay, readablePath } from "../agent_root_names.ts";
 
 export const AGENT = "deepseek";
 
@@ -463,12 +463,18 @@ export async function runDeepseek(args: string[], deps: DeepseekDeps): Promise<n
   // claude` keys off the cwd. Only the cwd itself counts: an ancestor of an
   // agent root is not that agent.
   //
-  // A pre-0.10.2 root still carries the `suite` names: the root (or a cwd
-  // that holds the old identity) is renamed first, so it is found below.
+  // A pre-0.10.2 root still carries the `suite` names. ONLY A RUN THAT STARTS
+  // THE AGENT RENAMES THEM (0.10.3): `--no-session` — the process that execs
+  // dsh, which is also what the tmux session runs — renames here, before it
+  // reads anything; the tmux path renames in `beforeCreate` below, once it
+  // knows it is creating a session. A run that attaches to a live session
+  // renames nothing: 0.10.2 renamed oddjob's root from under its running dsh,
+  // which still held `--patch .../.dsh/suite.patch.yml`. Until then the root
+  // is read through `readablePath`, which never writes.
   const sayRaw = (line: string) => deps.stderr.write(line);
   const cwdNow = deps.cwd?.() ?? process.cwd();
   const candidate = options.root ?? (holdsLegacyIdentity(cwdNow) ? cwdNow : undefined);
-  if (candidate !== undefined && !migrateAgentRootOrSay(candidate, sayRaw, CLI_NAME)) return 1;
+  if (options.noSession && candidate !== undefined && !migrateAgentRootOrSay(candidate, sayRaw, CLI_NAME)) return 1;
   const explicitRoot = options.root ?? cwdAgentRoot(cwdNow);
   const rootConfig = explicitRoot === undefined ? null : await readAgentConfig(explicitRoot);
   // Without a burrow.json, THIS AGENT FOLDER's record (the root, else the
@@ -519,7 +525,7 @@ export async function runDeepseek(args: string[], deps: DeepseekDeps): Promise<n
 
   const name = agentNameFromRuntimeId(config.runtimeId);
   const root = explicitRoot ?? agentRoot(name);
-  if (root !== candidate && !migrateAgentRootOrSay(root, sayRaw, CLI_NAME)) return 1;
+  if (options.noSession && root !== candidate && !migrateAgentRootOrSay(root, sayRaw, CLI_NAME)) return 1;
 
   // The agent's own environment: its model provider, model and key. Secret
   // values are registered in the store BEFORE any argv is checked, so the
@@ -536,8 +542,6 @@ export async function runDeepseek(args: string[], deps: DeepseekDeps): Promise<n
     }
   }
 
-  await mkdir(join(root, ".dsh"), { recursive: true, mode: 0o700 });
-
   let pluginPath: string;
   try {
     pluginPath = await materializePlugin(harness);
@@ -546,8 +550,11 @@ export async function runDeepseek(args: string[], deps: DeepseekDeps): Promise<n
     return 1;
   }
 
+  // Written only by the run that execs dsh (below). The tmux path's child
+  // writes it after renaming; written here, an attach to a live pre-0.10.2
+  // root would leave burrow.patch.yml beside suite.patch.yml, and the next
+  // start would refuse the root as holding both names.
   const patchPath = join(root, ".dsh", AGENT_PATCH_FILE);
-  await Bun.write(patchPath, renderPatch(pluginPath, config.headerNames));
 
   // The headless profile's startup plugin requires a task even though the
   // one-shot runner that consumes it is disabled. Supplying one keeps a
@@ -588,7 +595,11 @@ export async function runDeepseek(args: string[], deps: DeepseekDeps): Promise<n
   // `--no-session` is what a service manager uses: systemd wants the harness
   // in the foreground of the unit it supervises, not handed to a terminal
   // multiplexer it cannot see into.
-  if (options.noSession) return await deps.exec(argv, { cwd: root, env });
+  if (options.noSession) {
+    await mkdir(join(root, ".dsh"), { recursive: true, mode: 0o700 });
+    await Bun.write(patchPath, renderPatch(pluginPath, config.headerNames));
+    return await deps.exec(argv, { cwd: root, env });
+  }
 
   // WHAT TMUX RUNS IS THIS CLI AGAIN, NOT dsh.
   //
@@ -603,7 +614,12 @@ export async function runDeepseek(args: string[], deps: DeepseekDeps): Promise<n
   // the config and the 0600 credential file itself, so nothing secret is ever
   // in an argv or in tmux's environment.
   const relaunch = [...selfArgv(), "deepseek", "--root", root, "--no-session", ...options.rest];
-  return await runInSession(sessionNameForAgent(name), relaunch, root, env, store, deps, { tmux: deps.tmux });
+  return await runInSession(sessionNameForAgent(name), relaunch, root, env, store, deps, {
+    tmux: deps.tmux,
+    // Creating a session starts the agent: rename now (the child's own
+    // rename is then a no-op). Attaching never reaches this.
+    beforeCreate: () => (migrateAgentRootOrSay(root, sayRaw, CLI_NAME) ? undefined : 1),
+  });
 }
 
 /**
@@ -611,7 +627,7 @@ export async function runDeepseek(args: string[], deps: DeepseekDeps): Promise<n
  * burrow.json, otherwise undefined. Deliberately not a walk up the tree.
  */
 export function cwdAgentRoot(cwd: string): string | undefined {
-  return existsSync(join(cwd, AGENT_CONFIG_FILE)) ? cwd : undefined;
+  return existsSync(readablePath(cwd, AGENT_CONFIG_FILE)) ? cwd : undefined;
 }
 
 /** A `DSH_` name that nonetheless looks like a credential is treated as one. */
@@ -638,7 +654,7 @@ export interface AgentEnv {
  */
 export async function readAgentEnv(root: string): Promise<AgentEnv> {
   const out: AgentEnv = { public: {}, secret: {} };
-  const file = Bun.file(join(root, AGENT_STATE_FILE));
+  const file = Bun.file(readablePath(root, AGENT_STATE_FILE));
   if (!(await file.exists())) return out;
   const raw = (await file.json()) as { env?: Record<string, unknown> };
   for (const [name, value] of Object.entries(raw.env ?? {})) {
@@ -679,6 +695,28 @@ export interface SessionOptions {
    * rather than announcing a first start.
    */
   wasRecorded?(): boolean;
+  /**
+   * Called once it is decided that a session will be CREATED (never on an
+   * attach), before tmux is asked to. A number stops the launch with that
+   * exit code. This is where a verb renames its root's pre-0.10.2 names.
+   */
+  beforeCreate?(): number | undefined;
+}
+
+/**
+ * Whether `requested` (or its live 0.8 `suite-` twin) is running its agent
+ * now — the same decision {@link runInSession} makes before it attaches. No
+ * tmux on the machine means nothing is live in a session.
+ */
+export async function sessionIsLive(
+  requested: string,
+  env: Record<string, string>,
+  options: Pick<SessionOptions, "tmux" | "agentName"> = {},
+): Promise<boolean> {
+  const tmux: TmuxDeps = options.tmux ?? liveTmuxDeps(env);
+  if (tmux.which(TMUX) === null) return false;
+  const found = await resolveLaunchSession(derivedCandidates(requested), tmux, options.agentName ?? "dsh");
+  return found.state === "live";
 }
 
 export async function runInSession(
@@ -720,6 +758,8 @@ export async function runInSession(
   }
 
   if (state !== "live") {
+    const stop = options.beforeCreate?.();
+    if (stop !== undefined) return stop;
     const create = composeNewSession({ session, command: argv, cwd }, store);
     const created = await tmux.run(create);
     if (created.exitCode !== 0) {
@@ -803,7 +843,7 @@ export async function loadCredentials(
  * and "no per-agent config" is the ordinary case, not an error.
  */
 export async function readAgentConfig(root: string): Promise<SuiteConfig | null> {
-  const file = Bun.file(join(root, AGENT_CONFIG_FILE));
+  const file = Bun.file(readablePath(root, AGENT_CONFIG_FILE));
   if (!(await file.exists())) return null;
   const { parseConfig } = await import("../config.ts");
   return parseConfig(await file.text());
@@ -811,7 +851,7 @@ export async function readAgentConfig(root: string): Promise<SuiteConfig | null>
 
 /** Read an agent root's own credentials. Same shape as the machine state. */
 export async function loadAgentCredentials(root: string, config: SuiteConfig): Promise<Record<string, string>> {
-  const file = Bun.file(join(root, AGENT_STATE_FILE));
+  const file = Bun.file(readablePath(root, AGENT_STATE_FILE));
   if (!(await file.exists())) return {};
   const raw = (await file.json()) as { token?: string; headers?: Record<string, string> };
   const out: Record<string, string> = {};
