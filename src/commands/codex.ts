@@ -301,7 +301,8 @@ export async function runCodex(args: string[], deps: CodexDeps): Promise<number>
     // Only the bridge process renames the root's pre-0.10.2 names: it is the
     // one that writes `.burrow-codex/`, and an attaching run must not move the
     // directory out from under a bridge already running in this root.
-    if (!migrateAgentRootOrSay(root, (line) => deps.stderr.write(line), `${CLI_NAME} codex`)) return 2;
+    const record = readAgentConnection(deps.env, root).connection?.path;
+    if (!migrateAgentRootOrSay(root, (line) => deps.stderr.write(line), `${CLI_NAME} codex`, record === undefined ? [] : [record])) return 2;
     const run = deps.runBridge ?? runBridge;
     return await run({
       config,

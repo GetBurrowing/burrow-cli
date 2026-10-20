@@ -9,6 +9,7 @@ import {
   migrateAgentRoot,
   migrateAgentRootOrSay,
 } from "../src/agent_root_names.ts";
+import { LegacyNameConflict } from "../src/legacy_names.ts";
 import { IDENTITY_FILE, STAMP_FILE } from "../src/stamp.ts";
 import { AGENT_CONFIG_FILE, AGENT_PATCH_FILE, AGENT_STATE_FILE } from "../src/commands/deepseek.ts";
 import { CODEX_STATE_DIR } from "../src/commands/codex.ts";
@@ -58,16 +59,23 @@ describe("migrateAgentRoot", () => {
     const before = Object.fromEntries(AGENT_ROOT_RENAMES.map(([o]) => [o, statSync(join(root, o))]));
     expect(holdsLegacyIdentity(root)).toBe(true);
     const moved = migrateAgentRoot(root);
-    expect(moved.map((m) => m.to)).toEqual(AGENT_ROOT_RENAMES.map(([, n]) => join(root, n)));
+    // The five files, then (0.11.0) the identity's suiteUrl key.
+    expect(moved.map((m) => m.to)).toEqual([...AGENT_ROOT_RENAMES.map(([, n]) => join(root, n)), "burrowUrl"]);
     for (const [o, n] of AGENT_ROOT_RENAMES) {
       expect(existsSync(join(root, o))).toBe(false);
       const st = statSync(join(root, n));
       expect(st.mode).toBe(before[o]?.mode as number);
       expect(st.uid).toBe(before[o]?.uid as number);
-      expect(st.ino).toBe(before[o]?.ino as number);
+      // burrow.json is rewritten in place for its key (a new inode); every other entry is the same file.
+      if (n !== "burrow.json") expect(st.ino).toBe(before[o]?.ino as number);
     }
     expect(statSync(join(root, ".burrow-state.json")).mode & 0o777).toBe(0o600);
-    expect(readFileSync(join(root, "burrow.json"), "utf8")).toBe(bytes["suite.json"] as string);
+    // Same content, the url under its 0.11.0 key, in the same position.
+    const legacyIdentity = JSON.parse(bytes["suite.json"] as string) as Record<string, unknown>;
+    const identity = JSON.parse(readFileSync(join(root, "burrow.json"), "utf8")) as Record<string, unknown>;
+    expect(Object.keys(identity)).toEqual(["burrowUrl", "runtimeId", "headerNames"]);
+    expect(identity.burrowUrl).toBe(legacyIdentity.suiteUrl);
+    expect([identity.runtimeId, identity.headerNames]).toEqual([legacyIdentity.runtimeId, legacyIdentity.headerNames]);
     expect(readFileSync(join(root, ".burrow-stamp.json"), "utf8")).toBe(bytes[".suite-stamp.json"] as string);
     expect(readFileSync(join(root, ".burrow-codex", "threads.json"), "utf8")).toContain('"s":"t"');
     expect(readFileSync(join(root, ".dsh", "burrow.patch.yml"), "utf8")).toBe("patch: 1\n");
@@ -107,6 +115,45 @@ describe("migrateAgentRoot", () => {
     expect(msg).toContain(join(root, ".burrow-state.json"));
     for (const [o] of AGENT_ROOT_RENAMES) expect(existsSync(join(root, o))).toBe(true);
     expect(existsSync(join(root, "burrow.json"))).toBe(false);
+  });
+
+  test("0.11.0 config key: suiteUrl -> burrowUrl in burrow.json and in each named config file, mode kept", () => {
+    writeFileSync(join(root, "burrow.json"), '{"suiteUrl":"https://a.example.invalid","runtimeId":"r1"}\n');
+    const record = join(root, "record.json");
+    writeFileSync(record, '{"dir":"/x","suiteUrl":"https://b.example.invalid","runtimeId":"r2","headerNames":[]}\n', { mode: 0o600 });
+    chmodSync(record, 0o600);
+    const moved = migrateAgentRoot(root, [record]);
+    expect(moved).toEqual([
+      { from: `${join(root, "burrow.json")} suiteUrl`, to: "burrowUrl" },
+      { from: `${record} suiteUrl`, to: "burrowUrl" },
+    ]);
+    expect(JSON.parse(readFileSync(join(root, "burrow.json"), "utf8"))).toEqual({ burrowUrl: "https://a.example.invalid", runtimeId: "r1" });
+    expect(Object.keys(JSON.parse(readFileSync(record, "utf8")))).toEqual(["dir", "burrowUrl", "runtimeId", "headerNames"]);
+    expect(statSync(record).mode & 0o777).toBe(0o600);
+    expect(migrateAgentRoot(root, [record])).toEqual([]);
+  });
+
+  test("0.11.0 config key: a file holding BOTH keys refuses, and NOTHING moves — not the files, not the other keys", () => {
+    legacyRoot();
+    const record = join(root, "record.json");
+    const conflicted = '{"dir":"/x","suiteUrl":"https://b.example.invalid","burrowUrl":"https://c.example.invalid","runtimeId":"r2"}\n';
+    writeFileSync(record, conflicted);
+    let caught: unknown;
+    try {
+      migrateAgentRoot(root, [record]);
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeInstanceOf(LegacyNameConflict);
+    expect((caught as Error).message).toContain(record);
+    expect((caught as Error).message).toContain("suiteUrl");
+    expect((caught as Error).message).toContain("burrowUrl");
+    for (const [o] of AGENT_ROOT_RENAMES) expect(existsSync(join(root, o))).toBe(true);
+    expect(readFileSync(join(root, "suite.json"), "utf8")).toContain('"suiteUrl"');
+    expect(readFileSync(record, "utf8")).toBe(conflicted);
+    const lines: string[] = [];
+    expect(migrateAgentRootOrSay(root, (l) => lines.push(l), "burrow", [record])).toBe(false);
+    expect(lines).toHaveLength(1);
   });
 
   test("migrateAgentRootOrSay: one line per rename, false and one line on a conflict", () => {

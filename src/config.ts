@@ -17,12 +17,17 @@
 import { mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 import { assertWritable, configPath, type GitProbe, gitProbe } from "./paths.ts";
+import { URL_KEY, configUrl } from "./legacy_names.ts";
 
 /** How stage 4 derives a tmux session name. Persisted so runs agree. */
 export type SessionNaming = "cwd" | "runtime";
 
 export interface SuiteConfig {
-  /** Base URL of the Burrow deployment, e.g. https://suite.example.invalid */
+  /**
+   * Base URL of the Burrow deployment, e.g. https://suite.example.invalid.
+   * On disk the key is `burrowUrl` (0.11.0; `suiteUrl` before, renamed at an
+   * agent's next start by legacy_names.ts). The in-memory name is unchanged.
+   */
   suiteUrl: string;
   /** Runtime id this machine is federated as. Not a secret; the token is. */
   runtimeId: string;
@@ -68,7 +73,7 @@ export const DEFAULT_SESSION_NAMING: SessionNaming = "cwd";
 
 /** Keys permitted in the serialised document. Anything else is dropped. */
 const ALLOWED_KEYS = [
-  "suiteUrl",
+  URL_KEY,
   "runtimeId",
   "headerNames",
   "sessionNaming",
@@ -117,6 +122,8 @@ export function serializeConfig(config: SuiteConfig): string {
         if (!isEnvName(config.tokenEnv)) throw new Error("config.tokenEnv must be an environment variable name");
         out[key] = config.tokenEnv;
       }
+    } else if (key === URL_KEY) {
+      out[key] = config.suiteUrl;
     } else {
       out[key] = config[key];
     }
@@ -124,12 +131,19 @@ export function serializeConfig(config: SuiteConfig): string {
   return `${JSON.stringify(out, null, 2)}\n`;
 }
 
+/**
+ * Parse a config document. Throws on invalid JSON, and — legacy_names.ts
+ * {@link configUrl} — on a document carrying both `burrowUrl` and `suiteUrl`.
+ * A document carrying only `suiteUrl` is a file the 0.11.0 rename has not
+ * reached yet, and reads the same.
+ */
 export function parseConfig(text: string): SuiteConfig {
-  const raw = JSON.parse(text) as Partial<Record<string, unknown>>;
+  const raw = JSON.parse(text) as Record<string, unknown>;
   const base = emptyConfig();
   const names = raw.headerNames;
+  const url = typeof raw === "object" && raw !== null ? configUrl(raw) : undefined;
   return {
-    suiteUrl: typeof raw.suiteUrl === "string" ? raw.suiteUrl : base.suiteUrl,
+    suiteUrl: typeof url === "string" ? url : base.suiteUrl,
     runtimeId: typeof raw.runtimeId === "string" ? raw.runtimeId : base.runtimeId,
     headerNames: Array.isArray(names) ? names.filter((n): n is string => typeof n === "string") : [],
     sessionNaming: raw.sessionNaming === "runtime" ? "runtime" : base.sessionNaming,

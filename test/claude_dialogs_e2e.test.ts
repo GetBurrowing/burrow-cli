@@ -70,7 +70,12 @@ const trusted = cwd + "/.fake-trusted";
 const cont = process.argv.includes("--continue");
 // Trailing blank rows dropped: the fixtures were captured in a taller pane, and
 // drawing all of them into a 24-row one scrolls the dialog's top off-screen.
-const read = (n) => fs.readFileSync(FIX + "/" + n + ".txt", "utf8").replaceAll("/srv/agents/work", cwd).trimEnd();
+// The dev-channels screen names whatever the launch flag names, as the real
+// one does: the captures say server:suite-channel (the pre-0.11.0 value).
+const flagAt = process.argv.indexOf("--dangerously-load-development-channels");
+const channels = flagAt === -1 ? "(none)" : process.argv[flagAt + 1];
+const read = (n) =>
+  fs.readFileSync(FIX + "/" + n + ".txt", "utf8").replaceAll("/srv/agents/work", cwd).replaceAll("server:suite-channel", channels).trimEnd();
 const draw = (text) => process.stdout.write("\\x1b[2J\\x1b[H" + text.replace(/\\n/g, "\\r\\n"));
 const note = (s) => fs.appendFileSync(${JSON.stringify(keysLog)}, s + "\\n");
 let state = fs.existsSync(trusted) ? "devch" : "trust";

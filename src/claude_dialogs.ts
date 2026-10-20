@@ -44,8 +44,13 @@ import { resolveTmux } from "./halt.ts";
 /** The last line of every dialog this module answers. */
 export const DIALOG_FOOTER = "Enter to confirm · Esc to cancel";
 
-/** The channel `suite claude` loads. The dev-channels warning must name only it. */
-export const SUITE_CHANNEL = "server:suite-channel";
+/**
+ * The channel `burrow claude` loads (`server:` + init.ts CHANNEL_SERVER, asserted
+ * by test; a literal here because init.ts imports this module's importers).
+ * The dev-channels warning must name only it: a pre-0.11.0 `server:suite-channel`
+ * is NOT answered, so a session launched with the old flag holds for a human.
+ */
+export const BURROW_CHANNEL = "server:burrow-channel";
 
 /** What the cursor glyph looks like in Claude Code's select lists. */
 const CURSOR = "❯";
@@ -164,7 +169,7 @@ export const DIALOGS: readonly DialogSpec[] = [
       "Please use --channels to run a list of approved channels. Channels: {channels} " +
       `1. I am using this for local development 2. Exit ${DIALOG_FOOTER}`,
     options: ["1. I am using this for local development", "2. Exit"],
-    check: (f) => f.channels === SUITE_CHANNEL,
+    check: (f) => f.channels === BURROW_CHANNEL,
     keys: () => ["1"],
   },
   {

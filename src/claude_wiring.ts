@@ -4,7 +4,7 @@
  *
  *   plugin        the channel plugin checkout (cloned once, bun-installed)
  *   CLAUDE.md     a starting brief, never a replacement for an existing one
- *   MCP entries   `suite-channel` and `startup-suite`, local scope, this folder
+ *   MCP entries   `burrow-channel` and `burrow`, local scope, this folder
  *
  * This used to be steps 3-7 of `suite init`, which made init fail with
  * `ENOENT: claude` on any machine without Claude Code — a fresh Mac, or a
@@ -36,6 +36,14 @@ import { TOKEN_KEY, type CredentialStore } from "./secrets.ts";
 import { row } from "./ui.ts";
 import { entryAgrees } from "./env_names.ts";
 import {
+  LegacyNameConflict,
+  pendingFileRenames,
+  pendingServerIds,
+  renameFiles,
+  renamedEntry,
+  type NameChange,
+} from "./legacy_names.ts";
+import {
   CHANNEL_SERVER,
   CLAUDE_CODE_CHANNEL_REF,
   LEGACY_ALIASES,
@@ -44,6 +52,7 @@ import {
   channelAddArgs,
   channelWsUrl,
   claudeJsonPath,
+  stdioAddArgs,
   classifyPullFailure,
   connectionReport,
   ConvergenceFailed,
@@ -149,11 +158,9 @@ export function channelState(entry: McpEntry | undefined, want: DesiredEntries):
   if (entry === undefined) return "missing";
   const env = entry.env ?? {};
   const args = entry.args ?? [];
-  // BOTH GENERATIONS. A 0.7.3 entry carrying only SUITE_* with the right
-  // values is CURRENT, so an upgrade does not rewrite a live agent's entry. An
-  // entry whose BURROW_* and SUITE_* disagree is STALE even when the BURROW
-  // half is right: the pinned plugin reads SUITE_*, so it is running on the
-  // wrong half (see `entryAgrees`).
+  // Every name the entry carries must agree (see `entryAgrees`). From 0.11.0
+  // an entry carries BURROW_* only: the start that renames its id also moves
+  // any SUITE_* copy to BURROW_* (legacy_names.ts renamedEnv).
   if (!entryAgrees(env, "URL", channelWsUrl(want.suiteUrl))) return "stale";
   if (!entryAgrees(env, "RUNTIME_ID", want.runtimeId)) return "stale";
   if (args[args.length - 1] !== want.indexPath) return "stale";
@@ -233,6 +240,101 @@ export function planMcp(deps: Pick<WiringDeps, "env" | "cwd" | "store">, config:
 /** True when the plan has an entry to write, or a legacy alias to remove. */
 export function needsRegistration(plan: McpPlan): boolean {
   return plan.channel !== "current" || plan.tools !== "current" || plan.legacy.length > 0;
+}
+
+/* ------------------------------------------------------------------------- */
+/* The 0.11.0 rename, on a START only (legacy_names.ts)                       */
+/* ------------------------------------------------------------------------- */
+
+/** What this folder still holds under its pre-0.11.0 names. */
+export interface PendingRenames {
+  /** `[old, new]` local-scope ids in ~/.claude.json. */
+  local: Array<readonly [string, string]>;
+  /** In-place file renames: config keys, `.mcp.json` ids, settings lists. */
+  files: NameChange[];
+}
+
+/** True when the folder holds any pre-0.11.0 name. */
+export function hasPending(p: PendingRenames): boolean {
+  return p.local.length > 0 || p.files.length > 0;
+}
+
+/**
+ * The pre-0.11.0 names this folder holds, without changing anything. Throws
+ * {@link LegacyNameConflict} when any of them sits beside its new name.
+ *
+ * `configFiles` are the config files whose `suiteUrl` key moves: the folder's
+ * record and the machine config.
+ */
+export function pendingClaudeRenames(env: Env, cwd: string, configFiles: readonly string[]): PendingRenames {
+  const entries = localEntries(env, cwd);
+  const local = pendingServerIds(entries as Record<string, unknown> | null, `${claudeJsonPath(env)} (local scope for ${cwd})`);
+  return { local, files: pendingFileRenames(configFiles, cwd) };
+}
+
+/** The `claude mcp` argv that writes `entry` as `name` in local scope. Carries the token: never log it. */
+function localAddArgv(name: string, entry: McpEntry, addJson: boolean): string[] {
+  if (addJson) return ["claude", "mcp", "add-json", name, JSON.stringify(entry), "-s", "local"];
+  if (entry.type === "http" && typeof entry.url === "string") {
+    const argv = ["claude", "mcp", "add", name, "-s", "local", "-t", "http", entry.url];
+    for (const [k, v] of Object.entries(entry.headers ?? {})) argv.push("-H", `${k}: ${v}`);
+    return argv;
+  }
+  return stdioAddArgs(name, "local", Object.entries(entry.env ?? {}), [entry.command ?? "", ...(entry.args ?? [])]);
+}
+
+/**
+ * RENAME THIS FOLDER'S PRE-0.11.0 NAMES. Call only on a path that STARTS the
+ * agent, before Claude Code is launched: nothing here may run under a live one.
+ *
+ * Everything is checked first; a {@link LegacyNameConflict} is thrown having
+ * changed nothing. Then the in-place files (config keys, `.mcp.json`, settings
+ * lists), then each local-scope entry through `claude mcp remove` + `add-json`
+ * (Claude Code's own writer: other agents' sessions write ~/.claude.json too).
+ * A failed add puts the old entry back and throws; the launch then stops,
+ * because an agent started on half its ids would load its channel under a
+ * name the launch flag does not name. Returns one line per change.
+ */
+export async function renameClaudeNames(
+  deps: Pick<WiringDeps, "env" | "run" | "cwd">,
+  configFiles: readonly string[],
+): Promise<string[]> {
+  const pending = pendingClaudeRenames(deps.env, deps.cwd, configFiles);
+  const lines = renameFiles(configFiles, deps.cwd).map((c) => row("renamed", c.file, c.what));
+  if (pending.local.length === 0) return lines;
+
+  const entries = localEntries(deps.env, deps.cwd) ?? {};
+  const help = await deps.run(["claude", "mcp", "--help"], { cwd: deps.cwd });
+  const addJson = /\badd-json\b/.test(`${help.stdout}\n${help.stderr}`);
+  for (const [oldName, newName] of pending.local) {
+    const entry = entries[oldName] as McpEntry;
+    const rm = await deps.run(["claude", "mcp", "remove", oldName, "-s", "local"], { cwd: deps.cwd });
+    if (rm.exitCode !== 0) {
+      throw new Error(`claude mcp remove ${oldName} -s local exited ${rm.exitCode} in ${deps.cwd}: ${(rm.stderr || rm.stdout).trim()}`);
+    }
+    // Never printed: the argv and claude's echo of it carry the token.
+    const add = await deps.run(localAddArgv(newName, renamedEntry(entry), addJson), { cwd: deps.cwd, allowSecretsInArgv: true });
+    if (add.exitCode !== 0) {
+      const back = await deps.run(localAddArgv(oldName, entry, addJson), { cwd: deps.cwd, allowSecretsInArgv: true });
+      throw new Error(
+        `claude mcp ${addJson ? "add-json" : "add"} ${newName} exited ${add.exitCode} in ${deps.cwd}; ` +
+          (back.exitCode === 0 ? `${oldName} was put back as it was` : `${oldName} could NOT be put back: re-run ${CLI_NAME} init in ${deps.cwd}`),
+      );
+    }
+    lines.push(row("renamed", `${claudeJsonPath(deps.env)} (local scope)`, `${oldName} -> ${newName}`));
+  }
+  // Read back: the rename is what the file says, not what we meant.
+  const after = localEntries(deps.env, deps.cwd);
+  const left = after === null ? null : pendingServerIds(after as Record<string, unknown>, claudeJsonPath(deps.env));
+  if (left === null || left.length > 0) {
+    throw new Error(`${claudeJsonPath(deps.env)} still shows a pre-0.11.0 id for ${deps.cwd} after the rename`);
+  }
+  return lines;
+}
+
+/** The lines a refused rename prints: the conflict, and that nothing was changed. */
+export function conflictLines(error: LegacyNameConflict): string[] {
+  return [`${CLI_NAME}: refusing to start: ${error.message}.`, `${CLI_NAME}: nothing was renamed.`];
 }
 
 /* ------------------------------------------------------------------------- */

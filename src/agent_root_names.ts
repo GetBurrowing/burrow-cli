@@ -24,12 +24,18 @@
  *    checked before any is moved, so a refusal leaves the root as it was.
  *  - only new, or neither: nothing to do.
  *
+ * 0.11.0 ADDS THE CONFIG KEY. The same call renames `suiteUrl` to `burrowUrl`
+ * in the root's `burrow.json` and in any config file the verb names (its
+ * folder record), under the same rules: checked before anything moves, a file
+ * holding both keys refuses (legacy_names.ts {@link LegacyNameConflict}).
+ *
  * The stamp record survives the rename unchanged: its inputs digest covers the
  * harness, writer version, Burrow URL, runtime id, token ref and the verb's
  * non-secret inputs, and none of those names a file in the root.
  */
 import { lstatSync, renameSync } from "node:fs";
 import { join } from "node:path";
+import { LegacyNameConflict, LEGACY_URL_KEY, URL_KEY, pendingFileRenames, renameFiles } from "./legacy_names.ts";
 
 /** `[old, new]`, relative to the agent root. */
 export const AGENT_ROOT_RENAMES: ReadonlyArray<readonly [string, string]> = [
@@ -98,7 +104,7 @@ export function readablePath(root: string, newName: string): string {
  * {@link AgentRootConflict} — having moved nothing — when any entry exists
  * under both names.
  */
-export function migrateAgentRoot(root: string): RootRename[] {
+export function migrateAgentRoot(root: string, configFiles: readonly string[] = []): RootRename[] {
   const todo: RootRename[] = [];
   for (const [oldName, newName] of AGENT_ROOT_RENAMES) {
     const from = join(root, oldName);
@@ -107,8 +113,11 @@ export function migrateAgentRoot(root: string): RootRename[] {
     if (present(to)) throw new AgentRootConflict(from, to);
     todo.push({ from, to });
   }
+  // The identity under the name it has NOW, so a conflict refuses before any file moves.
+  pendingFileRenames([readablePath(root, "burrow.json"), ...configFiles], null);
   for (const r of todo) renameSync(r.from, r.to);
-  return todo;
+  const keys = renameFiles([join(root, "burrow.json"), ...configFiles], null);
+  return [...todo, ...keys.map((k) => ({ from: `${k.file} ${LEGACY_URL_KEY}`, to: URL_KEY }))];
 }
 
 /**
@@ -116,12 +125,17 @@ export function migrateAgentRoot(root: string): RootRename[] {
  * and a conflict is one line naming both paths, returning false (the verb
  * then exits refused). Any other error is thrown.
  */
-export function migrateAgentRootOrSay(root: string, say: (line: string) => void, prefix: string): boolean {
+export function migrateAgentRootOrSay(
+  root: string,
+  say: (line: string) => void,
+  prefix: string,
+  configFiles: readonly string[] = [],
+): boolean {
   try {
-    for (const r of migrateAgentRoot(root)) say(`${prefix}: renamed ${r.from} -> ${r.to}\n`);
+    for (const r of migrateAgentRoot(root, configFiles)) say(`${prefix}: renamed ${r.from} -> ${r.to}\n`);
     return true;
   } catch (e) {
-    if (e instanceof AgentRootConflict) {
+    if (e instanceof AgentRootConflict || e instanceof LegacyNameConflict) {
       say(`${prefix}: ${e.message}\n`);
       return false;
     }

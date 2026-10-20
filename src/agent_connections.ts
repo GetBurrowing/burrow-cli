@@ -10,7 +10,7 @@
  *
  * So the connection is keyed by the folder:
  *
- *   <configDir>/agents/<key>.json              {dir, suiteUrl, runtimeId, headerNames, tokenEnv?, tokenRef?, keychainService?}
+ *   <configDir>/agents/<key>.json              {dir, burrowUrl, runtimeId, headerNames, tokenEnv?, tokenRef?, keychainService?}
  *   <configDir>/agents/<key>.credentials.json  {token, headers}, mode 0600
  *
  * where key = `<sanitized basename>-<sha256(canonical dir)[0:16]>` — the same
@@ -38,6 +38,7 @@ import { projectKeys } from "./claude_wiring.ts";
 import { DEFAULT_SESSION_NAMING, emptyConfig, parseConfig, type SuiteConfig } from "./config.ts";
 import { assertWritable, configEntry, configPath, gitProbe, type GitProbe } from "./paths.ts";
 import { legacyFallbackDir } from "./migrate.ts";
+import { LegacyNameConflict, URL_KEY, configUrl } from "./legacy_names.ts";
 import { sanitizeSessionName } from "./tmux.ts";
 
 type Env = Record<string, string | undefined>;
@@ -148,7 +149,7 @@ const isRefString = (v: unknown): v is string =>
 export function serializeAgentRecord(record: AgentRecord): string {
   const out: Record<string, unknown> = {
     dir: record.dir,
-    suiteUrl: record.suiteUrl,
+    [URL_KEY]: record.suiteUrl,
     runtimeId: record.runtimeId,
     headerNames: [...record.headerNames].map((n) => n.trim()).filter((n) => n !== ""),
   };
@@ -164,7 +165,12 @@ export function serializeAgentRecord(record: AgentRecord): string {
   return `${JSON.stringify(out, null, 2)}\n`;
 }
 
-/** Parse a record, or null when it is not one. Never throws. */
+/**
+ * Parse a record, or null when it is not one. Never throws. A record holding
+ * only the pre-0.11.0 `suiteUrl` key reads the same (it is renamed at the
+ * agent's next start); one holding both `suiteUrl` and `burrowUrl` is not a
+ * record — the start refuses it by name (legacy_names.ts).
+ */
 export function parseAgentRecord(text: string): AgentRecord | null {
   let raw: Record<string, unknown>;
   try {
@@ -175,11 +181,18 @@ export function parseAgentRecord(text: string): AgentRecord | null {
     return null;
   }
   if (typeof raw.dir !== "string" || raw.dir === "") return null;
-  if (typeof raw.suiteUrl !== "string" || typeof raw.runtimeId !== "string") return null;
+  let url: unknown;
+  try {
+    url = configUrl(raw);
+  } catch (e) {
+    if (e instanceof LegacyNameConflict) return null;
+    throw e;
+  }
+  if (typeof url !== "string" || typeof raw.runtimeId !== "string") return null;
   const names = Array.isArray(raw.headerNames) ? raw.headerNames.filter((n): n is string => typeof n === "string") : [];
   return {
     dir: raw.dir,
-    suiteUrl: raw.suiteUrl,
+    suiteUrl: url,
     runtimeId: raw.runtimeId,
     headerNames: names,
     ...(isEnvName(raw.tokenEnv) ? { tokenEnv: raw.tokenEnv } : {}),

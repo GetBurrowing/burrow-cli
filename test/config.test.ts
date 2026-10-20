@@ -165,11 +165,21 @@ describe("the config file holds no secret", () => {
     expect(text).not.toContain(TOKEN);
     expect(text).not.toContain(HEADER_VALUE);
     expect(Object.keys(JSON.parse(text))).toEqual([
-      "suiteUrl",
+      "burrowUrl",
       "runtimeId",
       "headerNames",
       "sessionNaming",
     ]);
+  });
+
+  test("0.11.0: written as burrowUrl; a not-yet-renamed suiteUrl file reads the same; one holding both is refused", () => {
+    const text = serializeConfig(fullConfig());
+    expect(text).toContain('"burrowUrl"');
+    expect(text).not.toContain('"suiteUrl"');
+    const legacy = text.replace('"burrowUrl"', '"suiteUrl"');
+    expect(parseConfig(legacy)).toEqual(fullConfig());
+    const both = JSON.stringify({ ...JSON.parse(text), suiteUrl: "https://other.example.invalid" });
+    expect(() => parseConfig(both)).toThrow(/holds both suiteUrl and burrowUrl/);
   });
 
   test("round-trips through parse unchanged", () => {

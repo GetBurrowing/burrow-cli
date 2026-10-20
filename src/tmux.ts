@@ -398,8 +398,11 @@ export function looksLikeAgent(proc: ProcessRow, name: string = AGENT_NAME): boo
  * claude.ts already imports restore.ts. It is a whole argv element, so it
  * appears in `ps` output as its own whitespace-separated token.
  */
-// Not renamed to burrow in 0.8.0: running agents' process trees are matched on this exact argv token.
-export const CONTINUE_WRAPPER_NAME = "suite-claude-continue";
+// Renamed from suite-claude-continue in 0.11.0. A pane started before then
+// still runs the old name until its agent restarts; restore's adoption skips
+// that one too (legacy_names.ts isLegacyContinueWrapper), and a roster entry
+// recorded with it is rewritten before replay.
+export const CONTINUE_WRAPPER_NAME = "burrow-claude-continue";
 
 /**
  * Is this process the fallback shell rather than the agent itself?

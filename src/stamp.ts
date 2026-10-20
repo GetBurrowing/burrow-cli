@@ -71,6 +71,7 @@ import {
 } from "./token_ref.ts";
 import { CLI_NAME } from "./version.ts";
 import { AgentRootConflict, migrateAgentRoot } from "./agent_root_names.ts";
+import { LegacyNameConflict } from "./legacy_names.ts";
 
 export const IDENTITY_FILE = "burrow.json";
 export const STAMP_FILE = ".burrow-stamp.json";
@@ -294,7 +295,7 @@ async function runStampInner(
   try {
     for (const r of migrateAgentRoot(root)) io.stderr(`${CLI_NAME}: renamed ${r.from} -> ${r.to}\n`);
   } catch (e) {
-    if (e instanceof AgentRootConflict) throw refused("agent_root_conflict", e.message);
+    if (e instanceof AgentRootConflict || e instanceof LegacyNameConflict) throw refused("agent_root_conflict", e.message);
     throw e;
   }
 

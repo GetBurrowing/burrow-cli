@@ -180,7 +180,7 @@ export type RewriteStep = "claude-mcp" | "openclaw" | "dsh" | "hermes" | "unit" 
 
 export interface RewriteEntry {
   step: RewriteStep;
-  /** The file (and key) or unit file, e.g. `~/.claude.json:<dir>:suite-channel`. */
+  /** The file (and key) or unit file, e.g. `~/.claude.json:<dir>:burrow-channel`. */
   path: string;
   from?: string;
   to?: string;

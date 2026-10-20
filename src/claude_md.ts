@@ -46,8 +46,10 @@
  * Deliberately static — no interpolation, so rule 2 holds by construction.
  *
  * The prose says Burrow; the tool names in it (`suite_reply`, `suite_reply_chunk`,
- * `suite_reply_with_media`, `suite_typing`, `mcp__startup-suite__*`) are the
- * channel plugin's and core's identifiers, renamed only when those are.
+ * `suite_reply_with_media`, `suite_typing`) are the channel plugin's own tool
+ * names, renamed only when the plugin renames them. The MCP server ids that
+ * prefix them for Claude Code (`mcp__burrow-channel__suite_reply`) are this
+ * CLI's (init.ts CHANNEL_SERVER) and appear nowhere in this text.
  */
 export const BURROW_CONVENTIONS = `## You are a Burrow runtime, not a standalone assistant
 
