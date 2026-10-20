@@ -10,6 +10,35 @@ that matters in the field: is this one newer than what I had?
 Minor for a new capability or a changed default; patch for a fix that changes no
 behaviour anyone was relying on.
 
+## 0.10.3
+
+**Fix: an attach no longer renames an agent root under its running agent.**
+0.10.2 said "a root whose agent is running keeps its old names until that
+agent's next start". That was false. On hive on 2026-10-20 a watchdog re-ran
+`burrow deepseek` against oddjob's live session; the run renamed the root,
+then attached, and the running `dsh` was left holding
+`--patch .../.dsh/suite.patch.yml`, a path that no longer existed.
+
+- **`deepseek`** renames only on a path that starts the agent: `--no-session`
+  (the process that execs `dsh`, which is also what the tmux session runs),
+  and the tmux path once it has decided to create a session (none, or a stale
+  one). Attaching to a live session renames nothing. It also no longer
+  rewrites `.dsh/burrow.patch.yml` on every attach; the start writes it.
+  Before it knows which it will do, it reads an unmigrated root through the
+  old names, read-only (`readablePath` in `src/agent_root_names.ts`).
+- **`hermes` and `openclaw`** (no flag): their stamp renames, so while the
+  agent's session is live and the root still holds old names, the run skips
+  the stamp and only attaches, saying so. The next start (`--gateway-only`)
+  renames. A root already renamed is stamped on attach as before. Their
+  running gateways hold none of the five paths, so 0.10.2 broke nothing live
+  here; the stated rule was still false.
+- **Unchanged:** `--gateway-only` and the `codex` bridge rename, and both
+  are starts. `burrow status`, `burrow update` and `burrow restore` rename
+  nothing themselves (`restore` replays the recorded start, which does).
+  **`--stamp-only` still renames whether or not the agent is running.** It is
+  an explicit rewrite of the root, not an attach, and it does not look at
+  sessions.
+
 ## 0.10.2
 
 The last `suite` names in an agent root are now `burrow` names. There is no
@@ -31,8 +60,10 @@ dual read: the first 0.10.2 run in each root renames what is there.
   it. That means the stamp (`hermes`, `openclaw`, including `--stamp-only`),
   their `--gateway-only` relaunch, `deepseek` (its `--root`, a cwd that holds
   the old identity, and the default `~/agents/<name>`), and the `codex` bridge
-  process. `burrow status` and `burrow update` never rename. A root whose
-  agent is running keeps its old names until that agent's next start.
+  process. `burrow status` and `burrow update` never rename. ~~A root whose
+  agent is running keeps its old names until that agent's next start.~~
+  **False as shipped; see 0.10.3.** `deepseek`, `hermes` and `openclaw`
+  renamed before attaching to a live session.
 - **A stamp survives the rename.** The inputs digest covers harness, writer
   version, Burrow URL, runtime id, token ref and the verb's non-secret inputs.
   None of those names a file in the root, so a renamed root still passes the

@@ -375,3 +375,76 @@ describe("0.10.2: a pre-0.10.2 root is renamed on its first run, then found", ()
     expect(existsSync(join(root, "suite.json"))).toBe(true);
   });
 });
+
+describe("0.10.3: only a run that STARTS the agent renames its root", () => {
+  // 2026-10-20, hive: a watchdog re-ran `burrow deepseek` against oddjob's
+  // live session. 0.10.2 renamed the root first, and the running dsh was left
+  // holding `--patch .../.dsh/suite.patch.yml`, a path that no longer existed.
+  const OLD = ["suite.json", ".suite-state.json", join(".dsh", "suite.patch.yml")];
+  const NEW = ["burrow.json", ".burrow-state.json", join(".dsh", "burrow.patch.yml")];
+  const LIVE_PATCH = "running: true\n";
+
+  function legacy(dir: string): void {
+    renameSync(join(dir, "burrow.json"), join(dir, "suite.json"));
+    renameSync(join(dir, ".burrow-state.json"), join(dir, ".suite-state.json"));
+    mkdirSync(join(dir, ".dsh"), { recursive: true });
+    writeFileSync(join(dir, ".dsh", "suite.patch.yml"), LIVE_PATCH);
+  }
+
+  for (const how of [
+    { label: "from the agent folder", args: [] as string[], cwd: () => root },
+    { label: "with --root", args: () => ["--root", root], cwd: () => base },
+  ]) {
+    test(`ATTACH to a live session (${how.label}): the old names stay, no new name appears, nothing is written`, async () => {
+      legacy(root);
+      const args = typeof how.args === "function" ? how.args() : how.args;
+      const { d, c } = deps({ cwd: how.cwd(), tty: false, tmux: "live" });
+      expect(await runDeepseek(args, d)).toBe(0);
+      // It did attach: the outcome under test is "attached AND renamed nothing".
+      expect(c.stderr).toContain("attaching to suite-oddjob");
+      expect(c.tmuxCalls.some((a) => a[1] === "new-session")).toBe(false);
+      for (const n of OLD) expect(existsSync(join(root, n))).toBe(true);
+      for (const n of NEW) expect(existsSync(join(root, n))).toBe(false);
+      expect(readFileSync(join(root, ".dsh", "suite.patch.yml"), "utf8")).toBe(LIVE_PATCH);
+      expect(c.stderr).not.toContain("renamed");
+    });
+  }
+
+  test("START of a new session (none running): renamed before the session is created", async () => {
+    legacy(root);
+    const { d, c } = deps({ cwd: root, tty: false, tmux: "none" });
+    expect(await runDeepseek([], d)).toBe(0);
+    expect(c.tmuxCalls.filter((a) => a[1] === "new-session")).toHaveLength(1);
+    expect(c.stderr).toContain(`renamed ${join(root, "suite.json")} -> ${join(root, "burrow.json")}`);
+    expect(c.stderr.indexOf("renamed")).toBeLessThan(c.stderr.indexOf("started burrow-oddjob"));
+    for (const n of OLD) expect(existsSync(join(root, n))).toBe(false);
+    for (const n of ["burrow.json", ".burrow-state.json", join(".dsh", "burrow.patch.yml")]) expect(existsSync(join(root, n))).toBe(true);
+    expect(statSync(join(root, ".burrow-state.json")).mode & 0o777).toBe(0o600);
+  });
+
+  test("START replacing a STALE session (its agent is gone): renamed", async () => {
+    legacy(root);
+    const { d, c } = deps({ cwd: root, tty: false, tmux: "stale" });
+    expect(await runDeepseek([], d)).toBe(0);
+    expect(c.tmuxCalls.filter((a) => a[1] === "new-session")).toHaveLength(1);
+    expect(existsSync(join(root, "suite.json"))).toBe(false);
+    expect(existsSync(join(root, "burrow.json"))).toBe(true);
+  });
+
+  test("a start that finds both names is refused before tmux is asked to create anything", async () => {
+    copyFileSync(join(root, "burrow.json"), join(root, "suite.json"));
+    const { d, c } = deps({ cwd: root, tty: false, tmux: "none" });
+    expect(await runDeepseek([], d)).toBe(1);
+    expect(c.stderr).toContain("both exist");
+    expect(c.tmuxCalls.some((a) => a[1] === "new-session")).toBe(false);
+    expect(existsSync(join(root, "suite.json"))).toBe(true);
+  });
+
+  test("an attach to a live, already-renamed root writes no patch either", async () => {
+    // The 0.10.2 outer run rewrote .dsh/burrow.patch.yml on every attach; the
+    // tmux child (the start) is now the only writer.
+    const { d } = deps({ cwd: root, tty: false, tmux: "live" });
+    expect(await runDeepseek([], d)).toBe(0);
+    expect(existsSync(join(root, ".dsh", "burrow.patch.yml"))).toBe(false);
+  });
+});

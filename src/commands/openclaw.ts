@@ -97,6 +97,7 @@ import { loadRoster, recordLaunch, liveRestoreDeps, type RestoreDeps } from "./r
 import {
   liveDeepseekDeps,
   runInSession,
+  sessionIsLive,
   runtimeWsUrl,
   selfArgv,
   sessionNameForAgent,
@@ -104,7 +105,7 @@ import {
 } from "./deepseek.ts";
 import { shellJoin } from "./hermes.ts";
 import { CLI_NAME } from "../version.ts";
-import { migrateAgentRootOrSay } from "../agent_root_names.ts";
+import { legacyNamesIn, migrateAgentRootOrSay } from "../agent_root_names.ts";
 
 type Env = Record<string, string | undefined>;
 
@@ -1239,6 +1240,33 @@ async function execGateway(opts: OpenclawOptions, deps: OpenclawDeps, bin: strin
   return await deps.session.exec(argv, { cwd: opts.root, env: gatewayEnv(deps, opts, modelKey) });
 }
 
+/**
+ * Attach to this agent's live session WITHOUT stamping, for a root that still
+ * holds pre-0.10.2 names (the stamp would rename them under the running
+ * agent). Returns null when no session is live: the caller then stamps and
+ * starts as usual, and that start renames.
+ */
+async function attachWithoutStamp(opts: OpenclawOptions, deps: OpenclawDeps): Promise<number | null> {
+  const session = sessionNameForAgent(basename(opts.root));
+  const sessionEnv = openclawChildEnv(deps.env, opts.root, { TMUX: deps.env.TMUX });
+  const live = await sessionIsLive(session, sessionEnv, { agentName: OPENCLAW_GATEWAY_COMM, tmux: deps.tmux });
+  if (!live) return null;
+  deps.stderr(
+    `${CLI_NAME}: ${opts.root} still holds pre-0.10.2 names and its agent is running; ` +
+      `attaching without stamping. They are renamed when the agent next starts.\n`,
+  );
+  return await runInSession(session, [], opts.root, sessionEnv, createStore(), deps.session, {
+    agentName: OPENCLAW_GATEWAY_COMM,
+    tmux: deps.tmux,
+    // The session died between the check and the attach: starting it needs
+    // the stamp this run skipped, so stop rather than start unstamped.
+    beforeCreate: () => {
+      deps.stderr(`${CLI_NAME}: ${session} stopped while attaching; run this again to stamp and start it\n`);
+      return EXIT_REFUSED;
+    },
+  });
+}
+
 async function runGateway(opts: OpenclawOptions, deps: OpenclawDeps): Promise<number> {
   if (!migrateAgentRootOrSay(opts.root, deps.stderr, CLI_NAME)) return EXIT_REFUSED;
   const record = await readStampRecord(opts.root);
@@ -1302,6 +1330,16 @@ export async function runOpenclaw(args: string[], deps: OpenclawDeps): Promise<n
     throw e;
   }
   if (opts.gatewayOnly) return await runGateway(opts, deps);
+
+  // NEVER RENAME UNDER A RUNNING AGENT (0.10.3). The stamp below renames a
+  // pre-0.10.2 root's `suite` names, so while this agent's session is live
+  // and the root still holds them, neither runs: this run only attaches, and
+  // the rename waits for the next start (`--gateway-only`, which renames).
+  // A root already renamed is stamped as before.
+  if (!opts.noSession && legacyNamesIn(opts.root).length > 0) {
+    const attach = await attachWithoutStamp(opts, deps);
+    if (attach !== null) return attach;
+  }
 
   const { exitCode, writer } = await stampOpenclaw(args, deps, { stdout: () => {}, stderr: deps.stderr });
   if (exitCode !== 0) return exitCode;

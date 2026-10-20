@@ -286,8 +286,11 @@ async function runStampInner(
   const root = req.root;
   result.agent = { name: req.name, root, runtime_id: req.runtimeId ?? "" };
 
-  // The first 0.10.2 run in a pre-0.10.2 root renames its `suite` files, before
-  // anything in it is read. A conflict refuses here, before any write.
+  // A pre-0.10.2 root's `suite` files are renamed here, before anything in it
+  // is read. A conflict refuses here, before any write. The verbs do not stamp
+  // a root that still holds old names while its agent's session is live
+  // (0.10.3, `attachWithoutStamp`); `--stamp-only` stamps, and so renames,
+  // regardless.
   try {
     for (const r of migrateAgentRoot(root)) io.stderr(`${CLI_NAME}: renamed ${r.from} -> ${r.to}\n`);
   } catch (e) {

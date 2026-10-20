@@ -4,9 +4,17 @@
  * Before 0.10.2 an agent root carried `suite.json`, `.suite-stamp.json`,
  * `.suite-state.json`, `.suite-codex/` and `.dsh/suite.patch.yml`. From 0.10.2
  * every verb reads and writes only the `burrow` names, and this module is the
- * ONLY place that spells the old ones. There is no dual read: a verb calls
- * {@link migrateAgentRoot} where it resolves the root, before it reads anything
- * in it, and the first 0.10.2 run in each root renames what is there.
+ * ONLY place that spells the old ones. A verb calls {@link migrateAgentRoot}
+ * on the path that STARTS its agent, before that path reads anything in the
+ * root, and the first start under 0.10.2 or later renames what is there.
+ *
+ * NEVER WHILE THE AGENT RUNS (0.10.3). A run that attaches to a live session
+ * must not rename: the running process may hold an old path (dsh is started
+ * with `--patch <root>/.dsh/suite.patch.yml`), and 0.10.2 renamed it from
+ * under oddjob's live dsh when a watchdog re-ran `burrow deepseek`. A verb
+ * that must read the root before it knows whether it will start or attach
+ * reads through {@link readablePath}, which never writes; the rename waits
+ * for the start.
  *
  * THE RULES, the same for every entry:
  *
@@ -63,6 +71,25 @@ function present(path: string): boolean {
 /** Whether `dir` holds the pre-0.10.2 identity file, i.e. is an unmigrated agent root. */
 export function holdsLegacyIdentity(dir: string): boolean {
   return present(join(dir, (AGENT_ROOT_RENAMES[0] as readonly [string, string])[0]));
+}
+
+/** The old-named entries `root` still holds (absolute paths); empty once migrated. */
+export function legacyNamesIn(root: string): string[] {
+  return AGENT_ROOT_RENAMES.map(([oldName]) => join(root, oldName)).filter(present);
+}
+
+/**
+ * The path to READ for `newName` (relative to `root`) before the root is
+ * renamed: the new name when it exists, else the old name when that exists,
+ * else the new name. Read-only — for a run that has not yet decided whether
+ * it starts the agent (and so may rename) or attaches to it (and so must not).
+ */
+export function readablePath(root: string, newName: string): string {
+  const fresh = join(root, newName);
+  if (present(fresh)) return fresh;
+  const pair = AGENT_ROOT_RENAMES.find(([, n]) => n === newName);
+  if (pair !== undefined && present(join(root, pair[0]))) return join(root, pair[0]);
+  return fresh;
 }
 
 /**

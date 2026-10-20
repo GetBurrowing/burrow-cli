@@ -333,13 +333,16 @@ neighbour:
 
 **Roots from before 0.10.2** carry `suite.json`, `.suite-stamp.json`,
 `.suite-state.json`, `.suite-codex/` and `.dsh/suite.patch.yml`. The first
-0.10.2 run of a verb in that root renames each one to its `burrow` name, in
-place, keeping its mode and owner, before anything in it is read. The verbs
-read only the new names. If both the old and the new name exist, the verb
-refuses, names both paths, and renames nothing. A root whose agent is running
-keeps its old names until that agent next starts; `burrow codex` renames only
-from the bridge process, so attaching never moves `.suite-codex/` out from
-under a running bridge.
+run that STARTS the agent in that root (0.10.3 and later) renames each one to
+its `burrow` name, in place, keeping its mode and owner, before the agent
+reads it. Once renamed, the verbs read only the new names. If both the old and
+the new name exist, the start refuses, names both paths, and renames nothing.
+A run that attaches to the agent's live session renames nothing: `deepseek`
+renames only from `--no-session` or when it creates the session, `hermes` and
+`openclaw` skip the stamp and only attach while their session is live and the
+root is unrenamed (their `--gateway-only` start renames), and `burrow codex`
+renames only from the bridge process. `--stamp-only` is the exception: it
+renames whether or not the agent is running.
 
 The `env` block is the agent's model setup: `OPENROUTER_API_KEY`, and `DSH_`
 settings such as `DSH_PROVIDER`, `DSH_MODEL`, `DSH_CONTEXT_WINDOW` and
