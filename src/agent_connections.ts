@@ -60,6 +60,13 @@ export interface AgentRecord {
    * (src/host/access.ts). Absent reads as "off". Not a secret.
    */
   configAccess?: "owner_only" | "admins";
+  /**
+   * The agent session this folder's remote terminal is switched on for
+   * (src/terminal/host.ts). Set by `burrow claude --remote-terminal`, cleared
+   * when that session ends or the next launch has no flag. Absent is off. Not a
+   * secret.
+   */
+  remoteTerminal?: string;
 }
 
 export interface AgentSecrets {
@@ -168,6 +175,7 @@ export function serializeAgentRecord(record: AgentRecord): string {
   }
   if (record.keychainService !== undefined && record.keychainService !== "") out.keychainService = record.keychainService;
   if (record.configAccess === "owner_only" || record.configAccess === "admins") out.configAccess = record.configAccess;
+  if (typeof record.remoteTerminal === "string" && record.remoteTerminal !== "") out.remoteTerminal = record.remoteTerminal;
   return `${JSON.stringify(out, null, 2)}\n`;
 }
 
@@ -207,6 +215,7 @@ export function parseAgentRecord(text: string): AgentRecord | null {
       ? { keychainService: raw.keychainService }
       : {}),
     ...(raw.configAccess === "owner_only" || raw.configAccess === "admins" ? { configAccess: raw.configAccess } : {}),
+    ...(typeof raw.remoteTerminal === "string" && raw.remoteTerminal !== "" ? { remoteTerminal: raw.remoteTerminal } : {}),
   };
 }
 

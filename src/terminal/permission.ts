@@ -7,12 +7,13 @@
  * hard-off. There is deliberately no override: no flag, env var or config key
  * widens {@link ENABLEABLE_KINDS}; adding a kind is a code change and a review.
  */
-export const FEDERATION_OWN_AGENT = "own_agent_in_member_install";
+import { ENABLEABLE_KINDS, FEDERATION_OWN_AGENT } from "../host/access.ts";
+
+// ONE list. The config host (src/host/access.ts) owns it and both features read
+// it, so a kind can never be enableable for one and not the other.
+export { ENABLEABLE_KINDS, FEDERATION_OWN_AGENT };
 
 export type FederationKind = typeof FEDERATION_OWN_AGENT;
-
-/** The only kinds a remote terminal can be switched on for. */
-export const ENABLEABLE_KINDS: readonly string[] = [FEDERATION_OWN_AGENT];
 
 /** This CLI runs the owner's own agent from its own saved connection, so this is the kind it is. */
 export const THIS_CLI_KIND: FederationKind = FEDERATION_OWN_AGENT;

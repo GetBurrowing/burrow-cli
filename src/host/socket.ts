@@ -12,8 +12,21 @@
  * shared as is); the helpers are imported from it, not copied. The token rides
  * in the query string because that is where RuntimeSocket reads it, and it is
  * never logged: every log line goes through redactUrl.
+ *
+ * Binary frames (the terminal's sealed bytes) use the Phoenix V2 binary
+ * encoding from the same module; JSON topics are unaffected by them.
  */
-import { HEARTBEAT_MS, RECONNECT_BASE_MS, RECONNECT_MAX_MS, redactUrl, type Payload, type SocketFactory, type SocketLike } from "../codex/phoenix.ts";
+import {
+  HEARTBEAT_MS,
+  RECONNECT_BASE_MS,
+  RECONNECT_MAX_MS,
+  decodeBinaryFrame,
+  encodeBinaryPush,
+  redactUrl,
+  type Payload,
+  type SocketFactory,
+  type SocketLike,
+} from "../codex/phoenix.ts";
 
 const OPEN = 1;
 
@@ -26,6 +39,12 @@ export interface TopicHandle {
   isJoined(): boolean;
   /** Called after every (re)join. */
   onJoined(fn: () => void): void;
+  /** Receive a binary server push on this topic. */
+  onBinary(event: string, fn: (payload: Uint8Array) => void): void;
+  /** Send raw bytes as a binary push; false when the topic is not joined. */
+  pushBinary(event: string, payload: Uint8Array): boolean;
+  /** Called whenever the topic stops being joined: socket closed, or the channel closed or errored under us. */
+  onDropped(fn: () => void): void;
 }
 
 interface TopicState {
@@ -33,7 +52,9 @@ interface TopicState {
   joinRef: string | null;
   joined: boolean;
   handlers: Map<string, ((p: Payload) => void)[]>;
+  binaryHandlers: Map<string, ((p: Uint8Array) => void)[]>;
   joinedFns: (() => void)[];
+  droppedFns: (() => void)[];
 }
 
 export interface HostSocketOptions {
@@ -64,7 +85,15 @@ export class HostSocket {
   topic(name: string, joinPayload: () => Payload): TopicHandle {
     const existing = this.topics.get(name);
     if (existing !== undefined) throw new Error(`topic ${name} is already registered`);
-    const st: TopicState = { joinPayload, joinRef: null, joined: false, handlers: new Map(), joinedFns: [] };
+    const st: TopicState = {
+      joinPayload,
+      joinRef: null,
+      joined: false,
+      handlers: new Map(),
+      binaryHandlers: new Map(),
+      joinedFns: [],
+      droppedFns: [],
+    };
     this.topics.set(name, st);
     if (this.ws !== null && this.ws.readyState === OPEN) this.join(name, st);
     return {
@@ -73,7 +102,19 @@ export class HostSocket {
       push: (event, payload) => this.pushOn(name, st, event, payload),
       isJoined: () => st.joined,
       onJoined: (fn) => st.joinedFns.push(fn),
+      onBinary: (event, fn) => st.binaryHandlers.set(event, [...(st.binaryHandlers.get(event) ?? []), fn]),
+      pushBinary: (event, payload) => this.pushBinaryOn(name, st, event, payload),
+      onDropped: (fn) => st.droppedFns.push(fn),
     };
+  }
+
+  /** Leave a topic and forget it. The socket and its other topics stay up. */
+  leaveTopic(name: string): void {
+    const st = this.topics.get(name);
+    if (st === undefined) return;
+    this.topics.delete(name);
+    if (st.joined && this.ws !== null && this.ws.readyState === OPEN) this.send([st.joinRef, this.nextRef(), name, "phx_leave", {}]);
+    st.joined = false;
   }
 
   connect(): void {
@@ -81,17 +122,29 @@ export class HostSocket {
     this.opts.log(`connecting to ${redactUrl(this.opts.url)}`);
     const ws = this.opts.socket(this.opts.url);
     this.ws = ws;
+    try {
+      ws.binaryType = "arraybuffer";
+    } catch {
+      /* a fake may not allow it */
+    }
     ws.onopen = () => {
       this.attempts = 0;
       this.startHeartbeat();
       for (const [name, st] of this.topics) this.join(name, st);
     };
-    ws.onmessage = (ev) => this.receive(String(ev.data));
+    ws.onmessage = (ev) => {
+      const d = ev.data;
+      if (d instanceof ArrayBuffer) this.receiveBinary(new Uint8Array(d));
+      else if (d instanceof Uint8Array) this.receiveBinary(d);
+      else this.receive(String(d));
+    };
     ws.onerror = () => this.opts.log("socket error");
     ws.onclose = () => {
       for (const st of this.topics.values()) {
+        const wasJoined = st.joined;
         st.joined = false;
         st.joinRef = null;
+        if (wasJoined) for (const fn of st.droppedFns) fn();
       }
       this.stopHeartbeat();
       if (this.ws === ws) this.ws = null;
@@ -130,6 +183,20 @@ export class HostSocket {
     return true;
   }
 
+  private pushBinaryOn(name: string, st: TopicState, event: string, payload: Uint8Array): boolean {
+    if (!st.joined || st.joinRef === null || this.ws === null || this.ws.readyState !== OPEN) return false;
+    this.ws.send(encodeBinaryPush(st.joinRef, this.nextRef(), name, event, payload));
+    return true;
+  }
+
+  private receiveBinary(data: Uint8Array): void {
+    const f = decodeBinaryFrame(data);
+    if (f === null || f.kind !== "push") return;
+    const st = this.topics.get(f.topic);
+    if (st === undefined) return;
+    for (const fn of st.binaryHandlers.get(f.event) ?? []) fn(f.payload);
+  }
+
   private receive(text: string): void {
     let frame: unknown;
     try {
@@ -156,6 +223,7 @@ export class HostSocket {
     }
     if (event === "phx_close" || event === "phx_error") {
       st.joined = false;
+      for (const fn of st.droppedFns) fn();
       this.opts.log(`${topic}: ${event}; rejoining`);
       this.join(topic, st);
       return;

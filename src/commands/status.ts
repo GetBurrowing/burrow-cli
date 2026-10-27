@@ -36,7 +36,7 @@ import { localEntries } from "../claude_wiring.ts";
 import { registeredId } from "../legacy_names.ts";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { AGENT_NAME, TMUX, detectState, hasOwnPrefix, isTerminalBridgeSession, terminalBridgeTarget, type SessionState } from "../tmux.ts";
+import { AGENT_NAME, TMUX, detectState, hasOwnPrefix, type SessionState } from "../tmux.ts";
 import { channelStatus, liveDoctorDeps, liveInventorySource, type DoctorDeps } from "./doctor.ts";
 import {
   legacyConnection,
@@ -253,7 +253,7 @@ export function parseSessions(stdout: string): SessionRow[] {
  * before it that has not restarted since.
  */
 export function ownSessions(rows: SessionRow[]): SessionRow[] {
-  return rows.filter((r) => hasOwnPrefix(r.name) && !isTerminalBridgeSession(r.name));
+  return rows.filter((r) => hasOwnPrefix(r.name));
 }
 
 /**
@@ -378,14 +378,6 @@ export async function runStatus(deps: StatusDeps, now: number = Math.floor(Date.
         say(sessionLine(session, state, now, options, agentName));
         if (state === "stale") ok = false;
       }
-    }
-  }
-
-  // The remote-terminal bridges, one per agent session started with the flag.
-  if (deps.which(TMUX) !== null) {
-    const listed = await deps.tmux.run(listSessionsArgv());
-    for (const b of (listed.exitCode === 0 ? parseSessions(listed.stdout) : []).filter((r) => isTerminalBridgeSession(r.name))) {
-      say(row("terminal", "bridge running", `${terminalBridgeTarget(b.name) ?? b.name}, up ${formatAge(now - b.created)}`));
     }
   }
 

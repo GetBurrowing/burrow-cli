@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import type { SocketLike } from "../codex/phoenix.ts";
 import { parseRoster, rosterPath, type RosterEntry } from "../roster.ts";
 import { canonicalDir } from "../agent_connections.ts";
+import { liveTerminalDeps } from "../terminal/live.ts";
 import type { HostDeps } from "./manager.ts";
 import { stateEntry } from "../paths.ts";
 import { liveRestartDeps, panePid, restartSession } from "../session_restart.ts";
@@ -65,5 +66,6 @@ export function liveHostDeps(env: Env, log: (line: string) => void): HostDeps {
     log,
     harnessFor: (dir) => harnessOf(rosterFor(env, dir)),
     codexHomeFor: (dir) => codexHomeOf(rosterFor(env, dir)),
+    terminal: liveTerminalDeps(env),
   };
 }

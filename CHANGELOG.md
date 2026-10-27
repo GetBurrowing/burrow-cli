@@ -10,6 +10,31 @@ that matters in the field: is this one newer than what I had?
 Minor for a new capability or a changed default; patch for a fix that changes no
 behaviour anyone was relying on.
 
+## 0.15.0
+
+**`burrow claude --remote-terminal`: let the owner open this agent's tmux
+session from the Burrow web app, read-only until they switch to Can type.** Off
+by default and per launch. The flag only records the opt-in on the folder's
+connection; `burrow watch` attaches `terminal:<runtime id>` to the ONE outbound
+socket it already holds for that folder (the same one the config host rides) and
+runs the bridge in-process. There is no second socket, no inbound port and no
+separate bridge process to start.
+
+- Opens a pty only on a core `open`; the first attach is `tmux attach-session -r`.
+  `in` frames are dropped while read-only, and each new `open` starts read-only.
+- Detach, a socket drop and the agent session ending kill only the bridge's own
+  tmux client; the opt-in is cleared when the session ends and by the next
+  launch without the flag. No argv contains `kill-session` or `kill-server`.
+- Bytes are forwarded as they are, sealed end to end with X25519, HKDF-SHA256
+  and AES-256-GCM, never inspected or logged. The keys are ephemeral and
+  unauthenticated: they hide the stream from a passive relay, not from one that
+  swaps the hello keys.
+- The permission is (federation kind) x (opt-in). The enableable kinds are the
+  config host's own list; any other kind is hard-off with no override.
+- The shared socket now carries binary frames (Phoenix V2) beside its JSON
+  topics, and a folder gets a socket when either the config host or the
+  terminal is on.
+
 ## 0.14.0
 
 **Restart session from the Burrow install.** With config access on for the

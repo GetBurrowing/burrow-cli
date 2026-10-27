@@ -61,7 +61,6 @@ import { liveDeepseekDeps, runDeepseek } from "./commands/deepseek.ts";
 import { liveHermesDeps, runHermes } from "./commands/hermes.ts";
 import { liveOpenclawDeps, runOpenclaw } from "./commands/openclaw.ts";
 import { liveUpdateDeps, runUpdate } from "./commands/update.ts";
-import { runTerminalBridge } from "./commands/terminal_bridge.ts";
 import { liveCodexDeps, runCodex } from "./commands/codex.ts";
 import { ttyPrompter } from "./secrets.ts";
 import { liveMigrateDeps, migrateLegacyState, type MigrateDeps } from "./migrate.ts";
@@ -83,8 +82,7 @@ export type Verb =
   | "watch"
   | "config-access"
   | "restore"
-  | "pane-status"
-  | "terminal-bridge";
+  | "pane-status";
 
 export interface Dispatch {
   verb: Verb | null;
@@ -92,7 +90,7 @@ export interface Dispatch {
   args: string[];
 }
 
-const VERBS = new Set(["init", "claude", "deepseek", "hermes", "openclaw", "codex", "doctor", "status", "update", "watch", "restore", "pane-status", "config-access", "terminal-bridge"]);
+const VERBS = new Set(["init", "claude", "deepseek", "hermes", "openclaw", "codex", "doctor", "status", "update", "watch", "restore", "pane-status", "config-access"]);
 
 /**
  * Pure: map argv to a verb plus untouched passthrough arguments.
@@ -199,7 +197,6 @@ export function usage(): string {
     row("watch", "recover halted agent sessions (--dry-run, --once, --interval N, --force SESSION)"),
     row("config-access", "let the Burrow install edit THIS agent's config files: [DIR] off|owner|admins"),
     row("pane-status", "one agent session's state as JSON, for a supervisor (--session NAME, --answer)"),
-    row("terminal-bridge", "the process --remote-terminal starts (--session NAME); not run by hand"),
     row("restore", "bring recorded agents back up (--adopt, --dry-run, --forget NAME)"),
     row("update", `install the latest ${CLI_NAME} CLI`),
     "",
@@ -280,10 +277,6 @@ export async function run(
     // Ours up to `--`; everything after it reaches `openclaw gateway run`.
     const { args } = parse(argv);
     return runOpenclaw(args, liveOpenclawDeps());
-  }
-  if (verb === "terminal-bridge") {
-    const { args } = parse(argv);
-    return runTerminalBridge(args, process.env, liveTmuxDeps(), process.cwd());
   }
   if (verb === "codex") {
     // Ours entirely: --root, --no-session, --approvals, --sandbox, --codex-home, --codex.

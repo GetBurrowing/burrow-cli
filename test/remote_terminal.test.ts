@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { parseClaudeOptions, usage } from "../src/cli.ts";
@@ -24,8 +24,13 @@ import {
 } from "../src/terminal/crypto.ts";
 import { livePty, type PtyHandle, type SpawnPty } from "../src/terminal/pty.ts";
 import { ENABLEABLE_KINDS, FEDERATION_OWN_AGENT, remoteTerminalPermission } from "../src/terminal/permission.ts";
-import { runTerminalBridge, startBridgeSession } from "../src/commands/terminal_bridge.ts";
-import { isTerminalBridgeSession, terminalBridgeSessionName } from "../src/tmux.ts";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { readAgentRecordExact, writeAgentConnection } from "../src/agent_connections.ts";
+import { ENABLEABLE_KINDS as HOST_ENABLEABLE_KINDS, setConfigAccess } from "../src/host/access.ts";
+import { HostManager } from "../src/host/manager.ts";
+import { HostSocket } from "../src/host/socket.ts";
+import { launchRemoteTerminal, remoteTerminalOf, setRemoteTerminal } from "../src/terminal/host.ts";
 
 const hex = (s: string) => new Uint8Array(Buffer.from(s, "hex"));
 const toHex = (b: Uint8Array) => Buffer.from(b).toString("hex");
@@ -33,7 +38,22 @@ const text = (s: string) => new TextEncoder().encode(s);
 
 /* ---------------------------------------------------------------- launch */
 
+const homes: string[] = [];
+function connectedFolder() {
+  const home = mkdtempSync(resolve(tmpdir(), "rt-home-"));
+  homes.push(home);
+  const agent = resolve(home, "ledger");
+  mkdirSync(agent);
+  const env = { HOME: home };
+  writeAgentConnection(env, agent, { suiteUrl: "https://one.example.invalid", runtimeId: "rt-a-00000000", headerNames: [] }, { token: `tok-${crypto.randomUUID()}`, headers: {} }, { probe: { repoRoot: () => null, isIgnored: () => false } });
+  return { env, agent: resolve(agent) };
+}
+afterAll(() => {
+  for (const h of homes.splice(0)) rmSync(h, { recursive: true, force: true });
+});
+
 function launch(remoteTerminal: boolean | undefined) {
+  const folder = connectedFolder();
   const ran: string[][] = [];
   const err: string[] = [];
   let session: string | null = null;
@@ -54,8 +74,8 @@ function launch(remoteTerminal: boolean | undefined) {
     platform: "darwin",
     prompter: { ask: async () => "n", askSecret: async () => "", say: () => {} },
     sleep: async () => {},
-    env: {},
-    cwd: "/projects/ledger",
+    env: folder.env,
+    cwd: folder.agent,
     store: createStore(),
     config: emptyConfig(),
     statePath: resolve("/tmp", `rt-state-${Math.random().toString(36).slice(2)}.json`),
@@ -65,28 +85,39 @@ function launch(remoteTerminal: boolean | undefined) {
     exec: async () => 0,
   };
   const options = { userArgs: [] as string[], force: false, ...(remoteTerminal === undefined ? {} : { remoteTerminal }) };
-  return { deps, ran, err, options };
+  const marker = () => {
+    const found = readAgentRecordExact(folder.env, folder.agent);
+    return found === null ? null : remoteTerminalOf(found.record);
+  };
+  return { deps, ran, err, options, folder, marker, agentSession: () => session };
 }
 
 describe("--remote-terminal flag", () => {
-  test("absent: no bridge is spawned and nothing joins a terminal topic", async () => {
+  test("absent: nothing is recorded, no second session is started and no terminal topic is joined", async () => {
     const r = launch(undefined);
     await runClaude(r.deps, r.options);
-    expect(r.ran.some((a) => a.includes("new-session"))).toBe(true);
-    expect(r.ran.flat().some((a) => a.includes("terminal-bridge") || a.includes("terminal--"))).toBe(false);
+    expect(r.ran.filter((a) => a.includes("new-session"))).toHaveLength(1);
+    expect(r.ran.flat().some((a) => a.includes("terminal"))).toBe(false);
+    expect(r.marker()).toBeNull();
+    expect(r.err.join("\n")).not.toContain("remote terminal");
     expect(parseClaudeOptions(["--resume"]).remoteTerminal).toBeUndefined();
   });
 
-  test("present: the bridge starts in its own session, beside the agent's", async () => {
+  test("present: the opt-in is recorded for the agent session, and no process is started for it", async () => {
     const r = launch(true);
     await runClaude(r.deps, r.options);
-    const news = r.ran.filter((a) => a.includes("new-session"));
-    expect(news).toHaveLength(2);
-    const bridge = news[1] ?? [];
-    const agentSession = news[0]?.[news[0].indexOf("-s") + 1] ?? "";
-    expect(bridge[bridge.indexOf("-s") + 1]).toBe(terminalBridgeSessionName(agentSession));
-    expect(bridge).toContain("terminal-bridge");
-    expect(bridge[bridge.indexOf("--session") + 1]).toBe(agentSession);
+    // The terminal rides the watcher's shared socket: nothing new is spawned here.
+    expect(r.ran.filter((a) => a.includes("new-session"))).toHaveLength(1);
+    expect(r.marker()).toBe(r.agentSession());
+    expect(r.err.join("\n")).toContain("burrow watch");
+  });
+
+  test("the opt-in is per launch: a launch without the flag clears the last one", async () => {
+    const r = launch(true);
+    await runClaude(r.deps, r.options);
+    expect(r.marker()).not.toBeNull();
+    await runClaude(r.deps, { ...r.options, remoteTerminal: undefined });
+    expect(r.marker()).toBeNull();
   });
 
   test("--remote-terminal never reaches Claude's argv", async () => {
@@ -105,18 +136,16 @@ describe("--remote-terminal flag", () => {
   test("no launch argv anywhere carries kill-session or kill-server", async () => {
     const r = launch(true);
     await runClaude(r.deps, r.options);
-    const bridge = r.ran.filter((a) => a.includes("new-session")).flat();
-    expect(bridge.some((a) => /kill-(session|server)/.test(a))).toBe(false);
+    expect(r.ran.flat().some((a) => /kill-(session|server)/.test(a))).toBe(false);
   });
 
-  test("a bridge session is not an agent session; help says what it is", () => {
-    expect(isTerminalBridgeSession(terminalBridgeSessionName("burrow-ledger-ab12cd34"))).toBe(true);
-    expect(isTerminalBridgeSession("burrow-ledger-ab12cd34")).toBe(false);
+  test("help says what the flag is, and says nothing about signing in or a sandbox", () => {
     const help = usage();
     expect(help).toContain("--remote-terminal");
     expect(help).toContain("a shell as you");
     expect(help.toLowerCase()).not.toContain("login");
     expect(help.toLowerCase()).not.toContain("sandbox");
+    expect(help).not.toContain("terminal-bridge");
   });
 });
 
@@ -429,15 +458,223 @@ describe("permission: federation kind x opt-in", () => {
     }
   });
 
-  test("launch refuses a non-owner kind and starts no bridge", async () => {
-    const r = launch(true);
-    const note = await startBridgeSession(r.deps.tmux, { session: "burrow-x", cwd: "/p", env: {}, kind: "guest_agent" });
-    expect(note).toContain("refused");
-    expect(r.ran.flat().some((a) => a.includes("new-session") || a.includes("terminal-bridge"))).toBe(false);
+  test("one list: the config host and the terminal read the same ENABLEABLE_KINDS", () => {
+    expect(ENABLEABLE_KINDS).toBe(HOST_ENABLEABLE_KINDS);
   });
 
-  test("the bridge process refuses a non-owner kind with no override", async () => {
-    const tmux = { env: {}, which: () => null, run: async () => ({ exitCode: 0, stdout: "", stderr: "" }) };
-    expect(await runTerminalBridge(["--session", "s", "--federation-kind", "guest_agent"], {}, tmux, "/p")).toBe(2);
+  test("a non-owner kind cannot be switched on: nothing is recorded, with no override", () => {
+    const f = connectedFolder();
+    const res = setRemoteTerminal(f.env, f.agent, "burrow-x", "guest_agent");
+    expect(res.ok).toBe(false);
+    expect(remoteTerminalOf(readAgentRecordExact(f.env, f.agent)!.record)).toBeNull();
+    expect(setRemoteTerminal(f.env, f.agent, "burrow-x").ok).toBe(true);
+    expect(setRemoteTerminal(f.env, f.agent, null, "guest_agent").ok).toBe(true); // off is never refused
+    expect(remoteTerminalOf(readAgentRecordExact(f.env, f.agent)!.record)).toBeNull();
+  });
+
+  test("launching in an unconnected folder says so and records nothing", () => {
+    const home = mkdtempSync(resolve(tmpdir(), "rt-home-"));
+    homes.push(home);
+    mkdirSync(resolve(home, "bare"));
+    const note = launchRemoteTerminal({ HOME: home }, resolve(home, "bare"), "s", true);
+    expect(note).toContain("not connected");
+  });
+});
+
+/* ---------------------------------------- on the folder's shared host socket */
+
+/** A client binary push: kind 0, then the sizes of join ref, ref, topic and event. */
+function decodeClientPush(d: Uint8Array): { topic: string; event: string; payload: Uint8Array } {
+  const dec = new TextDecoder();
+  const [jr, r, t, e] = [d[1] ?? 0, d[2] ?? 0, d[3] ?? 0, d[4] ?? 0];
+  const topic = dec.decode(d.subarray(5 + jr + r, 5 + jr + r + t));
+  const event = dec.decode(d.subarray(5 + jr + r + t, 5 + jr + r + t + e));
+  return { topic, event, payload: d.slice(5 + jr + r + t + e) };
+}
+
+class FakeBinarySocket implements SocketLike {
+  readyState = 0;
+  frames: (string | Uint8Array)[] = [];
+  onopen: ((ev: unknown) => void) | null = null;
+  onclose: ((ev: unknown) => void) | null = null;
+  onerror: ((ev: unknown) => void) | null = null;
+  onmessage: ((ev: { data: unknown }) => void) | null = null;
+  constructor(readonly url: string) {}
+  send(data: string | Uint8Array): void {
+    this.frames.push(data);
+  }
+  close(): void {
+    this.readyState = 3;
+    this.onclose?.({});
+  }
+  open(): void {
+    this.readyState = 1;
+    this.onopen?.({});
+  }
+  get json(): unknown[][] {
+    return this.frames.filter((f): f is string => typeof f === "string").map((f) => JSON.parse(f) as unknown[]);
+  }
+  get binary(): Uint8Array[] {
+    return this.frames.filter((f): f is Uint8Array => typeof f !== "string");
+  }
+  json_(frame: unknown[]): void {
+    this.onmessage?.({ data: JSON.stringify(frame) });
+  }
+  bin(bytes: Uint8Array): void {
+    this.onmessage?.({ data: bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) });
+  }
+}
+
+describe("the terminal rides the folder's ONE shared socket", () => {
+  function host(opts: { access?: "owner_only" | "admins"; terminal?: string } = {}) {
+    const f = connectedFolder();
+    if (opts.access !== undefined) setConfigAccess(f.env, f.agent, opts.access);
+    if (opts.terminal !== undefined) setRemoteTerminal(f.env, f.agent, opts.terminal);
+    const sockets: FakeBinarySocket[] = [];
+    const spawns: { argv: string[]; written: Uint8Array[]; killed: boolean; emit(b: Uint8Array): void }[] = [];
+    const tmuxRan: string[][] = [];
+    let alive = true;
+    const mgr = new HostManager({
+      env: f.env,
+      socket: (url) => {
+        const s = new FakeBinarySocket(url);
+        sockets.push(s);
+        return s;
+      },
+      log: () => {},
+      harnessFor: () => "claude_code",
+      codexHomeFor: () => null,
+      setTimer: () => 0,
+      clearTimer: () => {},
+      terminal: {
+        spawn: (argv, _o, onData) => {
+          const rec = { argv, written: [] as Uint8Array[], killed: false, emit: onData };
+          spawns.push(rec);
+          return { write: (b) => rec.written.push(b), resize: () => {}, kill: () => (rec.killed = true) };
+        },
+        tmux: async (argv) => {
+          tmuxRan.push(argv);
+          if (argv.includes("has-session")) return { exitCode: alive ? 0 : 1, stdout: "", stderr: "" };
+          return { exitCode: 0, stdout: "/work/example\n", stderr: "" };
+        },
+      },
+    });
+    return { ...f, mgr, sockets, spawns, tmuxRan, setAlive: (v: boolean) => (alive = v) };
+  }
+  const joins = (s: FakeBinarySocket) => s.json.filter((f) => f[3] === "phx_join").map((f) => f[2]);
+
+  test("opt-in on, config access off: one socket, joined on terminal:<id> only", () => {
+    const h = host({ terminal: "burrow-ledger-ab12cd34" });
+    h.mgr.sync();
+    expect(h.sockets).toHaveLength(1);
+    h.sockets[0]!.open();
+    expect(joins(h.sockets[0]!)).toEqual(["terminal:rt-a-00000000"]);
+    expect(h.mgr.terminalFolders()).toEqual([h.agent]);
+  });
+
+  test("both features on: still ONE socket, two topics, never runtime:<id>", () => {
+    const h = host({ access: "admins", terminal: "burrow-ledger-ab12cd34" });
+    h.mgr.sync();
+    h.mgr.sync();
+    expect(h.sockets).toHaveLength(1);
+    h.sockets[0]!.open();
+    expect(joins(h.sockets[0]!).sort()).toEqual(["runtime_host:rt-a-00000000", "terminal:rt-a-00000000"]);
+    expect(joins(h.sockets[0]!)).not.toContain("runtime:rt-a-00000000");
+  });
+
+  test("no opt-in: no terminal topic and nothing attached", () => {
+    const h = host({ access: "admins" });
+    h.mgr.sync();
+    h.sockets[0]!.open();
+    expect(joins(h.sockets[0]!)).toEqual(["runtime_host:rt-a-00000000"]);
+    expect(h.mgr.terminalFolders()).toEqual([]);
+    const none = host();
+    none.mgr.sync();
+    expect(none.sockets).toHaveLength(0);
+  });
+
+  test("an open starts read-only over the shared socket, the sealed folder goes out as a binary push, and in is dropped until rw", async () => {
+    const h = host({ terminal: "burrow-ledger-ab12cd34" });
+    h.mgr.sync();
+    const s = h.sockets[0]!;
+    s.open();
+    const join = s.json.find((f) => f[3] === "phx_join")!;
+    s.json_([join[0], join[1], join[2], "phx_reply", { status: "ok", response: {} }]);
+
+    const browser = generateKeyPair();
+    s.json_([null, null, "terminal:rt-a-00000000", "open", { session_id: "sess-1" }]);
+    const hello = s.json.find((f) => f[3] === "hello")!;
+    const cliPub = fromB64((hello[4] as { pub: string }).pub);
+    s.json_([null, null, "terminal:rt-a-00000000", "hello", { pub: toB64(browser.publicKey) }]);
+    await Bun.sleep(5);
+
+    expect(h.spawns).toHaveLength(1);
+    expect(h.spawns[0]!.argv).toContain("-r");
+    const keys = deriveKeys("browser", browser.privateKey, cliPub, "sess-1");
+    const recv = new Receiver(keys.recv, DIR_CLI_TO_BROWSER);
+    const first = decodeClientPush(s.binary[0]!);
+    expect(first).toMatchObject({ topic: "terminal:rt-a-00000000", event: "out" });
+    const rec0 = recv.open(first.payload)!;
+    expect(rec0.kind).toBe(KIND_CONTROL);
+    expect(JSON.parse(new TextDecoder().decode(rec0.body))).toEqual({ cwd: "/work/example" });
+
+    // pty output is forwarded verbatim and sealed
+    h.spawns[0]!.emit(text("hello"));
+    const second = decodeClientPush(s.binary[1]!);
+    expect(new TextDecoder().decode(recv.open(second.payload)!.body)).toBe("hello");
+
+    // in is dropped while ro, delivered after mode rw (a binary server push on the shared socket)
+    const send = new Sender(keys.send, DIR_BROWSER_TO_CLI);
+    const inFrame = (t: string) => {
+      const payload = send.seal(KIND_DATA, text(t));
+      const topic = "terminal:rt-a-00000000";
+      const enc = new TextEncoder();
+      const parts = ["", topic, "in"].map((x) => enc.encode(x));
+      const out = new Uint8Array(4 + parts.reduce((n, p) => n + p.length, 0) + payload.length);
+      out.set([0, parts[0]!.length, parts[1]!.length, parts[2]!.length], 0);
+      let at = 4;
+      for (const p of [...parts, payload]) (out.set(p, at), (at += p.length));
+      return out;
+    };
+    s.bin(inFrame("ls\r"));
+    expect(h.spawns[0]!.written).toHaveLength(0);
+    s.json_([null, null, "terminal:rt-a-00000000", "mode", { mode: "rw" }]);
+    expect(h.spawns).toHaveLength(2);
+    expect(h.spawns[1]!.argv).not.toContain("-r");
+    s.bin(inFrame("pwd\r"));
+    expect(new TextDecoder().decode(h.spawns[1]!.written[0]!)).toBe("pwd\r");
+  });
+
+  test("when the agent session ends, the terminal detaches and the opt-in is cleared; no argv kills a session", async () => {
+    const h = host({ terminal: "burrow-ledger-ab12cd34" });
+    h.mgr.sync();
+    h.sockets[0]!.open();
+    h.setAlive(false);
+    h.mgr.sync();
+    await Bun.sleep(5);
+    expect(h.mgr.terminalFolders()).toEqual([]);
+    expect(remoteTerminalOf(readAgentRecordExact(h.env, h.agent)!.record)).toBeNull();
+    expect(h.tmuxRan.flat().some((a) => /kill-(session|server)/.test(a))).toBe(false);
+    expect(h.spawns.every((x) => !x.argv.some((a) => /kill-(session|server)/.test(a)))).toBe(true);
+  });
+
+  test("binary frames for another topic or event are ignored, and JSON topics are unaffected", () => {
+    const h = host({ access: "admins", terminal: "burrow-ledger-ab12cd34" });
+    h.mgr.sync();
+    const s = h.sockets[0]!;
+    s.open();
+    s.bin(new Uint8Array([0, 0, 5, 2, ...new TextEncoder().encode("nope"), ...new TextEncoder().encode("xx"), 9]));
+    s.bin(new Uint8Array([9, 9, 9]));
+    expect(h.spawns).toHaveLength(0);
+  });
+
+  test("HostSocket: a topic can be left without taking the socket or its other topics down", () => {
+    const sock = new HostSocket({ url: "ws://x/websocket", socket: (u) => new FakeBinarySocket(u), log: () => {}, setTimer: () => 0, clearTimer: () => {} });
+    const a = sock.topic("a", () => ({}));
+    sock.topic("b", () => ({}));
+    sock.connect();
+    expect(a.isJoined()).toBe(false);
+    sock.leaveTopic("a");
+    expect(() => sock.topic("a", () => ({}))).not.toThrow();
   });
 });

@@ -77,31 +77,6 @@ export const SESSION_PREFIXES: readonly string[] = [SESSION_PREFIX, LEGACY_SESSI
  */
 export const WATCH_SESSION_NAMES: readonly string[] = [`${SESSION_PREFIX}-watch`, `${LEGACY_SESSION_PREFIX}-watch`];
 
-/**
- * The remote-terminal bridge's own tmux session, one per agent session:
- * `burrow-terminal--<agent session>`. The `--` is the marker: a derived or
- * explicit agent name is sanitized (sanitizeSessionName collapses `--`), so no
- * agent session can carry it. Like the watcher, it runs no agent.
- */
-export const TERMINAL_BRIDGE_MARKER = "terminal--";
-
-export function terminalBridgeSessionName(agentSession: string): string {
-  return `${SESSION_PREFIX}-${TERMINAL_BRIDGE_MARKER}${agentSession}`;
-}
-
-export function isTerminalBridgeSession(name: string): boolean {
-  return SESSION_PREFIXES.some((p) => name.startsWith(`${p}-${TERMINAL_BRIDGE_MARKER}`));
-}
-
-/** The agent session a bridge session serves, or null for any other name. */
-export function terminalBridgeTarget(name: string): string | null {
-  for (const p of SESSION_PREFIXES) {
-    const head = `${p}-${TERMINAL_BRIDGE_MARKER}`;
-    if (name.startsWith(head)) return name.slice(head.length);
-  }
-  return null;
-}
-
 /** Does this name carry one of this CLI's prefixes? */
 export function hasOwnPrefix(name: string): boolean {
   return SESSION_PREFIXES.some((p) => name.startsWith(`${p}-`));
@@ -109,7 +84,7 @@ export function hasOwnPrefix(name: string): boolean {
 
 /** Is this the watcher's own session rather than an agent's? */
 export function isWatcherSession(name: string): boolean {
-  return WATCH_SESSION_NAMES.includes(name) || isTerminalBridgeSession(name);
+  return WATCH_SESSION_NAMES.includes(name);
 }
 
 /** `suite-X` → `burrow-X`; any other name is returned unchanged. */
