@@ -64,7 +64,7 @@ export function helloFor(harness: string, access: ConfigAccess): Payload {
   return {
     harness,
     cli_version: VERSION,
-    capabilities: ["file", "session"],
+    capabilities: ["file", "session", "file.delete"],
     resumes: harness === "claude_code" || harness === "codex",
     config_opt_in: access,
   };

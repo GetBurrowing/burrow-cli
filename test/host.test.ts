@@ -241,6 +241,93 @@ describe("secrets never leave the machine", () => {
   });
 });
 
+describe("file.delete (0.16.0)", () => {
+  const skill = ".claude/skills/demo/SKILL.md";
+
+  test("the hello advertises file.delete", () => {
+    expect(helloFor("claude_code", "admins").capabilities).toContain("file.delete");
+  });
+
+  test("deletes a skill and its now-empty directory, nothing else", async () => {
+    const root = tmp("d");
+    const body = probe();
+    put(root, skill, body);
+    put(root, ".claude/skills/other/SKILL.md", "keep");
+    const r = await ask(ops(root), "file.delete", { path: skill, expected_sha256: sha256(body) });
+    expect(r).toEqual({ ok: { status: "ok" } });
+    expect(existsSync(resolve(root, ".claude/skills/demo"))).toBe(false);
+    expect(existsSync(resolve(root, ".claude/skills/other/SKILL.md"))).toBe(true);
+  });
+
+  test("a skill directory with other files is left in place (never recursive)", async () => {
+    const root = tmp("d");
+    put(root, skill, "x");
+    put(root, ".claude/skills/demo/extra.txt", "y");
+    expect(await ask(ops(root), "file.delete", { path: skill, expected_sha256: sha256("x") })).toEqual({ ok: { status: "ok" } });
+    expect(existsSync(resolve(root, ".claude/skills/demo/extra.txt"))).toBe(true);
+  });
+
+  test("a stale or missing hash is a conflict with current_sha256 and the file is unchanged", async () => {
+    const root = tmp("d");
+    const body = probe();
+    put(root, skill, body);
+    const o = ops(root);
+    expect(await ask(o, "file.delete", { path: skill, expected_sha256: sha256("stale") })).toEqual({ ok: { status: "conflict", current_sha256: sha256(body) } });
+    expect(readFileSync(resolve(root, skill), "utf8")).toBe(body);
+    expect(await ask(o, "file.delete", { path: skill })).toEqual({ error: "invalid_expected" });
+    expect(await ask(o, "file.delete", { path: ".claude/skills/none/SKILL.md", expected_sha256: sha256("x") })).toEqual({ ok: { status: "conflict", current_sha256: null } });
+    expect(readFileSync(resolve(root, skill), "utf8")).toBe(body);
+  });
+
+  test("`..` and a symlink escape are refused and the outside file survives", async () => {
+    const root = tmp("d");
+    const outside = tmp("outside");
+    writeFileSync(resolve(outside, "victim.md"), "outside");
+    const h = sha256("outside");
+    const o = ops(root);
+    expect(await ask(o, "file.delete", { path: "../victim.md", expected_sha256: h })).toEqual({ error: "invalid_path" });
+    symlinkSync(resolve(outside, "victim.md"), resolve(root, "CLAUDE.md"));
+    expect(await ask(o, "file.delete", { path: "CLAUDE.md", expected_sha256: h })).toEqual({ error: "symlink" });
+    mkdirSync(resolve(root, ".claude"), { recursive: true });
+    symlinkSync(outside, resolve(root, ".claude/agents"));
+    expect(await ask(o, "file.delete", { path: ".claude/agents/victim.md", expected_sha256: h })).toEqual({ error: "outside_root" });
+    expect(readFileSync(resolve(outside, "victim.md"), "utf8")).toBe("outside");
+  });
+
+  test("a directory is refused", async () => {
+    const root = tmp("d");
+    put(root, skill, "x");
+    expect(await ask(ops(root), "file.delete", { path: ".claude/skills/demo", expected_sha256: sha256("x") })).toEqual({ error: "not_a_file" });
+    expect(existsSync(resolve(root, skill))).toBe(true);
+  });
+
+  test("secret files are refused", async () => {
+    const root = tmp("d");
+    for (const rel of [".env", ".env.local", ".claude/.credentials.json", ".codex/auth.json"]) {
+      put(root, rel, "SECRET=1");
+      expect(await ask(ops(root), "file.delete", { path: rel, expected_sha256: sha256("SECRET=1") })).toEqual({ error: "secret_path" });
+      expect(existsSync(resolve(root, rel))).toBe(true);
+    }
+  });
+
+  test("opted out: dropped; wrong role: forbidden; nothing deleted", async () => {
+    const root = tmp("d");
+    put(root, skill, "x");
+    const payload = { path: skill, expected_sha256: sha256("x") };
+    expect(await ops(root, "off").handle("file.delete", { ...owner, ...payload })).toBeNull();
+    expect(await ops(root, "owner_only").handle("file.delete", { actor_role: "admin", ...payload })).toEqual({ error: "forbidden" });
+    expect(existsSync(resolve(root, skill))).toBe(true);
+  });
+
+  test("a change between the hash and the unlink is a conflict, not a delete", async () => {
+    const root = tmp("d");
+    put(root, skill, "x");
+    const o = ops(root, "admins", { beforeRehash: (p) => writeFileSync(p, "changed") });
+    expect(await ask(o, "file.delete", { path: skill, expected_sha256: sha256("x") })).toEqual({ ok: { status: "conflict", current_sha256: sha256("changed") } });
+    expect(existsSync(resolve(root, skill))).toBe(true);
+  });
+});
+
 describe("the opt-in, per agent folder", () => {
   test("off: every op is dropped without a reply", async () => {
     const root = tmp("a");
@@ -414,7 +501,7 @@ describe("connection: join, hello, serve", () => {
     s.open();
     const join = s.sent.find((f) => f[3] === "phx_join")!;
     expect(join[2]).toBe(topicName("rt-a-00000000"));
-    expect(join[4]).toMatchObject({ harness: "claude_code", capabilities: ["file", "session"], resumes: true, config_opt_in: "owner_only" });
+    expect(join[4]).toMatchObject({ harness: "claude_code", capabilities: ["file", "session", "file.delete"], resumes: true, config_opt_in: "owner_only" });
     expect((join[4] as { cli_version: string }).cli_version).toMatch(/^\d+\.\d+\.\d+/);
     expect(helloFor("codex", "admins")).toMatchObject({ harness: "codex", config_opt_in: "admins" });
 
