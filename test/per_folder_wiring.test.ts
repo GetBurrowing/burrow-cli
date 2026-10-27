@@ -1209,9 +1209,11 @@ describe("a failed convergence step warns and launches; it never stops the agent
     rmSync(resolve(defaultCheckout(bx.fx.env), "node_modules"), { recursive: true, force: true });
     const store = createStore();
     const bunInstall = (argv: string[]): boolean => argv[0] === "bun" && argv[1] === "install";
+    bx.fx.env.BURROW_BUN_INSTALL_BACKOFF_MS = "1";
     const { code, execs } = await claudeP(bx, failing(bx, store, bunInstall, "network down"), store);
     expect(code).toBe(0);
     expect(execs).toHaveLength(1);
+    expect(bx.output.join("\n")).toContain("after 3 attempts");
     expect(bx.output.join("\n")).toContain("burrow: WARNING: the channel plugin install failed");
     // Registration still happened from the record.
     expectNames(bx, bx.a, A);
