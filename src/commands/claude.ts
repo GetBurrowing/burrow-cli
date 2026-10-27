@@ -23,6 +23,7 @@
  *     tmux is warned about by stage 4, and the `dangerously` flag is announced
  *     once per machine — see {@link NOTICE_BODY}.
  */
+import { startBridgeSession } from "./terminal_bridge.ts";
 import { mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 import type { SuiteConfig } from "../config.ts";
@@ -689,6 +690,12 @@ export interface ClaudeOptions {
   force: boolean;
   /** `--session NAME`, honoured by stage 4's naming rule. */
   explicitSession?: string;
+  /**
+   * `--remote-terminal`: start the terminal bridge beside the session. Already
+   * stripped from `userArgs` by the CLI parser, so Claude never sees it.
+   * Absent or false: nothing of the bridge runs.
+   */
+  remoteTerminal?: boolean;
 }
 
 export async function runClaude(deps: ClaudeDeps, options: ClaudeOptions): Promise<number> {
@@ -881,6 +888,12 @@ export async function runClaude(deps: ClaudeDeps, options: ClaudeOptions): Promi
         deps.err(`tmux could not apply ${argv.slice(4).join(" ")} to ${session}: ${set.stderr.trim()}`);
       }
     }
+  }
+
+  // The remote terminal is opt-in: nothing below runs without the flag. The
+  // bridge only ever attaches to this session; it does not touch the agent.
+  if (options.remoteTerminal === true) {
+    deps.err(await startBridgeSession(deps.tmux, { session, cwd: deps.cwd, env: deps.env }));
   }
 
   // ANSWER THE PRE-LAUNCH DIALOGS — only for a session this call created, and
