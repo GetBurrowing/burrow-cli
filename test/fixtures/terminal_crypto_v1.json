@@ -1,0 +1,42 @@
+{
+  "comment": "Protocol v1 vectors. TEST keys generated for this file; not secrets. Copy byte-for-byte.",
+  "session_id": "test-session-0001",
+  "info_cli_to_browser": "burrow-terminal v1 cli->browser",
+  "info_browser_to_cli": "burrow-terminal v1 browser->cli",
+  "direction_ids": {
+    "cli_to_browser": 1,
+    "browser_to_cli": 2
+  },
+  "record_kinds": {
+    "data": 0,
+    "control": 1
+  },
+  "cli_private_hex": "101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f",
+  "cli_public_hex": "d89e3bad79437dbed9f843418304f460ff05c7fe81fe4a9577a804cb9367ff66",
+  "browser_private_hex": "a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebf",
+  "browser_public_hex": "605a725d2a4adfeeb1a29e17edd621c1b7593ee8cdbc44ac6c4ab6e2f805d23c",
+  "key_cli_to_browser_hex": "c14bd35b5d1a7242a28d50c49fb48c3f97c078e1b9e8d113003496b1043e9c3d",
+  "key_browser_to_cli_hex": "3998cf5ad35b8feda1986872a37c2acb434e48a0b97baac92b5e09d02a1bb819",
+  "out_frames": [
+    {
+      "counter": 0,
+      "kind": 1,
+      "plaintext_hex": "7b22637764223a222f776f726b2f6578616d706c65227d",
+      "frame_hex": "0000000000000000d82db1cfb4a8af671cc6a4256a276d2bbb699a56f183f037237bc3526c7fdb39e79b88a259f50269"
+    },
+    {
+      "counter": 1,
+      "kind": 0,
+      "plaintext_hex": "68656c6c6f201b5b316d776f726c641b5b306d0d0a",
+      "frame_hex": "0000000000000001b7055e0da941cd1e344f95b0eafb9eea65ca2c5c171681587b3cb98939f0256acc1a2cbeadcd"
+    }
+  ],
+  "in_frames": [
+    {
+      "counter": 0,
+      "kind": 0,
+      "plaintext_hex": "6c730d",
+      "frame_hex": "00000000000000006775ccbc8857f1e4f8d3c7436599d2a90cd2b55d"
+    }
+  ]
+}

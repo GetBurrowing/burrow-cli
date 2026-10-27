@@ -123,15 +123,21 @@ export function parse(argv: string[]): Dispatch {
  * Returns the name plus the arguments with the pair removed, because a flag we
  * consumed must not ALSO reach Claude.
  */
-export function parseClaudeOptions(args: string[]): { session?: string; rest: string[] } {
+export function parseClaudeOptions(args: string[]): { session?: string; remoteTerminal?: boolean; rest: string[] } {
   const rest: string[] = [];
   let session: string | undefined;
+  let remoteTerminal = false;
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
     if (arg === "--") {
       // Everything from here is Claude's, terminator included.
       rest.push(...args.slice(i));
       break;
+    }
+    // Ours too, and likewise never Claude's: opt-in, off unless named.
+    if (arg === "--remote-terminal") {
+      remoteTerminal = true;
+      continue;
     }
     const next = args[i + 1];
     if (arg === "--session" && next !== undefined) {
@@ -141,7 +147,7 @@ export function parseClaudeOptions(args: string[]): { session?: string; rest: st
     }
     if (arg !== undefined) rest.push(arg);
   }
-  return session === undefined ? { rest } : { session, rest };
+  return { ...(session === undefined ? {} : { session }), ...(remoteTerminal ? { remoteTerminal } : {}), rest };
 }
 
 /**
@@ -178,6 +184,8 @@ export function usage(): string {
     row("init", "connect THIS agent folder to a Burrow install (url, runtime id, token, watchdog)"),
     row("", "--dir PATH: the agent folder (default: here); --from-mcp-json: adopt PATH/.mcp.json"),
     row("claude", "set up Claude Code for Burrow in this folder if needed, then run it in a persistent session"),
+    row("", "--remote-terminal: let the owner open this session from the web (off by default; read-only until"),
+    row("", "switched, and read-write is a shell as you)"),
     row("claude new", "force a new session"),
     row("deepseek", "run a DeepSeek Harness agent federated into Burrow"),
     row("hermes", "stamp a Hermes agent root and run its gateway (--stamp-only: JSON contract)"),
@@ -247,9 +255,10 @@ export async function run(
     // Everything after the verb is Claude's, verbatim, EXCEPT `--session NAME`
     // before a `--`. That one flag is ours; see parseClaudeOptions.
     const { args } = parse(argv);
-    const { session, rest } = parseClaudeOptions(args);
+    const { session, rest, remoteTerminal } = parseClaudeOptions(args);
     return runClaude(await liveClaudeDeps(), {
       userArgs: rest,
+      remoteTerminal: remoteTerminal === true,
       force: verb === "claude new",
       explicitSession: session,
     });

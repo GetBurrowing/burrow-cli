@@ -23,6 +23,7 @@
  *     tmux is warned about by stage 4, and the `dangerously` flag is announced
  *     once per machine — see {@link NOTICE_BODY}.
  */
+import { launchRemoteTerminal } from "../terminal/host.ts";
 import { mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 import type { SuiteConfig } from "../config.ts";
@@ -689,6 +690,12 @@ export interface ClaudeOptions {
   force: boolean;
   /** `--session NAME`, honoured by stage 4's naming rule. */
   explicitSession?: string;
+  /**
+   * `--remote-terminal`: start the terminal bridge beside the session. Already
+   * stripped from `userArgs` by the CLI parser, so Claude never sees it.
+   * Absent or false: nothing of the bridge runs.
+   */
+  remoteTerminal?: boolean;
 }
 
 export async function runClaude(deps: ClaudeDeps, options: ClaudeOptions): Promise<number> {
@@ -882,6 +889,14 @@ export async function runClaude(deps: ClaudeDeps, options: ClaudeOptions): Promi
       }
     }
   }
+
+  // The remote terminal is opt-in, per launch: it only records the opt-in on
+  // this folder's connection, and `burrow watch` attaches it to the folder's
+  // shared socket. Without the flag nothing is recorded (and a stale marker is
+  // cleared). The bridge only ever attaches to this session; it never touches
+  // the agent.
+  const terminalNote = launchRemoteTerminal(deps.env, deps.cwd, session, options.remoteTerminal === true);
+  if (terminalNote !== null) deps.err(terminalNote);
 
   // ANSWER THE PRE-LAUNCH DIALOGS — only for a session this call created, and
   // CONCURRENTLY with the attach, so a person who is watching sees it happen
