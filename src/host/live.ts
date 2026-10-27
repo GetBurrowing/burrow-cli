@@ -1,5 +1,6 @@
 /** The real dependencies of {@link HostManager}: the roster and the WebSocket. */
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import type { SocketLike } from "../codex/phoenix.ts";
 import { parseRoster, rosterPath, type RosterEntry } from "../roster.ts";
 import { canonicalDir } from "../agent_connections.ts";
@@ -33,9 +34,22 @@ const HARNESS: Record<RosterEntry["kind"], string> = {
   openclaw: "openclaw",
 };
 
-export function harnessOf(entry: RosterEntry | null): string {
-  return entry === null ? "claude_code" : HARNESS[entry.kind];
+/**
+ * The harness for the hello. A roster entry is the record of what was launched
+ * here. Without one, say what the folder's own files show, and say `unknown`
+ * when they show nothing: advertising `claude_code` for a Codex folder made core
+ * read Claude's concepts (and write Claude's files) into it.
+ */
+export function harnessOf(entry: RosterEntry | null, dir?: string): string {
+  if (entry !== null) return HARNESS[entry.kind];
+  if (dir === undefined) return UNKNOWN_HARNESS;
+  const has = (rel: string): boolean => existsSync(join(dir, rel));
+  const claude = has("CLAUDE.md") || has(".claude");
+  if (!claude && (has(".codex") || has("AGENTS.md"))) return "codex";
+  return claude ? "claude_code" : UNKNOWN_HARNESS;
 }
+
+export const UNKNOWN_HARNESS = "unknown";
 
 /** `--codex-home DIR` in the recorded argv, or null for the default. */
 export function codexHomeOf(entry: RosterEntry | null): string | null {
@@ -50,7 +64,7 @@ export function liveSessionOps(env: Env, dir: string, echo: (line: string) => vo
   const restart = liveRestartDeps(env, echo);
   return new SessionOps({
     entry: () => rosterFor(env, dir),
-    harness: () => harnessOf(rosterFor(env, dir)),
+    harness: () => harnessOf(rosterFor(env, dir), dir),
     panePid: (session) => panePid(restart.tmux, session),
     restart: (entry) => restartSession(restart, entry),
     snapshot: (harness) => snapshotTools(harness, dir, { env }),
@@ -64,7 +78,7 @@ export function liveHostDeps(env: Env, log: (line: string) => void): HostDeps {
     env,
     socket: (url) => new WebSocket(url) as unknown as SocketLike,
     log,
-    harnessFor: (dir) => harnessOf(rosterFor(env, dir)),
+    harnessFor: (dir) => harnessOf(rosterFor(env, dir), dir),
     codexHomeFor: (dir) => codexHomeOf(rosterFor(env, dir)),
     terminal: liveTerminalDeps(env),
   };
