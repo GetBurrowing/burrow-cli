@@ -386,8 +386,19 @@ export const AGENT_NAME = "claude";
  * user to start a second one on top of the first.
  */
 export function looksLikeAgent(proc: ProcessRow, name: string = AGENT_NAME): boolean {
-  if (proc.comm === name) return true;
-  return proc.args.split(/\s+/).some((token) => token !== "" && basename(token) === name);
+  if (sameProgram(proc.comm, name)) return true;
+  return proc.args.split(/\s+/).some((token) => token !== "" && sameProgram(basename(token), name));
+}
+
+/**
+ * Is this program name the agent's, allowing the `.exe` spelling? Claude Code
+ * 2.1.311's process is `claude.exe` on every platform, so an exact `claude`
+ * comparison called a live agent stale (and `burrow claude` reported "created
+ * and exited immediately"). MEASURED on 2.1.311.
+ */
+export function sameProgram(candidate: string, name: string): boolean {
+  if (candidate === name) return true;
+  return candidate.toLowerCase().endsWith(".exe") && candidate.slice(0, -4) === name;
 }
 
 /**
@@ -461,7 +472,7 @@ export function classify(
 ): SessionState {
   const mine = panes.filter((p) => p.session === session);
   if (mine.length === 0) return "none";
-  if (mine.some((p) => basename(p.command) === agentName)) return "live";
+  if (mine.some((p) => sameProgram(basename(p.command), agentName))) return "live";
   const tree = descendants(processes, mine.map((p) => p.pid));
   return tree.some((p) => looksLikeAgent(p, agentName)) ? "live" : "stale";
 }

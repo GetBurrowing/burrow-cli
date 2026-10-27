@@ -10,6 +10,17 @@ that matters in the field: is this one newer than what I had?
 Minor for a new capability or a changed default; patch for a fix that changes no
 behaviour anyone was relying on.
 
+## 0.17.0
+
+**Honest harness detection.** `claude.exe` (the process name of Claude Code
+2.1.311) now counts as the agent, so `burrow claude` no longer reports "created
+and exited immediately" and writes its roster entry. A folder with no roster
+entry is no longer advertised as `claude_code`: the hello reads the folder's own
+markers (`.codex/` or `AGENTS.md` without `CLAUDE.md` is `codex`; `CLAUDE.md` or
+`.claude/` is `claude_code`) and says `unknown` when there are none. Core already
+accepts any harness string and answers `unsupported_harness` for one it has no
+adapter for.
+
 ## 0.16.0
 
 **Config host: `file.delete`.** The Burrow web app can now delete a skill,

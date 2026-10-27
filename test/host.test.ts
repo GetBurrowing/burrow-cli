@@ -405,7 +405,28 @@ describe("codex home outside the root", () => {
     expect(okOf(await ask(home, "file.read", { path: ".codex/config.toml" }))["content"]).toBe('model = "m"\n');
     expect(codexHomeOf({ command: ["bun", "cli.ts", "codex", "--codex-home", "/x/y"], cwd: "/a", kind: "codex", session: "s", recordedAt: "" })).toBe("/x/y");
     expect(codexHomeOf(null)).toBeNull();
-    expect(harnessOf(null)).toBe("claude_code");
+    expect(harnessOf(null)).toBe("unknown");
+  });
+});
+
+describe("the hello's harness for a folder with no roster entry", () => {
+  test("disk markers decide; nothing to go on is unknown, never claude_code", () => {
+    const empty = tmp("h0");
+    expect(harnessOf(null, empty)).toBe("unknown");
+    const codexDir = tmp("h1");
+    mkdirSync(resolve(codexDir, ".codex"));
+    expect(harnessOf(null, codexDir)).toBe("codex");
+    const agentsOnly = tmp("h2");
+    put(agentsOnly, "AGENTS.md", "x");
+    expect(harnessOf(null, agentsOnly)).toBe("codex");
+    const both = tmp("h3");
+    put(both, "AGENTS.md", "x");
+    put(both, "CLAUDE.md", "x");
+    expect(harnessOf(null, both)).toBe("claude_code");
+    const claudeDir = tmp("h4");
+    mkdirSync(resolve(claudeDir, ".claude"));
+    expect(harnessOf(null, claudeDir)).toBe("claude_code");
+    expect(helloFor("unknown", "off").resumes).toBe(false);
   });
 });
 

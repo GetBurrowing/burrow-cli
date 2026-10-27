@@ -34,7 +34,7 @@ import {
   paneCommand,
   CONTINUE_FALLBACK_SCRIPT,
 } from "../src/commands/claude.ts";
-import { CONTINUE_WRAPPER_NAME, isContinueWrapper, looksLikeAgent, parseProcesses } from "../src/tmux.ts";
+import { CONTINUE_WRAPPER_NAME, classify, isContinueWrapper, looksLikeAgent, parseProcesses } from "../src/tmux.ts";
 import { CLAUDE_CODE_URL } from "../src/commands/doctor.ts";
 import type { Prompter } from "../src/secrets.ts";
 import { sessionNameFromConfig } from "../src/tmux.ts";
@@ -1051,6 +1051,20 @@ describe("the --continue fallback in the pane command", () => {
       fakeTmux({ which: () => null }),
     );
     expect(plan.direct?.slice(0, 4)).toEqual(["/bin/sh", "-c", CONTINUE_FALLBACK_SCRIPT, CONTINUE_WRAPPER_NAME]);
+  });
+
+  test("claude.exe (Claude Code 2.1.311) is the agent, in comm, argv and the pane command", () => {
+    const [byComm] = parseProcesses("  200   100 claude.exe       /opt/claude/claude.exe --foo\n");
+    expect(looksLikeAgent(byComm!)).toBe(true);
+    const [byArgs] = parseProcesses("  201   100 node       node /opt/bin/claude.exe --foo\n");
+    expect(looksLikeAgent(byArgs!)).toBe(true);
+    const [other] = parseProcesses("  202   100 claudette.exe       /opt/claudette.exe\n");
+    expect(looksLikeAgent(other!)).toBe(false);
+    const pane = [{ session: "s", pid: 100, command: "claude.exe" }] as never;
+    expect(classify(pane, [], "s")).toBe("live");
+    const shell = [{ session: "s", pid: 100, command: "zsh" }] as never;
+    expect(classify(shell, parseProcesses("  200   100 claude.exe       claude.exe\n"), "s")).toBe("live");
+    expect(classify(shell, [], "s")).toBe("stale");
   });
 
   test("the shell reads as the agent for liveness, and is recognisable for adoption", () => {
