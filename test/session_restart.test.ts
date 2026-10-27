@@ -148,7 +148,7 @@ describe("session ops: refusals and the opt-in", () => {
     expect(await new HostOps({ root: ROOT, access: () => "admins" }).handle("session.restart", { actor_role: "owner" })).toEqual({ error: "unsupported" });
   });
   test("the hello advertises the session capability", () => {
-    expect(helloFor("claude_code", "owner_only")["capabilities"]).toEqual(["file", "session"]);
+    expect(helloFor("claude_code", "owner_only")["capabilities"]).toEqual(["file", "session", "file.delete"]);
   });
 });
 

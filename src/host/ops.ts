@@ -1,7 +1,7 @@
 /**
  * The structured operations a Burrow install can ask of this machine over
  * `runtime_host:<runtime_id>`: file.list, file.read, file.write, secret.set,
- * and (delegated to session.ts) session.tools, session.restart. Every one goes
+ * file.delete, and (delegated to session.ts) session.tools, session.restart. Every one goes
  * through the same opt-in check. Nothing here touches a terminal or a pane.
  *
  * ATOMIC WRITE, in order, under a per-path lock:
@@ -22,7 +22,7 @@
  * still detect that the file changed. A write of a redacted file keeps the
  * values that are on disk.
  */
-import { closeSync, constants, fsyncSync, openSync, readSync, realpathSync, renameSync, unlinkSync, writeSync, fstatSync, mkdirSync, readdirSync, lstatSync } from "node:fs";
+import { closeSync, constants, fsyncSync, openSync, readSync, realpathSync, renameSync, unlinkSync, writeSync, fstatSync, mkdirSync, readdirSync, lstatSync, rmdirSync } from "node:fs";
 import { createHash, randomBytes } from "node:crypto";
 import { dirname, join } from "node:path";
 import { permits, type ConfigAccess } from "./access.ts";
@@ -109,6 +109,8 @@ export class HostOps {
           return this.read(payload["path"]);
         case "file.write":
           return await this.write(payload["path"], payload["content"], payload["expected_sha256"]);
+        case "file.delete":
+          return await this.remove(payload["path"], payload["expected_sha256"]);
         case "secret.set":
           return await this.secretSet(payload["path"], payload["pointer"], payload["value"]);
         case "session.tools":
@@ -193,6 +195,50 @@ export class HostOps {
       const r = restore(s.rel, content, current);
       return r.ok ? { ok: true, content: r.content } : r;
     }, (expected ?? null) as string | null);
+  }
+
+  /**
+   * `file.delete {path, expected_sha256}`: one regular file, under the same
+   * per-path lock and hash precondition as a write. A missing or stale hash (or
+   * a file that is gone) answers a conflict and deletes nothing. Secret files
+   * are refused; directories fail the scope check. A skill's SKILL.md takes its
+   * now-empty `<name>` directory with it (rmdir only, never recursive).
+   */
+  private remove(path: unknown, expected: unknown): Promise<Reply> | Reply {
+    const s = scope(this.o.root, path);
+    if (!s.ok) return { error: s.reason };
+    if (typeof expected !== "string") return { error: "invalid_expected" };
+    if (isSecretFile(s.rel) || isSecretBearing(s.rel)) return { error: "secret_path" };
+    if (this.unavailable(s.rel)) return { error: "unavailable" };
+    const { rel, full } = s;
+    return withLock(full, (): Reply => {
+      const first = scope(this.o.root, rel);
+      if (!first.ok) return { error: first.reason };
+      if (!first.exists) return { ok: { status: "conflict", current_sha256: null } };
+      const b = readBounded(first.full);
+      if (b === "too_large") return { error: "too_large" };
+      const currentSha = sha256(b);
+      if (currentSha !== expected) return { ok: { status: "conflict", current_sha256: currentSha } };
+      this.o.beforeRehash?.(full);
+      // Re-hash immediately before the unlink, as a write does before its rename.
+      let nowSha: string | null = null;
+      try {
+        const again = readBounded(full);
+        nowSha = again === "too_large" ? "too_large" : sha256(again);
+      } catch {
+        nowSha = null;
+      }
+      if (nowSha !== currentSha) return { ok: { status: "conflict", current_sha256: nowSha } };
+      unlinkSync(full);
+      if (/^\.(?:claude|codex)\/skills\/[^/]+\/SKILL\.md$/.test(rel)) {
+        try {
+          rmdirSync(dirname(full));
+        } catch {
+          /* not empty (or already gone): leave it */
+        }
+      }
+      return { ok: { status: "ok" } };
+    });
   }
 
   private secretSet(path: unknown, pointer: unknown, value: unknown): Promise<Reply> | Reply {

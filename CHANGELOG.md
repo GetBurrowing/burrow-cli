@@ -10,6 +10,18 @@ that matters in the field: is this one newer than what I had?
 Minor for a new capability or a changed default; patch for a fix that changes no
 behaviour anyone was relying on.
 
+## 0.16.0
+
+**Config host: `file.delete`.** The Burrow web app can now delete a skill,
+subagent or command file from an agent's folder. The hello advertises
+`file.delete` in its capabilities; core only offers Delete to a host that does.
+It is one regular file, under the same scope checks, per-path lock, hash
+precondition and opt-in/actor-role check as `file.write`: a stale or missing hash
+answers a conflict with `current_sha256` and deletes nothing. Secret files
+(`.env*`, credentials files, `.codex/auth.json`) and directories are refused.
+Deleting a skill's `SKILL.md` also removes its `<name>` directory if that is now
+empty; nothing is ever deleted recursively.
+
 ## 0.15.0
 
 **`burrow claude --remote-terminal`: let the owner open this agent's tmux
