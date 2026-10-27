@@ -41,7 +41,14 @@ describe("installDependencies", () => {
 
   test("a hung install is abandoned at the deadline, killed, and reported after all attempts", async () => {
     const h = harness({ BURROW_BUN_INSTALL_TIMEOUT_MS: "40" }, never);
-    await expect(installDependencies(h.deps, "/x")).rejects.toThrow(/after 3 attempts[\s\S]*attempt 3: timed out/);
+    // try/catch, not `.rejects`: bun's `.rejects` on a never-settling promise blocks past the test timeout.
+    let err: unknown = null;
+    try {
+      await installDependencies(h.deps, "/x");
+    } catch (e) {
+      err = e;
+    }
+    expect(String(err)).toMatch(/after 3 attempts[\s\S]*attempt 3: timed out/);
     expect(h.calls.length).toBe(3);
     expect(h.signals.every((s) => s?.aborted === true)).toBe(true);
     expect(h.lines.filter((l) => l.includes("timed out")).length).toBe(3);
