@@ -7,6 +7,9 @@
  * Argument passthrough for `burrow claude` is deliberately total: the wrapper
  * parses nothing beyond the verb, so a user flag can never be eaten by us.
  */
+import { HostManager } from "./host/manager.ts";
+import { liveHostDeps } from "./host/live.ts";
+import { parseAccess, setConfigAccess } from "./host/access.ts";
 import { VERSION, CLI_NAME } from "./version.ts";
 import { row, nextCommand } from "./ui.ts";
 import { liveDeps, runInit } from "./commands/init.ts";
@@ -77,6 +80,7 @@ export type Verb =
   | "status"
   | "update"
   | "watch"
+  | "config-access"
   | "restore"
   | "pane-status";
 
@@ -86,7 +90,7 @@ export interface Dispatch {
   args: string[];
 }
 
-const VERBS = new Set(["init", "claude", "deepseek", "hermes", "openclaw", "codex", "doctor", "status", "update", "watch", "restore", "pane-status"]);
+const VERBS = new Set(["init", "claude", "deepseek", "hermes", "openclaw", "codex", "doctor", "status", "update", "watch", "restore", "pane-status", "config-access"]);
 
 /**
  * Pure: map argv to a verb plus untouched passthrough arguments.
@@ -183,6 +187,7 @@ export function usage(): string {
     row("status", "show every agent folder, session state and stamped agents (kind, root, live/stale, last verdict)"),
     row("", "--json [--dir PATH]: one JSON document on stdout (see README, Status contract)"),
     row("watch", "recover halted agent sessions (--dry-run, --once, --interval N, --force SESSION)"),
+    row("config-access", "let the Burrow install edit THIS agent's config files: [DIR] off|owner|admins"),
     row("pane-status", "one agent session's state as JSON, for a supervisor (--session NAME, --answer)"),
     row("restore", "bring recorded agents back up (--adopt, --dry-run, --forget NAME)"),
     row("update", `install the latest ${CLI_NAME} CLI`),
@@ -334,8 +339,11 @@ export async function run(
     // Long-running: a halt is permanent until something acts, so a missed pass
     // costs latency rather than correctness. Errors are logged and the loop
     // continues; exiting would leave every later halt unattended.
+    const host = new HostManager(liveHostDeps(process.env, (line) => console.error(`${CLI_NAME} watch: ${line}`)));
     for (;;) {
       try {
+        // Host connections (src/host): opened for folders whose config access is on.
+        host.sync();
         await runWatch(deps, base);
       } catch (err) {
         console.error(`${CLI_NAME} watch: pass failed: ${(err as Error).message}`);
@@ -349,6 +357,27 @@ export async function run(
       }
       await deps.sleep(opts.intervalSeconds * 1000);
     }
+  }
+  if (verb === "config-access") {
+    const { args } = parse(argv);
+    const value = args[args.length - 1];
+    const dirArg = args.length > 1 ? args[0] : ".";
+    const access = value === undefined ? null : parseAccess(value);
+    if (access === null) {
+      console.error(`${CLI_NAME} config-access: pass off, owner or admins (optionally after the agent folder)`);
+      return 2;
+    }
+    const res = setConfigAccess(process.env, dirArg as string, access);
+    if (!res.ok) {
+      console.error(`${CLI_NAME} config-access: ${res.reason}`);
+      return 1;
+    }
+    console.log(
+      access === "off"
+        ? `${CLI_NAME} config-access: off. The Burrow install cannot read or edit this agent's config files.`
+        : `${CLI_NAME} config-access: ${access}. \`${CLI_NAME} watch\` opens the connection on its next pass.`,
+    );
+    return 0;
   }
   if (verb === "restore") {
     const { args } = parse(argv);

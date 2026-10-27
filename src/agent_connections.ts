@@ -55,6 +55,11 @@ export interface AgentRecord {
   tokenEnv?: string;
   tokenRef?: string;
   keychainService?: string;
+  /**
+   * Who may edit this agent's config files from the Burrow install
+   * (src/host/access.ts). Absent reads as "off". Not a secret.
+   */
+  configAccess?: "owner_only" | "admins";
 }
 
 export interface AgentSecrets {
@@ -162,6 +167,7 @@ export function serializeAgentRecord(record: AgentRecord): string {
     out.tokenRef = record.tokenRef;
   }
   if (record.keychainService !== undefined && record.keychainService !== "") out.keychainService = record.keychainService;
+  if (record.configAccess === "owner_only" || record.configAccess === "admins") out.configAccess = record.configAccess;
   return `${JSON.stringify(out, null, 2)}\n`;
 }
 
@@ -200,6 +206,7 @@ export function parseAgentRecord(text: string): AgentRecord | null {
     ...(typeof raw.keychainService === "string" && raw.keychainService !== ""
       ? { keychainService: raw.keychainService }
       : {}),
+    ...(raw.configAccess === "owner_only" || raw.configAccess === "admins" ? { configAccess: raw.configAccess } : {}),
   };
 }
 
@@ -257,6 +264,7 @@ export function writeAgentConnection(
   const canon = canonicalDir(dir);
   const recordPath = agentConfigPath(env, canon);
   const credsPath = agentCredentialsPath(env, canon);
+  const previous = readAgentRecordExact(env, canon);
   assertWritable(recordPath, probe);
   assertWritable(credsPath, probe);
   const record: AgentRecord = {
@@ -267,6 +275,8 @@ export function writeAgentConnection(
     ...(config.tokenEnv !== undefined ? { tokenEnv: config.tokenEnv } : {}),
     ...(config.tokenRef !== undefined ? { tokenRef: config.tokenRef } : {}),
     ...(config.keychainService !== undefined ? { keychainService: config.keychainService } : {}),
+    // Re-running init must not silently turn config editing back off (or on).
+    ...(previous?.record.configAccess !== undefined ? { configAccess: previous.record.configAccess } : {}),
   };
   const recordBody = serializeAgentRecord(record);
   const credsBody = `${JSON.stringify({ token: secrets.token, headers: secrets.headers }, null, 2)}\n`;

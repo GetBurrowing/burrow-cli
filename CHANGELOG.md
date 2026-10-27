@@ -10,6 +10,43 @@ that matters in the field: is this one newer than what I had?
 Minor for a new capability or a changed default; patch for a fix that changes no
 behaviour anyone was relying on.
 
+## 0.13.0
+
+**`burrow watch` can serve the agent's config files to the Burrow install, if
+the owner turns that on for the folder.** The Configuration screen in Burrow
+needs to read and edit `CLAUDE.md`, `AGENTS.md`, skills, `.mcp.json`,
+`.claude/settings*.json` and `.codex/config.toml` on this machine, and the
+sockets the harness holds die with the harness, so they cannot serve files
+while a session restarts.
+
+- `burrow config-access [DIR] off|owner|admins` sets, per agent folder, who the
+  install may act for. **Off is the default**: with it off, `burrow watch` opens
+  no socket for that folder at all. `owner` serves requests from the agent's
+  owner; `admins` also serves install admins. Core names the actor's role in
+  every request and the host checks it again here. Only an agent of the owner's
+  own, in an install the owner belongs to, can be enabled; no flag widens that.
+- With access on, `burrow watch` keeps ONE outbound socket per agent folder,
+  joined on `runtime_host:<runtime id>` with a hello, reconnecting with backoff.
+  The remote terminal attaches its own topic to that same socket
+  (`src/host/socket.ts`); structured operations and terminal bytes never share
+  a topic.
+- Operations: `file.list`, `file.read`, `file.write` (with `expected_sha256`;
+  a changed file is a conflict, never overwritten), `secret.set` (write-only).
+  Paths are relative to the agent folder: `..`, absolute, `~`, a symlinked
+  final component and any ancestor whose real path leaves the folder are
+  refused; files open with `O_NOFOLLOW`; 512 KiB at most. A `CODEX_HOME` outside
+  the folder (`--codex-home`) makes the `.codex/` paths unavailable, not followed.
+- A write takes a per-path lock, checks the hash, writes a temp file in the same
+  directory, fsyncs, re-hashes the target and renames. The window that remains
+  (another writer between the re-hash and the rename) is documented in
+  `src/host/ops.ts`.
+- Secret values never leave the machine. `.env*`, `*credentials.json` and
+  `.codex/auth.json` show names only; `.mcp.json`, `.claude/settings*.json` and
+  `.codex/config.toml` show `[redacted]` for env, headers and bearer tokens.
+  Writing a redacted file back keeps the values on disk. `config.toml` edits
+  keep comments and key order.
+- Nothing in `src/host` imports `tmux.ts` or touches a pane (a test asserts it).
+
 ## 0.12.3
 
 **`burrow hermes` retries `hermes mcp test` once when, and only when, it timed
