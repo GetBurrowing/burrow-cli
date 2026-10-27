@@ -20,6 +20,7 @@ import { listAgentConnections, readAgentSecrets, type AgentConnection } from "..
 import { VERSION } from "../version.ts";
 import { accessOf, type ConfigAccess } from "./access.ts";
 import { HostOps } from "./ops.ts";
+import type { SessionOps } from "./session.ts";
 import { HostSocket, type TopicHandle } from "./socket.ts";
 
 type Env = Record<string, string | undefined>;
@@ -32,6 +33,8 @@ export interface HostDeps {
   harnessFor(dir: string): string;
   /** CODEX_HOME for this folder, null for the default `<root>/.codex`. */
   codexHomeFor(dir: string): string | null;
+  /** session.* for this folder (stage 4); absent: those ops answer `unsupported`. */
+  sessionFor?(dir: string): SessionOps | null;
   setTimer?(fn: () => void, ms: number): unknown;
   clearTimer?(h: unknown): void;
 }
@@ -40,6 +43,7 @@ interface Live {
   sock: HostSocket;
   topic: TopicHandle;
   signature: string;
+  session: SessionOps | null;
 }
 
 export function topicName(runtimeId: string): string {
@@ -50,7 +54,7 @@ export function helloFor(harness: string, access: ConfigAccess): Payload {
   return {
     harness,
     cli_version: VERSION,
-    capabilities: ["file"],
+    capabilities: ["file", "session"],
     resumes: harness === "claude_code" || harness === "codex",
     config_opt_in: access,
   };
@@ -86,7 +90,10 @@ export class HostManager {
       const url = socketUrl(channelWsUrl(conn.record.suiteUrl), { runtime_id: conn.record.runtimeId, token });
       const signature = `${url}|${access}`;
       const have = this.live.get(dir);
-      if (have !== undefined && have.signature === signature) continue;
+      if (have !== undefined && have.signature === signature) {
+        void have.session?.observe();
+        continue;
+      }
       have?.sock.stop();
       this.open(conn, url, signature);
     }
@@ -121,13 +128,15 @@ export class HostManager {
       ...(this.deps.setTimer !== undefined ? { setTimer: this.deps.setTimer } : {}),
       ...(this.deps.clearTimer !== undefined ? { clearTimer: this.deps.clearTimer } : {}),
     });
+    const session = this.deps.sessionFor?.(dir) ?? null;
     const ops = new HostOps({
       root: dir,
+      ...(session !== null ? { session } : {}),
       access: () => this.access.get(dir) ?? "off",
       codexHome: () => this.deps.codexHomeFor(dir),
     });
     const topic = sock.topic(topicName(conn.record.runtimeId), () => helloFor(this.deps.harnessFor(dir), this.access.get(dir) ?? "off"));
-    for (const event of ["file.list", "file.read", "file.write", "secret.set"]) {
+    for (const event of ["file.list", "file.read", "file.write", "secret.set", "session.tools", "session.restart"]) {
       topic.on(event, (payload) => {
         const ref = payload["ref"];
         if (typeof ref !== "string") return;
@@ -137,7 +146,8 @@ export class HostManager {
         });
       });
     }
-    this.live.set(dir, { sock, topic, signature });
+    this.live.set(dir, { sock, topic, signature, session });
+    void session?.observe();
     sock.connect();
   }
 }

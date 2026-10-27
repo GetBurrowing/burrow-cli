@@ -1,7 +1,8 @@
 /**
  * The structured operations a Burrow install can ask of this machine over
- * `runtime_host:<runtime_id>`: file.list, file.read, file.write, secret.set.
- * Nothing here touches a terminal, a tmux pane or a process.
+ * `runtime_host:<runtime_id>`: file.list, file.read, file.write, secret.set,
+ * and (delegated to session.ts) session.tools, session.restart. Every one goes
+ * through the same opt-in check. Nothing here touches a terminal or a pane.
  *
  * ATOMIC WRITE, in order, under a per-path lock:
  *   1. hash the current bytes; if they differ from `expected_sha256` (or the
@@ -26,6 +27,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { dirname, join } from "node:path";
 import { permits, type ConfigAccess } from "./access.ts";
 import { MAX_FILE_BYTES, scope } from "./scope.ts";
+import type { SessionOps } from "./session.ts";
 import { isSecretBearing, isSecretFile, putSecret, redactForRead, restore } from "./redact.ts";
 
 export type Reply = { ok: Record<string, unknown> } | { error: string };
@@ -41,6 +43,8 @@ export interface OpsOptions {
    * unavailable instead of followed.
    */
   codexHome?(): string | null;
+  /** `session.*` ops (stage 4). Absent: they answer `unsupported`. */
+  session?: SessionOps;
   /** Test seam: runs after the temp file is written and fsynced, before the re-hash. */
   beforeRehash?(path: string): void;
   /** Test seam: runs between the first hash and the temp-file write. */
@@ -107,6 +111,9 @@ export class HostOps {
           return await this.write(payload["path"], payload["content"], payload["expected_sha256"]);
         case "secret.set":
           return await this.secretSet(payload["path"], payload["pointer"], payload["value"]);
+        case "session.tools":
+        case "session.restart":
+          return this.o.session === undefined ? { error: "unsupported" } : await this.o.session.handle(event);
         default:
           return { error: "unsupported" };
       }

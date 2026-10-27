@@ -10,6 +10,31 @@ that matters in the field: is this one newer than what I had?
 Minor for a new capability or a changed default; patch for a fix that changes no
 behaviour anyone was relying on.
 
+## 0.14.0
+
+**Restart session from the Burrow install.** With config access on for the
+folder, `burrow watch` answers `session.restart` and `session.tools` on
+`runtime_host:<runtime id>`, through the same per-folder opt-in and actor-role
+check as the file ops.
+
+- `session.restart` relaunches the harness PROCESS with `tmux respawn-pane -k`
+  and the exact pane command recorded in the roster, so claude keeps its
+  injected `--continue` and the no-conversation fallback, and codex resumes its
+  threads. A fresh process re-reads `CLAUDE.md`, settings and the MCP config.
+  It is not `burrow watch --force`, which types into the live pane and never
+  restarts anything. Refused when no session is recorded for the folder or it
+  is not running.
+- For claude the relaunch is watched by the same launch-dialog watcher as
+  `burrow claude`, which writes the launch record; the reply carries only the
+  outcome (`ready` | `timeout` | `gone`), never pane text.
+- Tool snapshot before and after: for each MCP server the harness loads
+  (approved `.mcp.json` servers; codex `[mcp_servers]`), `tools/list` with a 5 s
+  timeout. A server that does not answer is `unreachable:<server>`. Only
+  server and tool names leave the machine. "Before" is what the RUNNING process
+  loaded: `burrow watch` takes a baseline when it first sees a pane process.
+  The reply is `{outcome, resumed, before, after, before_basis, diff}`.
+- The hello now advertises `capabilities: ["file", "session"]`.
+
 ## 0.13.0
 
 **`burrow watch` can serve the agent's config files to the Burrow install, if
