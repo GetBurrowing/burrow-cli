@@ -10,6 +10,17 @@ that matters in the field: is this one newer than what I had?
 Minor for a new capability or a changed default; patch for a fix that changes no
 behaviour anyone was relying on.
 
+## 0.17.1
+
+**The plugin `bun install` can no longer hang a launch.** A first install on a
+fresh host sat for minutes with dozens of idle registry connections while a
+manual install finished in milliseconds, and nothing timed it out. It now runs
+with `--network-concurrency=16` under a 90 s deadline per attempt
+(`BURROW_BUN_INSTALL_TIMEOUT_MS`); on expiry the whole process tree is killed and
+it retries up to 2 more times with backoff (`BURROW_BUN_INSTALL_RETRIES`,
+`BURROW_BUN_INSTALL_BACKOFF_MS`). Each attempt and its outcome is printed, and if
+all fail the launch warning names every attempt.
+
 ## 0.17.0
 
 **Honest harness detection.** `claude.exe` (the process name of Claude Code

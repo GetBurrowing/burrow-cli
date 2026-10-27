@@ -173,7 +173,7 @@ describe("ensurePluginAtPin", () => {
     const r = runner(dir);
     expect((await ensurePluginAtPin(deps(r.run), dir, PIN, NOT_LIVE)).outcome).toBe("at-pin");
     expect(r.git()).toEqual([]);
-    expect(r.calls).toEqual([["bun", "install"]]);
+    expect(r.calls).toEqual([["bun", "install", "--network-concurrency=16"]]);
     expect(readFileSync(join(dir, "node_modules", DEPS_MARKER), "utf8")).toBe(`${PIN}\n`);
   });
 
