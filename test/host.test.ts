@@ -414,7 +414,7 @@ describe("connection: join, hello, serve", () => {
     s.open();
     const join = s.sent.find((f) => f[3] === "phx_join")!;
     expect(join[2]).toBe(topicName("rt-a-00000000"));
-    expect(join[4]).toMatchObject({ harness: "claude_code", capabilities: ["file"], resumes: true, config_opt_in: "owner_only" });
+    expect(join[4]).toMatchObject({ harness: "claude_code", capabilities: ["file", "session"], resumes: true, config_opt_in: "owner_only" });
     expect((join[4] as { cli_version: string }).cli_version).toMatch(/^\d+\.\d+\.\d+/);
     expect(helloFor("codex", "admins")).toMatchObject({ harness: "codex", config_opt_in: "admins" });
 

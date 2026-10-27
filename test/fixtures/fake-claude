@@ -1,0 +1,50 @@
+// A fake `claude` for the session-restart end-to-end test (run by bun; the
+// test puts a `claude` wrapper on PATH that execs this file).
+//
+// On start it does what the real one does with its MCP config: reads
+// `.mcp.json` and the approvals in `.claude/settings*.json`, starts each
+// APPROVED stdio server, calls tools/list, and records what it loaded. It
+// appends one JSON line per launch to $FAKE_CLAUDE_OUT/launches.jsonl:
+//   {"pid": <pid>, "argv": [...], "tools": ["<server>/<tool>", ...]}
+// then draws Claude's input box (so the launch watcher reads `ready`) and waits.
+const fs = require("node:fs");
+const { spawn } = require("node:child_process");
+const cwd = process.cwd();
+const read = (p) => { try { return JSON.parse(fs.readFileSync(cwd + "/" + p, "utf8")); } catch { return null; } };
+const mcp = (read(".mcp.json") || {}).mcpServers || {};
+const settings = [read(".claude/settings.json"), read(".claude/settings.local.json")];
+const enabled = new Set(settings.flatMap((s) => (s && s.enabledMcpjsonServers) || []));
+const all = settings.some((s) => s && s.enableAllProjectMcpServers === true);
+
+function load(name, spec) {
+  return new Promise((resolve) => {
+    const child = spawn(spec.command, spec.args || [], { cwd, env: { ...process.env, ...(spec.env || {}) }, stdio: ["pipe", "pipe", "ignore"] });
+    let buf = "";
+    const done = (v) => { clearTimeout(t); resolve(v); };
+    const t = setTimeout(() => done([]), 5000);
+    child.stdout.on("data", (c) => {
+      buf += c.toString();
+      let nl;
+      while ((nl = buf.indexOf("\n")) !== -1) {
+        const line = buf.slice(0, nl); buf = buf.slice(nl + 1);
+        let msg; try { msg = JSON.parse(line); } catch { continue; }
+        if (msg.id === 1) {
+          child.stdin.write(JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }) + "\n");
+          child.stdin.write(JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list", params: {} }) + "\n");
+        } else if (msg.id === 2) {
+          done(((msg.result && msg.result.tools) || []).map((x) => name + "/" + x.name));
+        }
+      }
+    });
+    child.stdin.write(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "fake-claude", version: "0" } } }) + "\n");
+  });
+}
+
+(async () => {
+  const names = Object.keys(mcp).filter((n) => all || enabled.has(n)).sort();
+  const tools = (await Promise.all(names.map((n) => load(n, mcp[n])))).flat().sort();
+  fs.appendFileSync(process.env.FAKE_CLAUDE_OUT + "/launches.jsonl", JSON.stringify({ pid: process.pid, argv: process.argv.slice(2), tools }) + "\n");
+  const rule = "─".repeat(78);
+  process.stdout.write("\x1b[2J\x1b[H" + ["", " Claude Code (fake)", "", rule, "❯ ", rule, "  ⏵⏵ bypass permissions on"].join("\r\n"));
+  setInterval(() => {}, 1 << 30);
+})();
