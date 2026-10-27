@@ -412,6 +412,79 @@ export function readHeadSha(dir: string): string | null {
   return null;
 }
 
+/** Per-attempt deadline for `bun install` (ms). A healthy install takes well under a second. */
+export const INSTALL_TIMEOUT_ENV = "BURROW_BUN_INSTALL_TIMEOUT_MS";
+/** Extra attempts after the first. */
+export const INSTALL_RETRIES_ENV = "BURROW_BUN_INSTALL_RETRIES";
+/** Wait before retry n is this times n (ms). */
+export const INSTALL_BACKOFF_ENV = "BURROW_BUN_INSTALL_BACKOFF_MS";
+/** bun's default (48) opened ~64 sockets to the registry and stalled; fewer is steadier. */
+export const INSTALL_NETWORK_CONCURRENCY = 16;
+
+const envInt = (env: Env, name: string, dflt: number): number => {
+  const n = Number(env[name]);
+  return env[name] !== undefined && env[name] !== "" && Number.isFinite(n) && n >= 0 ? Math.floor(n) : dflt;
+};
+
+/**
+ * `bun install` in the plugin checkout, BOUNDED. Nothing used to time it out: a
+ * stalled registry connection pool (2026-10-27, first native deploy) left the
+ * agent in `starting` forever while a manual install took 151 ms. Each attempt
+ * gets a deadline; on expiry the process tree is killed and the install is
+ * retried with backoff. Every attempt and its outcome is printed, and when all
+ * fail the error names the attempts, which the caller prints as a launch warning
+ * (checkout "failed"), not a silent wait. Returns the last attempt's output.
+ */
+export async function installDependencies(deps: Pick<WiringDeps, "env" | "run" | "out">, dir: string): Promise<string> {
+  const timeoutMs = Math.max(1, envInt(deps.env, INSTALL_TIMEOUT_ENV, 90_000));
+  const attempts = 1 + envInt(deps.env, INSTALL_RETRIES_ENV, 2);
+  const backoffMs = envInt(deps.env, INSTALL_BACKOFF_ENV, 2_000);
+  const failures: string[] = [];
+  let withFlag = true;
+  for (let n = 1; n <= attempts; n++) {
+    if (n > 1) await new Promise((r) => setTimeout(r, backoffMs * (n - 1)));
+    const argv = ["bun", "install", ...(withFlag ? [`--network-concurrency=${INSTALL_NETWORK_CONCURRENCY}`] : [])];
+    const ctl = new AbortController();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const started = Date.now();
+    const timedOut = new Promise<"timeout">((resolve) => {
+      timer = setTimeout(() => {
+        ctl.abort();
+        resolve("timeout");
+      }, timeoutMs);
+    });
+    let result: Awaited<ReturnType<typeof deps.run>> | "timeout";
+    try {
+      result = await Promise.race([deps.run(argv, { cwd: dir, signal: ctl.signal }), timedOut]);
+    } catch (error) {
+      result = { exitCode: 1, stdout: "", stderr: error instanceof Error ? error.message : String(error) };
+    } finally {
+      clearTimeout(timer);
+    }
+    const took = `${Date.now() - started}ms`;
+    if (result === "timeout") {
+      const why = `timed out after ${timeoutMs}ms; killed`;
+      deps.out(row("dependencies", `bun install attempt ${n}/${attempts}`, why));
+      failures.push(`attempt ${n}: ${why}`);
+      continue;
+    }
+    if (result.exitCode === 0) {
+      deps.out(row("dependencies", `bun install attempt ${n}/${attempts}`, `ok in ${took}`));
+      return `${result.stdout}\n${result.stderr}`;
+    }
+    const detail = result.stderr.trim().split("\n").pop() ?? "";
+    if (withFlag && /unknown (option|flag)|unrecognized/i.test(result.stderr)) {
+      // An older bun without the flag: drop it, and do not count the attempt.
+      withFlag = false;
+      n--;
+      continue;
+    }
+    deps.out(row("dependencies", `bun install attempt ${n}/${attempts}`, `exit ${result.exitCode} in ${took}`));
+    failures.push(`attempt ${n}: exit ${result.exitCode}${detail === "" ? "" : ` (${detail})`}`);
+  }
+  throw new Error(`bun install failed in ${dir} after ${attempts} attempts:\n${failures.join("\n")}`);
+}
+
 export type PinOutcome = "cloned" | "advanced" | "at-pin" | "held";
 
 export interface PinResult {
@@ -550,9 +623,7 @@ export async function ensurePluginAtPin(
     const spin = spinner("dependencies", deps);
     let out = "";
     try {
-      const r = await deps.run(["bun", "install"], { cwd: dir });
-      out = `${r.stdout}\n${r.stderr}`;
-      if (r.exitCode !== 0) throw new Error(`bun install failed in ${dir}`);
+      out = await installDependencies(deps, dir);
     } finally {
       spin.stop();
     }

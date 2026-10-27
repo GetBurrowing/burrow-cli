@@ -295,6 +295,12 @@ export interface SpawnOptions {
    * process table and not in the child's environment.
    */
   stdin?: string;
+  /**
+   * Aborting kills the child's whole process tree (it runs in its own process
+   * group) and settles the call with exit code 143, so a hung installer cannot
+   * outlive the caller's deadline or keep our pipes open through a grandchild.
+   */
+  signal?: AbortSignal;
 }
 
 /**
@@ -316,11 +322,36 @@ export async function spawnWithSecrets(
   if (options.allowSecretsInArgv !== true) assertNoSecretsInArgv(argv, store);
   const env = { ...(options.env ?? process.env), ...(options.secretEnv ?? {}) } as Record<string, string>;
   const stdin = options.stdin === undefined ? "ignore" : new Blob([options.stdin]);
-  const proc = Bun.spawn(argv, { cwd: options.cwd, env, stdin, stdout: "pipe", stderr: "pipe" });
-  const [stdout, stderr, exitCode] = await Promise.all([
-    new Response(proc.stdout).text(),
-    new Response(proc.stderr).text(),
-    proc.exited,
-  ]);
-  return { exitCode, stdout, stderr };
+  const signal = options.signal;
+  const proc = Bun.spawn(argv, {
+    cwd: options.cwd,
+    env,
+    stdin,
+    stdout: "pipe",
+    stderr: "pipe",
+    ...(signal === undefined ? {} : { detached: true }),
+  });
+  let aborted = false;
+  const onAbort = (): void => {
+    aborted = true;
+    // The group first (the installer's own workers), then the child itself.
+    try {
+      process.kill(-proc.pid, "SIGKILL");
+    } catch {}
+    try {
+      proc.kill("SIGKILL");
+    } catch {}
+  };
+  if (signal?.aborted === true) onAbort();
+  else signal?.addEventListener("abort", onAbort, { once: true });
+  try {
+    const [stdout, stderr, exitCode] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ]);
+    return { exitCode: aborted ? 143 : exitCode, stdout, stderr };
+  } finally {
+    signal?.removeEventListener("abort", onAbort);
+  }
 }

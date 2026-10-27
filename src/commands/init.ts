@@ -93,7 +93,7 @@ export function envReference(variable: string): string {
 
 export type Runner = (
   argv: string[],
-  options?: { cwd?: string; allowSecretsInArgv?: boolean; env?: Record<string, string | undefined> },
+  options?: { cwd?: string; allowSecretsInArgv?: boolean; env?: Record<string, string | undefined>; signal?: AbortSignal },
 ) => Promise<SpawnResult>;
 
 export interface InitDeps {
