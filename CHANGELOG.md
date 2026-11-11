@@ -10,6 +10,22 @@ that matters in the field: is this one newer than what I had?
 Minor for a new capability or a changed default; patch for a fix that changes no
 behaviour anyone was relying on.
 
+## 0.18.0
+
+**`burrow codex` can run under a Codex permission profile, and pick its model.**
+Codex 0.16x replaces `sandbox_mode` with permission profiles (`default_permissions`
+and `[permissions.<name>]` in `config.toml`), which can confine what commands read,
+not only what they write. But Codex treats a sandbox mode from any source, a
+`thread/start` request included, as the legacy settings and then ignores the
+profile, and the bridge always sent one. `--sandbox profile` sends none, on
+`thread/start` and `thread/resume`, so the profile in the agent's `CODEX_HOME`
+governs its commands; pair it with `--approvals decline`, since `accept` approves
+a command's request to leave the profile. `--model ID` and `--effort LEVEL`
+(`model_reasoning_effort`) are sent on every thread start and resume, so a restart
+with another model moves the agent's existing threads too. All three are carried
+into the tmux pane. Unset, nothing changes: the defaults are still `accept` and
+`danger-full-access`, and Codex's config chooses the model.
+
 ## 0.17.1
 
 **The plugin `bun install` can no longer hang a launch.** A first install on a

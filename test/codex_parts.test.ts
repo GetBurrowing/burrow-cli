@@ -227,6 +227,17 @@ describe("suite codex options and argv", () => {
     expect(() => parseCodexOptions(["--sandbox", "yolo"])).toThrow();
   });
 
+  test("--sandbox profile, --model and --effort are taken; odd values are refused by name", () => {
+    expect(parseCodexOptions(["--sandbox", "profile", "--approvals", "decline", "--model", "gpt-6-astra", "--effort", "medium"])).toEqual({
+      noSession: false, replyMcp: false, approvals: "decline", sandbox: "profile", model: "gpt-6-astra", effort: "medium",
+    });
+    expect(parseCodexOptions(["--model", "gpt-5.6-sol"]).model).toBe("gpt-5.6-sol");
+    expect(() => parseCodexOptions(["--model", "GPT 6"])).toThrow("--model must be a model id");
+    expect(() => parseCodexOptions(["--model", "a;rm -rf"])).toThrow("--model must be a model id");
+    expect(() => parseCodexOptions(["--effort", "very-high"])).toThrow("--effort must be a reasoning effort");
+    expect(() => parseCodexOptions(["--model"])).toThrow("--model needs a value");
+  });
+
   test("the agent name drops a -codex transport suffix", () => {
     expect(codexAgentName("oddjob-codex")).toBe("oddjob");
   });
@@ -435,5 +446,25 @@ describe("suite codex: login and launch", () => {
     expect(tail).toEqual(["codex", "--root", join(t.home, "agent"), "--no-session", "--approvals", "decline", "--sandbox", "danger-full-access"]);
     expect(create.join(" ")).not.toContain("tok-123");
     expect(JSON.parse(roster[0]!).agents[0]).toMatchObject({ session: "burrow-oddjob", kind: "codex" });
+  });
+
+  test("the pane runs with the same --sandbox profile, --model and --effort, and the bridge gets them", async () => {
+    const tmuxCalls: string[][] = [];
+    const t = await deps({
+      tmux: {
+        env: {},
+        which: (n) => `/usr/bin/${n}`,
+        run: async (argv) => {
+          tmuxCalls.push(argv);
+          return { exitCode: argv[1] === "list-panes" ? 1 : 0, stdout: "", stderr: "" };
+        },
+      },
+    });
+    const flags = ["--approvals", "decline", "--sandbox", "profile", "--model", "gpt-6-astra", "--effort", "medium"];
+    expect(await runCodex(flags, t.d)).toBe(0);
+    const create = tmuxCalls.find((a) => a.includes("new-session"))!;
+    expect(create.slice(create.indexOf("codex"))).toEqual(["codex", "--root", join(t.home, "agent"), "--no-session", ...flags]);
+    expect(await runCodex(["--no-session", ...flags], t.d)).toBe(0);
+    expect(t.bridges.at(-1)).toMatchObject({ approvals: "decline", sandbox: "profile", model: "gpt-6-astra", effort: "medium" });
   });
 });
