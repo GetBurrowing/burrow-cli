@@ -48,10 +48,10 @@ import { ensureSupervision, installedBinary, liveSupervisorIo, type SupervisorIo
 import { VERSION, CLI_NAME } from "../version.ts";
 import { migrateAgentRootOrSay } from "../agent_root_names.ts";
 import { AppServerClient, processTransport } from "../codex/app_server.ts";
-import { CodexBridge, type ApprovalPolicy } from "../codex/bridge.ts";
+import { CodexBridge, type ApprovalPolicy, type SandboxChoice } from "../codex/bridge.ts";
 import { PhoenixChannel, socketUrl, type SocketLike } from "../codex/phoenix.ts";
 import { BRIDGE_SOCKET_ENVS, listenBridgeSocket, runReplyMcp } from "../codex/reply_mcp.ts";
-import type { InitializeResponse, SandboxMode } from "../codex/protocol.ts";
+import type { InitializeResponse } from "../codex/protocol.ts";
 
 export const AGENT = "codex";
 export const CODEX_INSTALL_HINT = "install it with `npm install -g @openai/codex` (or see https://github.com/openai/codex)";
@@ -66,28 +66,39 @@ export const headerEnvName = (i: number): string => `CODEX_SUITE_MCP_HEADER_${i}
 export const TOOLS_MCP = "burrow";
 export const CHANNEL_MCP = "burrow-channel";
 
-const SANDBOXES: readonly SandboxMode[] = ["read-only", "workspace-write", "danger-full-access"];
+const SANDBOXES: readonly SandboxChoice[] = ["read-only", "workspace-write", "danger-full-access", "profile"];
+/** A model slug as Codex's catalog spells them (`gpt-6-astra`, `gpt-5.6-sol`). */
+const MODEL_ID = /^[a-z0-9][a-z0-9._-]{0,63}$/;
+/** A reasoning effort word (`low` … `ultra`); Codex itself refuses one the model does not take. */
+const EFFORT = /^[a-z]{1,16}$/;
 
 export interface CodexOptions {
   root?: string;
   noSession: boolean;
   replyMcp: boolean;
   approvals: ApprovalPolicy;
-  sandbox: SandboxMode;
+  sandbox: SandboxChoice;
+  model?: string;
+  effort?: string;
   codexHome?: string;
   codexBin?: string;
 }
 
 /**
  * Ours: `--root DIR`, `--no-session`, `--approvals accept|decline`,
- * `--sandbox MODE`, `--codex-home DIR`, `--codex BIN`, and the internal
- * `--reply-mcp`. Anything else is refused by name — a typo silently ignored
+ * `--sandbox MODE|profile`, `--model ID`, `--effort LEVEL`, `--codex-home DIR`,
+ * `--codex BIN`, and the internal `--reply-mcp`. Anything else is refused by name — a typo silently ignored
  * would be an agent running with a policy nobody chose.
  *
  * DEFAULTS: `--approvals accept --sandbox danger-full-access`, the parity of
  * `suite claude`'s `--dangerously-skip-permissions`: an agent nobody sits in
  * front of must not stop to ask. (Codex's workspace-write sandbox also needs
  * unprivileged user namespaces for bubblewrap, which not every host allows.)
+ *
+ * `--sandbox profile` sends Codex no sandbox mode, so the `default_permissions`
+ * profile in its config (under `--codex-home`) governs commands instead. Pair it
+ * with `--approvals decline`: `accept` approves a command's request to leave the
+ * profile. `--model` and `--effort` are sent on every thread start and resume.
  */
 export function parseCodexOptions(args: string[]): CodexOptions {
   const out: CodexOptions = { noSession: false, replyMcp: false, approvals: "accept", sandbox: "danger-full-access" };
@@ -108,9 +119,17 @@ export function parseCodexOptions(args: string[]): CodexOptions {
       if (v !== "accept" && v !== "decline") throw new Error(`--approvals must be accept or decline, got ${v}`);
       out.approvals = v;
     } else if (a === "--sandbox") {
-      const v = value() as SandboxMode;
+      const v = value() as SandboxChoice;
       if (!SANDBOXES.includes(v)) throw new Error(`--sandbox must be one of ${SANDBOXES.join(", ")}, got ${v}`);
       out.sandbox = v;
+    } else if (a === "--model") {
+      const v = value();
+      if (!MODEL_ID.test(v)) throw new Error(`--model must be a model id such as gpt-6-astra, got ${JSON.stringify(v)}`);
+      out.model = v;
+    } else if (a === "--effort") {
+      const v = value();
+      if (!EFFORT.test(v)) throw new Error(`--effort must be a reasoning effort such as medium, got ${JSON.stringify(v)}`);
+      out.effort = v;
     } else throw new Error(`unknown option ${a}`);
   }
   return out;
@@ -205,7 +224,9 @@ export interface BridgeInput {
   codexHome: string;
   codexBin: string;
   approvals: ApprovalPolicy;
-  sandbox: SandboxMode;
+  sandbox: SandboxChoice;
+  model?: string;
+  effort?: string;
   env: Record<string, string | undefined>;
   log(line: string): void;
 }
@@ -313,6 +334,8 @@ export async function runCodex(args: string[], deps: CodexDeps): Promise<number>
       codexBin,
       approvals: opts.approvals,
       sandbox: opts.sandbox,
+      ...(opts.model !== undefined ? { model: opts.model } : {}),
+      ...(opts.effort !== undefined ? { effort: opts.effort } : {}),
       env: deps.env,
       log: (line) => deps.stderr.write(`${CLI_NAME} codex: ${line}\n`),
     });
@@ -332,6 +355,8 @@ export async function runCodex(args: string[], deps: CodexDeps): Promise<number>
     opts.approvals,
     "--sandbox",
     opts.sandbox,
+    ...(opts.model !== undefined ? ["--model", opts.model] : []),
+    ...(opts.effort !== undefined ? ["--effort", opts.effort] : []),
     ...(opts.codexHome ? ["--codex-home", opts.codexHome] : []),
     ...(opts.codexBin ? ["--codex", opts.codexBin] : []),
   ];
@@ -437,6 +462,8 @@ export async function runBridge(input: BridgeInput): Promise<number> {
         cwd: input.root,
         approvals: input.approvals,
         sandbox: input.sandbox,
+        ...(input.model !== undefined ? { model: input.model } : {}),
+        ...(input.effort !== undefined ? { effort: input.effort } : {}),
         log,
         loadThreads: () => loadThreads(input.root),
         saveThreads: (t) => saveThreads(input.root, t),
