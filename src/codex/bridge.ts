@@ -56,6 +56,14 @@ export const DEDUPE_MS = 2_000;
 
 export type ApprovalPolicy = "accept" | "decline";
 
+/**
+ * A Codex sandbox mode, or `profile`: send none, so Codex applies the
+ * `default_permissions` profile from its config. Codex treats a sandbox mode
+ * from any source, a request included, as the legacy settings and then ignores
+ * `[permissions]`, so a profile only takes effect when the bridge sends nothing.
+ */
+export type SandboxChoice = SandboxMode | "profile";
+
 /** The channel surface the bridge needs; {@link PhoenixChannel} provides it. */
 export interface ChannelLike {
   on(event: string, fn: (payload: Payload) => void): void;
@@ -65,7 +73,11 @@ export interface ChannelLike {
 export interface BridgeOptions {
   cwd: string;
   approvals: ApprovalPolicy;
-  sandbox: SandboxMode;
+  sandbox: SandboxChoice;
+  /** The model every thread starts or resumes on; unset, Codex's config decides. */
+  model?: string;
+  /** Its reasoning effort (`model_reasoning_effort`); unset, Codex's config decides. */
+  effort?: string;
   log(line: string): void;
   now?(): number;
   /** Saved thread ids, keyed by space. */
@@ -263,7 +275,16 @@ export class CodexBridge {
   private async ensureThread(space: string): Promise<string> {
     const running = this.live.get(space);
     if (running !== undefined) return running;
-    const common = { cwd: this.opts.cwd, approvalPolicy: this.approvalPolicy, sandbox: this.opts.sandbox, developerInstructions: DEVELOPER_INSTRUCTIONS };
+    // Sent on resume too, so a restart with another --model or --effort moves
+    // the space's existing thread, not only threads started afterwards.
+    const common = {
+      cwd: this.opts.cwd,
+      approvalPolicy: this.approvalPolicy,
+      ...(this.opts.sandbox === "profile" ? {} : { sandbox: this.opts.sandbox }),
+      ...(this.opts.model !== undefined ? { model: this.opts.model } : {}),
+      ...(this.opts.effort !== undefined ? { config: { model_reasoning_effort: this.opts.effort } } : {}),
+      developerInstructions: DEVELOPER_INSTRUCTIONS,
+    };
     const saved = this.threads[space];
     if (saved !== undefined) {
       try {

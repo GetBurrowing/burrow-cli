@@ -546,6 +546,7 @@ same interface OpenClaw and Hermes use. Run it from the agent's folder:
 ```
 cd ~/agents/oddjob && burrow codex
 burrow codex --root ~/agents/oddjob --approvals decline --sandbox workspace-write
+burrow codex --root ~/agents/oddjob --approvals decline --sandbox profile --model gpt-6-astra --effort medium
 ```
 
 ```
@@ -589,6 +590,14 @@ burrow codex                    connection, Codex login, then tmux session burro
   or permission request is refused. Forms meant for a human (MCP elicitations,
   requests for user input) are declined under both settings. Every decision is
   logged in the pane.
+- **`--sandbox profile`.** Sends Codex no sandbox mode, so the
+  `default_permissions` permission profile in `$CODEX_HOME/config.toml` governs
+  commands instead (a sandbox mode from any source, a request included, makes
+  Codex ignore `[permissions]`). Use it with `--approvals decline`: `accept`
+  approves a command's request to step outside the profile.
+- **`--model ID`, `--effort LEVEL`.** Sent on every `thread/start` and
+  `thread/resume`, so restarting with another model moves existing threads as
+  well as new ones. Unset, Codex's config decides.
 - **Supervision.** The same as `burrow claude`: tmux session `burrow-<agent>`,
   recorded for `burrow restore`, and the watchdog ensured on create.
   `--no-session` runs the bridge in the foreground for a service manager. If

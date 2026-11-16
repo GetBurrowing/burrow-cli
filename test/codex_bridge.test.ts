@@ -7,7 +7,7 @@
  */
 import { describe, expect, test } from "bun:test";
 import { AppServerClient, type Transport } from "../src/codex/app_server.ts";
-import { CodexBridge, DEVELOPER_INSTRUCTIONS, MAX_PENDING_PER_SPACE, renderAttention, type ApprovalPolicy } from "../src/codex/bridge.ts";
+import { CodexBridge, DEVELOPER_INSTRUCTIONS, MAX_PENDING_PER_SPACE, renderAttention, type ApprovalPolicy, type SandboxChoice } from "../src/codex/bridge.ts";
 import type { Payload } from "../src/codex/phoenix.ts";
 
 const SPACE_A = "019f0000-0000-7000-8000-00000000000a";
@@ -121,7 +121,7 @@ class FakeChannel {
   }
 }
 
-function setup(opts: { approvals?: ApprovalPolicy; saved?: Record<string, string> } = {}) {
+function setup(opts: { approvals?: ApprovalPolicy; saved?: Record<string, string>; sandbox?: SandboxChoice; model?: string; effort?: string } = {}) {
   const server = new FakeAppServer();
   const channel = new FakeChannel();
   const logs: string[] = [];
@@ -135,7 +135,9 @@ function setup(opts: { approvals?: ApprovalPolicy; saved?: Record<string, string
   bridge = new CodexBridge(channel, client, {
     cwd: "/srv/agents/codexy",
     approvals: opts.approvals ?? "accept",
-    sandbox: "danger-full-access",
+    sandbox: opts.sandbox ?? "danger-full-access",
+    ...(opts.model !== undefined ? { model: opts.model } : {}),
+    ...(opts.effort !== undefined ? { effort: opts.effort } : {}),
     log: (l) => logs.push(l),
     now: () => clock,
     loadThreads: () => saved,
@@ -277,6 +279,52 @@ describe("the instructions name the burrow MCP servers", () => {
     expect(DEVELOPER_INSTRUCTIONS).toContain("The `burrow` MCP server");
     expect(DEVELOPER_INSTRUCTIONS).not.toContain("startup-suite");
     expect(DEVELOPER_INSTRUCTIONS).not.toContain("suite-channel");
+  });
+});
+
+describe("--sandbox profile, --model and --effort", () => {
+  test("profile sends no sandbox mode, so Codex's default_permissions profile applies", async () => {
+    const t = setup({ sandbox: "profile", approvals: "decline" });
+    t.channel.deliver("attention", attention(SPACE_A, "hello"));
+    await t.bridge.whenIdle();
+    const [start] = t.server.calls("thread/start");
+    expect(start?.params).toEqual({
+      cwd: "/srv/agents/codexy",
+      approvalPolicy: "on-request",
+      developerInstructions: DEVELOPER_INSTRUCTIONS,
+      serviceName: "suite",
+    });
+    expect(Object.hasOwn(start!.params, "sandbox")).toBe(false);
+  });
+
+  test("the model and effort go with thread/start", async () => {
+    const t = setup({ model: "gpt-6-astra", effort: "medium" });
+    t.channel.deliver("attention", attention(SPACE_A, "hello"));
+    await t.bridge.whenIdle();
+    expect(t.server.calls("thread/start")[0]?.params).toMatchObject({
+      model: "gpt-6-astra",
+      config: { model_reasoning_effort: "medium" },
+      sandbox: "danger-full-access",
+    });
+  });
+
+  test("and with thread/resume, so a restart moves a saved thread to the new model", async () => {
+    const t = setup({ saved: { [SPACE_A]: "thread-old" }, sandbox: "profile", model: "gpt-6.1-sol", effort: "high" });
+    t.server.resumable.add("thread-old");
+    t.channel.deliver("attention", attention(SPACE_A, "back"));
+    await t.bridge.whenIdle();
+    const [resume] = t.server.calls("thread/resume");
+    expect(resume?.params).toMatchObject({ threadId: "thread-old", model: "gpt-6.1-sol", config: { model_reasoning_effort: "high" } });
+    expect(Object.hasOwn(resume!.params, "sandbox")).toBe(false);
+  });
+
+  test("unset, neither is sent and Codex's config decides", async () => {
+    const t = setup();
+    t.channel.deliver("attention", attention(SPACE_A, "hello"));
+    await t.bridge.whenIdle();
+    const params = t.server.calls("thread/start")[0]!.params;
+    expect(Object.hasOwn(params, "model")).toBe(false);
+    expect(Object.hasOwn(params, "config")).toBe(false);
   });
 });
 
