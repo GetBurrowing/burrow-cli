@@ -10,6 +10,18 @@ that matters in the field: is this one newer than what I had?
 Minor for a new capability or a changed default; patch for a fix that changes no
 behaviour anyone was relying on.
 
+## 0.18.2
+
+**The Claude Code plugin pin moves to burrow-channel-claude-code 0.4.3.**
+`CLAUDE_CODE_CHANNEL_REF` is `e9641d9c66a505ae071c56ae469c6b5bbb15a827` (was
+`c5993c6f0c00eca478caac6d84fcd32a9d9ff501`, 0.4.2). 0.4.3 declares the `attention_ack`
+client feature: it acks each chat attention once it has handed it to Claude
+Code, so core's delivery queue redelivers a message the plugin never got, and it
+dedupes attentions by `message_id` across reconnects so a redelivery is shown
+once. `burrow claude` moves a clean checkout that no running session uses to the
+new pin on its next launch; a session already running keeps the plugin it
+started with until it is restarted.
+
 ## 0.18.1
 
 **The Claude Code plugin pin moves to burrow-channel-claude-code 0.4.2.**
