@@ -10,6 +10,19 @@ that matters in the field: is this one newer than what I had?
 Minor for a new capability or a changed default; patch for a fix that changes no
 behaviour anyone was relying on.
 
+## 0.18.1
+
+**The Claude Code plugin pin moves to burrow-channel-claude-code 0.4.2.**
+`CLAUDE_CODE_CHANNEL_REF` is `c5993c6f0c00eca478caac6d84fcd32a9d9ff501` (was
+`a77532e6623405c2eb9043d2d663a1e09a3e45f2`, 0.4.1). In 0.4.2 `suite_reply`
+reports a reply as sent only when the server returns a message id: an ok ack
+without one is now an error whose text starts `NOT POSTED` and says whether to
+retry. A reply issued while the channel is not joined waits up to 15 s for the
+rejoin instead of being pushed into a channel that is about to be discarded.
+`burrow claude` moves a clean checkout that no running session uses to the new
+pin on its next launch; a session already running keeps the plugin it started
+with until it is restarted.
+
 ## 0.18.0
 
 **`burrow codex` can run under a Codex permission profile, and pick its model.**
