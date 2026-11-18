@@ -162,15 +162,15 @@ export const PLUGIN_REPO_NAME = "burrow-channel-claude-code";
 /**
  * DEPLOYER: BUMP THIS BEFORE burrow-cli MERGES.
  *
- * This is the commit tagged 0.4.1 on burrow-channel-claude-code main (PR #29,
- * product-name copy to Burrow, Burrow rename F). Before 0.9.0 the checkout was
+ * This is the commit tagged 0.4.2 on burrow-channel-claude-code main (PR #30,
+ * suite_reply reports success only with a message_id). Before 0.9.0 the checkout was
  * cloned once and never moved again: hive's sat at b238164 (2026-07-31) while
  * main moved on. `burrow claude` now holds the checkout at this commit; see
  * {@link ensurePluginAtPin} in claude_wiring.ts.
  * Pin a commit on main, never a branch tip: a squash merge deletes the branch
  * and the tip would dangle.
  */
-export const CLAUDE_CODE_CHANNEL_REF = "a77532e6623405c2eb9043d2d663a1e09a3e45f2";
+export const CLAUDE_CODE_CHANNEL_REF = "c5993c6f0c00eca478caac6d84fcd32a9d9ff501";
 
 /** The plugin's clone URL under the owner `env` names (SUITE_GITHUB_OWNER). */
 export function pluginRepo(env: Env = process.env): string {

@@ -19,7 +19,7 @@ import { DEPS_MARKER, ensurePluginAtPin, readHeadSha } from "../src/claude_wirin
 import { CLAUDE_CODE_CHANNEL_REF, pluginRepo } from "../src/commands/init.ts";
 import type { LiveProbe } from "../src/migrate.ts";
 
-const PIN = "a77532e6623405c2eb9043d2d663a1e09a3e45f2";
+const PIN = "c5993c6f0c00eca478caac6d84fcd32a9d9ff501";
 const OLD = "b238164b238164b238164b238164b238164b2381";
 
 const roots: string[] = [];
@@ -105,7 +105,7 @@ const deps = (run: (argv: string[]) => Promise<{ exitCode: number; stdout: strin
 const head = (dir: string) => readFileSync(join(dir, ".git", "HEAD"), "utf8").trim();
 
 describe("the pin", () => {
-  test("CLAUDE_CODE_CHANNEL_REF is a full commit: 0.4.1 on burrow-channel-claude-code main", () => {
+  test("CLAUDE_CODE_CHANNEL_REF is a full commit: 0.4.2 on burrow-channel-claude-code main", () => {
     expect(CLAUDE_CODE_CHANNEL_REF).toBe(PIN);
   });
 
