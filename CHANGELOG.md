@@ -10,6 +10,18 @@ that matters in the field: is this one newer than what I had?
 Minor for a new capability or a changed default; patch for a fix that changes no
 behaviour anyone was relying on.
 
+## 0.19.0
+
+**`burrow watch --host-only`: serve the host connections and never type.**
+A long-running `watch` that only runs the host manager (config access and the
+remote terminal, `src/host`): no halt sweep, no launch-dialog answers, no
+telemetry, so it sends no `tmux send-keys` to any pane. It never self-installs
+a service (its caller supervises it), and it refuses `--force` and `--once`.
+It exists for a Burrow agent host, whose runner promises that nothing types
+into a hosted agent's pane while it serves that agent's remote terminal. It is
+a contract of its own, pinned by tests that fail if a host-only pass issues
+any tmux command, not a side effect of `--dry-run`.
+
 ## 0.18.2
 
 **The Claude Code plugin pin moves to burrow-channel-claude-code 0.4.3.**
