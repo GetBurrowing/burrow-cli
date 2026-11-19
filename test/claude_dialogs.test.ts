@@ -30,7 +30,7 @@ import { CHANNEL_SERVER } from "../src/commands/init.ts";
 import type { RunResult } from "../src/tmux.ts";
 import { runRestore, type RestoreDeps } from "../src/commands/restore.ts";
 import { serializeRoster } from "../src/roster.ts";
-import { runWatch, type WatchDeps } from "../src/commands/watch.ts";
+import { parseWatchArgs, runWatch, shouldSelfInstall, watchPass, type WatchDeps } from "../src/commands/watch.ts";
 import { emptyConfig } from "../src/config.ts";
 
 const DIR = resolve(import.meta.dir, "fixtures/claude-code-2.1.288-dialogs");
@@ -373,5 +373,55 @@ describe("suite watch answers a dialog left on screen in a session it owns", () 
     const t = fakeTmux({ "suite-a": fixture("trust-folder.80") });
     await runWatch(watchDeps(t, []), opts(false));
     expect(t.calls.filter((a) => a[1] === "send-keys")).toEqual([]);
+  });
+});
+
+/*
+ * `--host-only` is a contract a Burrow agent host builds on: its runner promises
+ * that nothing types into the agent's pane, and runs `burrow watch --host-only`
+ * beside it to serve the remote terminal. These fail if a host-only pass ever
+ * sends a key, even with apply on and a dialog on screen.
+ */
+describe("watch --host-only never types into a pane", () => {
+  function watchDeps(t: ReturnType<typeof fakeTmux>): WatchDeps {
+    return {
+      tmux: t.tmux,
+      now: () => new Date(0),
+      sleep: async () => {},
+      post: async () => 200,
+      readTail: () => null,
+      realpath: (p) => p,
+      listProjectDirs: () => [],
+      newestTranscript: () => null,
+      log: () => {},
+      dialogs: { tmux: t.tmux, now: () => 0, sleep: async () => {}, log: () => {} },
+    };
+  }
+  const opts = { apply: true, config: emptyConfig(), auth: null, host: "h", home: "/home/agent" };
+
+  test("a full pass with apply on answers the dialog (the control: this rig can type)", async () => {
+    const t = fakeTmux({ "suite-a": fixture("trust-folder.80") });
+    let synced = 0;
+    await watchPass({ sync: () => void synced++ }, watchDeps(t), opts, false);
+    expect(synced).toBe(1);
+    expect(t.calls.filter((a) => a[1] === "send-keys")).toEqual([["/usr/bin/tmux", "send-keys", "-t", "=suite-a:", "Down"]]);
+  });
+
+  test("a host-only pass syncs the host and sends no tmux send-keys", async () => {
+    const t = fakeTmux({ "suite-a": fixture("trust-folder.80") });
+    let synced = 0;
+    for (let pass = 0; pass < 3; pass++) await watchPass({ sync: () => void synced++ }, watchDeps(t), opts, true);
+    expect(synced).toBe(3);
+    expect(t.calls.filter((a) => a.includes("send-keys"))).toEqual([]);
+    // Stronger: the sweep never ran, so not even a capture or a listing.
+    expect(t.calls).toEqual([]);
+  });
+
+  test("--host-only parses, and never self-installs a second watcher", () => {
+    expect(parseWatchArgs(["--host-only"]).hostOnly).toBe(true);
+    expect(parseWatchArgs([]).hostOnly).toBe(false);
+    const args = parseWatchArgs(["--host-only", "--interval", "10"]);
+    expect(args.apply).toBe(true);
+    expect(shouldSelfInstall(args, {})).toBe(false);
   });
 });

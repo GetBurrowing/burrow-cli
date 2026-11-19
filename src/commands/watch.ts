@@ -568,6 +568,15 @@ export function liveWatchDeps(
 export interface WatchArgs {
   apply: boolean;
   once: boolean;
+  /**
+   * `--host-only`: serve the host connections (config access, the remote
+   * terminal: src/host) and do nothing else. No halt sweep, no dialog answers,
+   * no telemetry: this process never sends a key to any pane. For a caller
+   * that owns the session's lifecycle itself, such as a Burrow agent host,
+   * whose runner promises that nothing types into the agent's pane. A contract
+   * of its own, not a side effect of `--dry-run`.
+   */
+  hostOnly: boolean;
   intervalSeconds: number;
   install: boolean;
   /**
@@ -647,13 +656,16 @@ export async function forceRecover(
  *    every restart forever;
  *  - `--once`, which exists for an operator's own timer that already owns the
  *    schedule;
- *  - `--dry-run`, which must never change the machine it is inspecting.
+ *  - `--dry-run`, which must never change the machine it is inspecting;
+ *  - `--host-only`, whose caller already supervises it.
  */
 export function shouldSelfInstall(
-  args: Pick<WatchArgs, "once" | "apply" | "install">,
+  args: Pick<WatchArgs, "once" | "apply" | "install"> & Partial<Pick<WatchArgs, "hostOnly">>,
   env: Record<string, string | undefined>,
 ): boolean {
   if (!args.install) return false;
+  // Its caller supervises it; a self-installed copy would be a second, full watcher.
+  if (args.hostOnly === true) return false;
   if (isSupervised(env)) return false;
   if (args.once) return false;
   if (!args.apply) return false;
@@ -674,5 +686,23 @@ export function parseWatchArgs(argv: string[]): WatchArgs {
   const install = !argv.includes("--no-install");
   const f = argv.indexOf("--force");
   const force = f === -1 ? undefined : argv[f + 1];
-  return { apply, once, intervalSeconds, install, force };
+  const hostOnly = argv.includes("--host-only");
+  return { apply, once, intervalSeconds, install, force, hostOnly };
+}
+
+/**
+ * One pass of the long-running loop: the host connections, then (unless
+ * `hostOnly`) the halt and dialog sweep. With `hostOnly` nothing past
+ * `host.sync()` runs, so no tmux command of this module's is issued at all.
+ */
+export async function watchPass(
+  host: { sync(): void },
+  deps: WatchDeps,
+  opts: WatchOptions,
+  hostOnly: boolean,
+): Promise<HaltEvent[]> {
+  // Host connections (src/host): opened for folders whose config access or remote terminal is on.
+  host.sync();
+  if (hostOnly) return [];
+  return await runWatch(deps, opts);
 }

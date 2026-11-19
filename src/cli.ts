@@ -35,6 +35,7 @@ import {
   parseWatchArgs,
   runWatch,
   shouldSelfInstall,
+  watchPass,
 } from "./commands/watch.ts";
 import { liveRestoreDeps, runRestore } from "./commands/restore.ts";
 import {
@@ -194,7 +195,7 @@ export function usage(): string {
     row("doctor", "diagnose a broken setup"),
     row("status", "show every agent folder, session state and stamped agents (kind, root, live/stale, last verdict)"),
     row("", "--json [--dir PATH]: one JSON document on stdout (see README, Status contract)"),
-    row("watch", "recover halted agent sessions (--dry-run, --once, --interval N, --force SESSION)"),
+    row("watch", "recover halted agent sessions (--dry-run, --once, --interval N, --force SESSION, --host-only)"),
     row("config-access", "let the Burrow install edit THIS agent's config files: [DIR] off|owner|admins"),
     row("pane-status", "one agent session's state as JSON, for a supervisor (--session NAME, --answer)"),
     row("restore", "bring recorded agents back up (--adopt, --dry-run, --forget NAME)"),
@@ -288,6 +289,13 @@ export async function run(
     const opts = parseWatchArgs(args);
     const deps = liveWatchDeps();
 
+    // --host-only is a long-running host and nothing else: no forced
+    // recovery and no single sweep, both of which exist to type into a pane.
+    if (opts.hostOnly && (opts.force !== undefined || opts.once)) {
+      console.error(`${CLI_NAME} watch: --host-only cannot be combined with --force or --once`);
+      return 2;
+    }
+
     // Forced recovery: prove the clear + reorient path on demand.
     if (opts.force) {
       const base = {
@@ -351,9 +359,7 @@ export async function run(
     const host = new HostManager(liveHostDeps(process.env, (line) => console.error(`${CLI_NAME} watch: ${line}`)));
     for (;;) {
       try {
-        // Host connections (src/host): opened for folders whose config access is on.
-        host.sync();
-        await runWatch(deps, base);
+        await watchPass(host, deps, base, opts.hostOnly);
       } catch (err) {
         console.error(`${CLI_NAME} watch: pass failed: ${(err as Error).message}`);
       }
