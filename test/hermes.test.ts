@@ -1965,8 +1965,8 @@ describe("0.20.0: a home on the startup_suite platform key moves to burrow on st
 });
 
 describe("pins", () => {
-  test("the channel is pinned to burrow-channel-hermes v0.5.0 (PR #11)", () => {
-    expect(HERMES_CHANNEL_REF).toBe("1df1199f674868840affc7738f60ffb1f8daf632");
+  test("the channel is pinned to burrow-channel-hermes v0.5.1 (PR #12)", () => {
+    expect(HERMES_CHANNEL_REF).toBe("71a14f1120166ac00895d122b0bef7a1e56ce665");
   });
 
   test("the pin's DEPLOYER comment is present, so the bump is not forgotten at merge", () => {
