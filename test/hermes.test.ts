@@ -9,6 +9,7 @@ import {
   mkdtempSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   renameSync,
   rmSync,
   statSync,
@@ -28,6 +29,10 @@ import {
   LEGACY_LEAN_TOOLSET,
   MCP_SDK_PIN,
   TOOLSET_KEY,
+  PLATFORM_NAME,
+  PLATFORM_RENAME_MODULE,
+  INSTALLER_RESULT_LINE,
+  parsePlatformRename,
   MODEL_KEY_ENV,
   desiredModelKeys,
   agentNameForRoot,
@@ -129,6 +134,19 @@ function makeManagedPython(options: { pip?: boolean; mcpPresent?: boolean; gener
     `#!/usr/bin/env bash
 printf '%s\\0' "$@" >>"$HOME/python-calls"; printf '\\n' >>"$HOME/python-calls"
 if [ "$1" = "-c" ] && [ "$2" = "import mcp" ]; then [ -f ${JSON.stringify(marker)} ]; exit $?; fi
+if [ "$1" = "-m" ] && [ "$2" = "hermes_burrow_channel.platform_rename" ]; then
+  # The plugin's platform_rename contract (one JSON line; 0 moved, 2 refused, 1 failed). Records
+  # what it was run with, and what the installed plugin tree held at that moment.
+  { printf 'ARGV=%s\n' "$*"; printf 'PYTHONPATH=%s\n' "$PYTHONPATH"; printf 'HERMES_HOME=%s\n' "$HERMES_HOME"; printf 'CWD=%s\n' "$PWD"
+    printf 'TREE=%s\n' "$(ls "$4/plugins/burrow-platform" 2>/dev/null | tr '\n' ' ')"; } >>"$HOME/platform-rename-calls"
+  knob=ok; [ ! -f "$HOME/platform-rename-knob" ] || read -r knob <"$HOME/platform-rename-knob"
+  case "$knob" in
+    refuse) echo '{"ok": false, "refused": "GatewayRunning", "error": "a Hermes gateway is running for the home"}'; exit 2 ;;
+    fail) echo '{"ok": false, "error": "OperationalError: database is locked"}'; exit 1 ;;
+    garbage) echo 'Traceback (most recent call last):'; exit 0 ;;
+    *) echo '{"ok": true, "moved": {"gateway_routing": 3, "sessions": 3}, "tool": "burrow-channel-hermes platform_rename"}'; exit 0 ;;
+  esac
+fi
 if [ "$1" = "-m" ] && [ "$2" = "pip" ]; then
   ${options.pip === false ? 'echo "$0: No module named pip" >&2; exit 1' : `touch ${JSON.stringify(marker)}; exit 0`}
 fi
@@ -542,13 +560,13 @@ describe("the Burrow platform headless defaults (--full-toolset opts out)", () =
     makeManagedPython();
     const { result, exitCode } = await stamp();
     expect(exitCode).toBe(0);
-    expect(toolsetWrites(stubCalls())).toEqual([["config", "set", "platform_toolsets.startup_suite", JSON.stringify(HEADLESS_TOOLSET)]]);
+    expect(toolsetWrites(stubCalls())).toEqual([["config", "set", "platform_toolsets.burrow", JSON.stringify(HEADLESS_TOOLSET)]]);
     // No other platform's toolsets and no global default are touched.
     const others = configWrites(stubCalls()).filter((c) => /toolset/.test(c.argv[2] ?? "") && c.argv[2] !== TOOLSET_KEY);
     expect(others).toEqual([]);
     const parsed = parseYaml(readFileSync(cfgPath(), "utf8")) as Record<string, unknown>;
     const pts = lookupKey(parsed, "platform_toolsets");
-    expect(pts).toEqual({ startup_suite: HEADLESS_TOOLSET });
+    expect(pts).toEqual({ burrow: HEADLESS_TOOLSET });
     expect(HEADLESS_TOOLSET).toContain("terminal");
     expect(HEADLESS_TOOLSET).toContain("file");
     expect(lookupKey(parsed, "approvals.mode")).toBe("off");
@@ -564,7 +582,7 @@ describe("the Burrow platform headless defaults (--full-toolset opts out)", () =
     writeFileSync(cfgPath(), stringifyYaml({ platform_toolsets: { cli: ["hermes-cli"], telegram: ["hermes-telegram"] }, toolsets: ["kanban"] }));
     expect((await stamp()).exitCode).toBe(0);
     const cfg = parseYaml(readFileSync(cfgPath(), "utf8")) as Record<string, unknown>;
-    expect(cfg.platform_toolsets).toEqual({ cli: ["hermes-cli"], telegram: ["hermes-telegram"], startup_suite: HEADLESS_TOOLSET });
+    expect(cfg.platform_toolsets).toEqual({ cli: ["hermes-cli"], telegram: ["hermes-telegram"], burrow: HEADLESS_TOOLSET });
     expect(cfg.toolsets).toEqual(["kanban"]);
   });
 
@@ -583,7 +601,7 @@ describe("the Burrow platform headless defaults (--full-toolset opts out)", () =
     makeManagedPython();
     mkdirSync(hermesHome, { recursive: true });
     const mine = ["hermes-cli", "startup-suite"];
-    writeFileSync(cfgPath(), stringifyYaml({ platform_toolsets: { startup_suite: mine } }));
+    writeFileSync(cfgPath(), stringifyYaml({ platform_toolsets: { burrow: mine } }));
     for (const extra of [[], ["--full-toolset"]]) {
       const { result, exitCode } = await stamp(stampArgs(extra));
       expect(exitCode).toBe(0);
@@ -597,7 +615,7 @@ describe("the Burrow platform headless defaults (--full-toolset opts out)", () =
   test("upgrades the old managed chat-only list to the headless list", async () => {
     makeManagedPython();
     mkdirSync(hermesHome, { recursive: true });
-    writeFileSync(cfgPath(), stringifyYaml({ platform_toolsets: { startup_suite: LEGACY_LEAN_TOOLSET } }));
+    writeFileSync(cfgPath(), stringifyYaml({ platform_toolsets: { burrow: LEGACY_LEAN_TOOLSET } }));
     const { result, exitCode } = await stamp();
     expect(exitCode).toBe(0);
     expect(toolsetValue()).toEqual(HEADLESS_TOOLSET);
@@ -1454,7 +1472,7 @@ describe("0.12.2: a start that fails after the rename restores the pre-0.12.0 ho
     expectAsBefore(before);
     expect(tmux.ran.filter((a) => a[1] === "new-session")).toEqual([]);
     const err = stderr.join("");
-    expect(err).toContain("the hermes-suite-channel installer exited 1");
+    expect(err).toContain("the burrow-channel-hermes installer exited 1");
     expect(err).toContain("they were put back as they were");
     expect(readdirSync(hermesHome).filter((n) => n.startsWith(".burrow-start-snapshot-"))).toEqual([]);
 
@@ -1725,9 +1743,230 @@ describe("--stamp-only as a subprocess: the machine contract", () => {
   });
 });
 
+/* ------------------------------------------------------------------------- */
+/* 0.20.0: the gateway platform key moves from startup_suite to burrow        */
+/* ------------------------------------------------------------------------- */
+
+const DM = "01a11822-e498-7001-9d40-382ab166116c";
+const OLD_HOME_CHANNEL = { platform: "startup_suite", chat_id: DM, name: "Ryan Milvenan (DM)" };
+const renameCalls = (): string[][] => {
+  const f = join(home, "platform-rename-calls");
+  if (!existsSync(f)) return [];
+  const calls: string[][] = [];
+  for (const line of readFileSync(f, "utf8").split("\n")) {
+    if (line.startsWith("ARGV=")) calls.push([]);
+    if (line !== "") calls[calls.length - 1]?.push(line);
+  }
+  return calls;
+};
+const setRenameKnob = (v: string): void => writeFileSync(join(home, "platform-rename-knob"), `${v}\n`);
+
+/**
+ * Put a stamped home back as burrow-channel-hermes before v0.5.0 (with
+ * burrow-cli 0.12-0.19) left it, as measured on a live agent: the toolset
+ * list and the /sethome home channel under `startup_suite`, and the installed
+ * plugin tree holding the `hermes_suite_channel` package.
+ */
+function makePre020Home(options: { env?: string } = {}): void {
+  const cfg = readCfg();
+  cfg.platform_toolsets = { cli: ["hermes-cli"], startup_suite: cfg.platform_toolsets.burrow };
+  cfg.platforms = { startup_suite: { home_channel: OLD_HOME_CHANNEL } };
+  writeFileSync(cfgFile(), stringifyYaml(cfg));
+  const tree = join(hermesHome, "plugins", "burrow-platform");
+  renameSync(join(tree, "hermes_burrow_channel"), join(tree, "hermes_suite_channel"));
+  if (options.env !== undefined) {
+    const env = join(hermesHome, ".env");
+    writeFileSync(env, readFileSync(env, "utf8") + options.env);
+  }
+}
+
+async function pre020Home(options: { env?: string } = {}) {
+  makeManagedPython();
+  expect((await stamp()).exitCode).toBe(0);
+  makePre020Home(options);
+  stderr = [];
+  return { hashes: treeHashes(hermesHome), calls: stubCalls().length, installs: installerCalls().length };
+}
+
+describe("0.20.0: a home on the startup_suite platform key moves to burrow on start, never on attach", () => {
+  test("the names", () => {
+    expect(PLATFORM_NAME).toBe("burrow");
+    expect(TOOLSET_KEY).toBe("platform_toolsets.burrow");
+    expect(PLATFORM_RENAME_MODULE).toBe("hermes_burrow_channel.platform_rename");
+    expect(INSTALLER_RESULT_LINE).toBe("burrow-channel-hermes: installed");
+  });
+
+  test("START moves the toolsets, the home channel and the sessions; a second start moves nothing", async () => {
+    await pre020Home();
+    const tmux = fakeTmux();
+    expect(await runHermes(stampArgs(), makeDeps({ tmux: tmux.deps }))).toBe(0);
+    expect(tmux.ran.filter((a) => a[1] === "new-session")).toHaveLength(1);
+
+    const cfg = readCfg();
+    expect(cfg.platform_toolsets).toEqual({ cli: ["hermes-cli"], burrow: HEADLESS_TOOLSET });
+    expect(cfg.platforms).toEqual({ burrow: { home_channel: { ...OLD_HOME_CHANNEL, platform: "burrow" } } });
+    expect(readFileSync(cfgFile(), "utf8")).not.toContain("startup_suite");
+
+    // The sessions moved through the plugin's own module, LAST: the installer had
+    // already replaced the old build, and Hermes's modules were importable.
+    const calls = renameCalls();
+    expect(calls).toHaveLength(1);
+    const call = Object.fromEntries((calls[0] ?? []).map((l) => [l.slice(0, l.indexOf("=")), l.slice(l.indexOf("=") + 1)]));
+    expect(call.ARGV).toBe(`-m ${PLATFORM_RENAME_MODULE} --hermes-home ${hermesHome}`);
+    expect(call.HERMES_HOME).toBe(hermesHome);
+    expect(realpathSync(call.CWD ?? "")).toBe(realpathSync(checkoutDir()));
+    expect(call.PYTHONPATH?.split(":")).toEqual([
+      checkoutDir(),
+      join(hermesHome, "hermes-agent"),
+      `${join(hermesHome, "installs", "i1", "environments", "e1", "venv")}/lib/python3.14/site-packages`,
+    ]);
+    expect(call.TREE).toContain("hermes_burrow_channel");
+    expect(call.TREE).not.toContain("hermes_suite_channel");
+    expect(stderr.join("")).toContain("moved " + hermesHome + "'s sessions to the burrow platform key: gateway_routing 3, sessions 3");
+
+    // Through Hermes's own CLI, each new key written before its old one is removed.
+    const run = stubCalls().map((c) => c.argv.join(" "));
+    const at = (line: string): number => run.indexOf(line);
+    expect(at(`config set platform_toolsets.burrow ${JSON.stringify(HEADLESS_TOOLSET)}`)).toBeGreaterThan(-1);
+    expect(at("config unset platform_toolsets.startup_suite")).toBeGreaterThan(at(`config set platform_toolsets.burrow ${JSON.stringify(HEADLESS_TOOLSET)}`));
+    expect(at("config unset platforms.startup_suite")).toBeGreaterThan(at(`config set platforms.burrow ${JSON.stringify({ home_channel: { ...OLD_HOME_CHANNEL, platform: "burrow" } })}`));
+
+    // Second start: nothing left to move, nothing written, the module not run again.
+    const hashes = treeHashes(hermesHome);
+    const m = stubCalls().length;
+    expect(await runHermes(stampArgs(), makeDeps({ tmux: fakeTmux().deps }))).toBe(0);
+    expect(writes(stubCalls().slice(m))).toEqual([]);
+    expect(treeHashes(hermesHome)).toEqual(hashes);
+    expect(renameCalls()).toHaveLength(1);
+    const again = await stamp();
+    expect(again.exitCode).toBe(0);
+    expect(again.result.changed).toBe(false);
+    expect(again.result.actions.filter((a) => a.kind === "legacy_name")).toEqual([]);
+  });
+
+  test("the stamp reports each move as an applied legacy_name action, and the toolset key as unchanged", async () => {
+    await pre020Home();
+    const { result, exitCode } = await stamp();
+    expect(exitCode).toBe(0);
+    const moves = result.actions.filter((a) => a.kind === "legacy_name");
+    expect(moves.map((a) => a.target)).toEqual([
+      `${cfgFile()}: platform_toolsets.startup_suite -> platform_toolsets.burrow`,
+      `${cfgFile()}: platforms.startup_suite -> platforms.burrow`,
+      `${join(hermesHome, "state.db")}: startup_suite -> burrow`,
+    ]);
+    expect(moves.every((a) => a.outcome === "repaired" && a.applied)).toBe(true);
+    // The managed list moved with its key; the toolset step had nothing left to write.
+    expect(outcomes(result)[`config_set ${TOOLSET_KEY}`]).toBe("unchanged");
+  });
+
+  test("a STARTUP_SUITE_HOME_CHANNEL mirror in .env becomes BURROW_HOME_CHANNEL; the same value under both just loses the old line", async () => {
+    await pre020Home({ env: `STARTUP_SUITE_HOME_CHANNEL=${DM}\nSTARTUP_SUITE_HOME_CHANNEL_THREAD_ID=\nKEEP_ME=1\n` });
+    expect((await stamp()).exitCode).toBe(0);
+    let env = readFileSync(join(hermesHome, ".env"), "utf8");
+    expect(env).not.toContain("STARTUP_SUITE_");
+    expect(env).toContain(`BURROW_HOME_CHANNEL=${DM}\nBURROW_HOME_CHANNEL_THREAD_ID=\nKEEP_ME=1\n`);
+    expect(statSync(join(hermesHome, ".env")).mode & 0o777).toBe(0o600);
+
+    rmSync(root, { recursive: true, force: true });
+    rmSync(join(home, "platform-rename-calls"), { force: true });
+    await pre020Home({ env: `BURROW_HOME_CHANNEL=${DM}\nSTARTUP_SUITE_HOME_CHANNEL=${DM}\n` });
+    expect((await stamp()).exitCode).toBe(0);
+    env = readFileSync(join(hermesHome, ".env"), "utf8");
+    expect(env.split("\n").filter((l) => l.includes("HOME_CHANNEL="))).toEqual([`BURROW_HOME_CHANNEL=${DM}`]);
+  });
+
+  test("a home whose only old trace is the installed plugin build still moves its sessions", async () => {
+    makeManagedPython();
+    expect((await stamp(stampArgs(["--full-toolset"]))).exitCode).toBe(0);
+    const tree = join(hermesHome, "plugins", "burrow-platform");
+    renameSync(join(tree, "hermes_burrow_channel"), join(tree, "hermes_suite_channel"));
+    const { result, exitCode } = await stamp(stampArgs(["--full-toolset"]));
+    expect(exitCode).toBe(0);
+    expect(result.actions.filter((a) => a.kind === "legacy_name").map((a) => a.target)).toEqual([
+      `${join(hermesHome, "state.db")}: startup_suite -> burrow`,
+    ]);
+    expect(renameCalls()).toHaveLength(1);
+    expect(existsSync(join(tree, "hermes_suite_channel"))).toBe(false);
+  });
+
+  test("ATTACH to a live session moves nothing: the home is byte-identical, the module never runs", async () => {
+    const before = await pre020Home();
+    const session = `burrow-${agentNameForRoot(root)}`;
+    const tmux = fakeTmux(`${session}\t100\tbash\n`, "  100     1 bash    bash\n  102   100 hermes  /v/bin/python /v/bin/hermes gateway run\n");
+    expect(await runHermes(stampArgs(), makeDeps({ tmux: tmux.deps }))).toBe(0);
+    expect(stubCalls().length).toBe(before.calls);
+    expect(installerCalls().length).toBe(before.installs);
+    expect(treeHashes(hermesHome)).toEqual(before.hashes);
+    expect(renameCalls()).toEqual([]);
+    const err = stderr.join("");
+    expect(err).toContain(`attaching to ${session}`);
+    expect(err).toContain("platform_toolsets.startup_suite");
+    expect(err).toContain("a platform plugin that registers startup_suite");
+  });
+
+  for (const [knob, exit, code] of [
+    ["refuse", 2, "platform_rename_refused"],
+    ["fail", 1, "platform_rename_failed"],
+    ["garbage", 1, "platform_rename_failed"],
+  ] as const) {
+    test(`the module ${knob === "refuse" ? "refusing (exit 2)" : knob === "fail" ? "failing (exit 1)" : "exiting 0 with no JSON"} puts the home back as it was: ${code}`, async () => {
+      const before = await pre020Home();
+      setRenameKnob(knob);
+      const { result, exitCode } = await stamp();
+      expect(exitCode).toBe(exit);
+      expect(result.error?.code).toBe(code);
+      expect(renameCalls()).toHaveLength(1);
+      // It ran after the config moves and the installer: the restore is what put them back.
+      const run = stubCalls().slice(before.calls).map((c) => c.argv.join(" "));
+      expect(run).toContain("config unset platforms.startup_suite");
+      expect(installerCalls().length).toBe(before.installs + 1);
+      expect(treeHashes(hermesHome)).toEqual(before.hashes);
+      expect(result.actions.filter((a) => a.kind === "legacy_name").every((a) => !a.applied)).toBe(true);
+      expect(stderr.join("")).toContain("they were put back as they were");
+    });
+  }
+
+  test("old beside new refuses before anything is written", async () => {
+    for (const [section, value] of [
+      ["platform_toolsets", HEADLESS_TOOLSET],
+      ["platforms", { home_channel: { ...OLD_HOME_CHANNEL, platform: "burrow" } }],
+    ] as const) {
+      rmSync(root, { recursive: true, force: true });
+      await pre020Home();
+      const cfg = readCfg();
+      cfg[section].burrow = value;
+      writeFileSync(cfgFile(), stringifyYaml(cfg));
+      const hashes = treeHashes(hermesHome);
+      const n = stubCalls().length;
+      const { result, exitCode } = await stamp();
+      expect(exitCode).toBe(2);
+      expect(result.error?.code).toBe(LEGACY_CONFLICT_CODE);
+      expect(result.error?.message).toContain(`${cfgFile()} ${section} holds both startup_suite and burrow`);
+      expect(writes(stubCalls().slice(n))).toEqual([]);
+      expect(treeHashes(hermesHome)).toEqual(hashes);
+    }
+    rmSync(root, { recursive: true, force: true });
+    await pre020Home({ env: "BURROW_HOME_CHANNEL=a\nSTARTUP_SUITE_HOME_CHANNEL=b\n" });
+    const { result } = await stamp();
+    expect(result.error?.code).toBe(LEGACY_CONFLICT_CODE);
+    expect(result.error?.message).toContain("holds both STARTUP_SUITE_HOME_CHANNEL and BURROW_HOME_CHANNEL");
+    expect(renameCalls()).toEqual([]);
+  });
+
+  test("parsePlatformRename reads the module's one JSON line, and never takes a bare exit 0 for success", () => {
+    expect(parsePlatformRename(0, '{"ok": true, "moved": {"gateway_routing": 3}}\n')).toEqual({ kind: "moved", moved: { gateway_routing: 3 } });
+    expect(parsePlatformRename(0, '{"ok": true, "moved": {}}')).toEqual({ kind: "moved", moved: {} });
+    expect(parsePlatformRename(2, '{"ok": false, "refused": "RouteCollision", "error": "x"}')).toEqual({ kind: "refused", message: "x" });
+    expect(parsePlatformRename(1, '{"ok": false, "error": "boom"}')).toEqual({ kind: "failed", message: "boom" });
+    expect(parsePlatformRename(0, "Traceback")).toEqual({ kind: "failed", message: "no JSON result on stdout" });
+    expect(parsePlatformRename(0, '{"ok": false}').kind).toBe("failed");
+    expect(parsePlatformRename(2, "").kind).toBe("failed");
+  });
+});
+
 describe("pins", () => {
-  test("the channel is pinned to the commit tagged v0.4.1 on burrow-channel-hermes main (PR #10)", () => {
-    expect(HERMES_CHANNEL_REF).toBe("189683ae8a0c7272221d13d0fef0f4e14bb242e1");
+  test("the channel is pinned to burrow-channel-hermes v0.5.0 (PR #11)", () => {
+    expect(HERMES_CHANNEL_REF).toBe("1df1199f674868840affc7738f60ffb1f8daf632");
   });
 
   test("the pin's DEPLOYER comment is present, so the bump is not forgotten at merge", () => {

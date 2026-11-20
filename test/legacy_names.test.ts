@@ -9,9 +9,13 @@ import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, s
 import { tmpdir } from "node:os";
 import { join, relative, resolve } from "node:path";
 import {
+  HERMES_HOME_ENV_RENAME,
   HERMES_MCP_RENAME,
+  HERMES_PACKAGE_RENAME,
+  HERMES_PLATFORM_RENAME,
   HERMES_PLUGIN_RENAME,
   HERMES_TOKEN_RENAME,
+  retargetPlatform,
   OPENCLAW_CHANNEL_RENAME,
   OPENCLAW_PLUGIN_RENAME,
   hermesLegacyNames,
@@ -38,7 +42,7 @@ import { DEV_CHANNEL_ARGS, paneCommand } from "../src/commands/claude.ts";
 import { CONTINUE_WRAPPER_NAME } from "../src/tmux.ts";
 import { relaunchArgvRename } from "../src/commands/restore.ts";
 import type { RosterEntry } from "../src/roster.ts";
-import { MCP_SERVER_NAME, PLUGIN_NAME, TOKEN_RELPATH } from "../src/commands/hermes.ts";
+import { MCP_SERVER_NAME, PLATFORM_NAME, PLUGIN_NAME, TOKEN_RELPATH, TOOLSET_KEY } from "../src/commands/hermes.ts";
 import { CHANNEL_ID as OPENCLAW_CHANNEL_ID, PLUGIN_ID as OPENCLAW_PLUGIN_ID } from "../src/commands/openclaw.ts";
 
 describe("the names", () => {
@@ -227,6 +231,31 @@ describe("the Hermes names (0.12.0)", () => {
       join("mcp-tokens", "burrow-platform.runtime-token"),
     ]);
     expect([MCP_SERVER_NAME, PLUGIN_NAME, TOKEN_RELPATH]).toEqual([HERMES_MCP_RENAME[1], HERMES_PLUGIN_RENAME[1], HERMES_TOKEN_RENAME[1]]);
+  });
+
+  test("0.20.0: the platform key, package and home-channel variable; the new side is what the adapter uses", () => {
+    expect(HERMES_PLATFORM_RENAME).toEqual(["startup_suite", "burrow"]);
+    expect(HERMES_PACKAGE_RENAME).toEqual(["hermes_suite_channel", "hermes_burrow_channel"]);
+    expect(HERMES_HOME_ENV_RENAME).toEqual(["STARTUP_SUITE_HOME_CHANNEL", "BURROW_HOME_CHANNEL"]);
+    expect(PLATFORM_NAME).toBe(HERMES_PLATFORM_RENAME[1]);
+    expect(TOOLSET_KEY).toBe(`platform_toolsets.${HERMES_PLATFORM_RENAME[1]}`);
+    // Hermes derives <KEY>_HOME_CHANNEL from the key; the new key's derivation is the plugin's own variable.
+    expect(HERMES_HOME_ENV_RENAME.map((n) => n.replace(/_HOME_CHANNEL$/, "").toLowerCase())).toEqual([...HERMES_PLATFORM_RENAME]);
+  });
+
+  test("retargetPlatform renames every `platform: startup_suite` inside a platforms value and nothing else", () => {
+    const value = {
+      enabled: true,
+      home_channel: { platform: "startup_suite", chat_id: "c", name: "startup_suite" },
+      extra: { list: [{ platform: "startup_suite" }, { platform: "telegram" }] },
+    };
+    expect(retargetPlatform(value)).toEqual({
+      enabled: true,
+      home_channel: { platform: "burrow", chat_id: "c", name: "startup_suite" },
+      extra: { list: [{ platform: "burrow" }, { platform: "telegram" }] },
+    });
+    expect(retargetPlatform(["a"])).toEqual(["a"]);
+    expect(retargetPlatform(null)).toBeNull();
   });
 
   function home(files: Record<string, string>): string {

@@ -131,7 +131,7 @@ warns that agents in other folders will not use that record.
 
 **`--from-mcp-json`** reads the folder's own `.mcp.json` — the `burrow-channel`
 entry's `BURROW_RUNTIME_ID` and `BURROW_TOKEN` (or their `SUITE_*` names), the `burrow` entry's URL
-(a `.mcp.json` still under the pre-0.11.0 ids `suite-channel` / `startup-suite` is read the same)
+(a `.mcp.json` still under the legacy pre-0.11.0 ids `suite-channel` / `startup-suite` is read the same)
 (the Burrow URL is that minus `/mcp`) and headers — and saves that as the
 folder's connection, so no token passes through an argv, a shell or a terminal.
 It refuses, naming fields and never values, and writes nothing, when either
@@ -272,8 +272,8 @@ point at the same Burrow host and the two values differ, at least one is wrong �
 and the wrong one produces a server that registers and exposes nothing. The
 `token match` check compares them by non-reversible fingerprint, so neither
 value is ever read out, and it names only the two entries. When the entries
-point at *different* hosts — say `suite.example.invalid` and
-`suite.localhost.invalid`, two deployments on one box — two credentials is the
+point at *different* hosts — say `burrow.example.invalid` and
+`burrow.localhost.invalid`, two deployments on one box — two credentials is the
 correct configuration, so the check reports `⋯ skipped` rather than inventing a
 verdict.
 
@@ -397,7 +397,7 @@ Burrow-ready, then runs its gateway (`hermes gateway run`) in the tmux session
 
 ```
 burrow hermes --root ~/agents/scribe \
-  --suite-url https://suite.example.invalid --runtime-id <id> \
+  --burrow-url https://burrow.example.invalid --runtime-id <id> \
   --token-ref file:/home/me/.config/burrow/tokens/scribe \
   --model-base-url http://127.0.0.1:8080/v1 --model some-model
 ```
@@ -405,7 +405,7 @@ burrow hermes --root ~/agents/scribe \
 | Flag | Meaning |
 | --- | --- |
 | `--root DIR` | Required. The agent root; its directory name is the agent name |
-| `--suite-url URL`, `--runtime-id ID` | The Burrow runtime. Recorded in `<root>/burrow.json`, so a re-run may omit them |
+| `--burrow-url URL`, `--runtime-id ID` | The Burrow runtime (the legacy `--suite-url` is still accepted). Recorded in `<root>/burrow.json`, so a re-run may omit them |
 | `--token-ref REF`, `--keychain-service SVC` | The runtime token, by reference only (see [token refs](#token-refs)) |
 | `--model-base-url URL`, `--model ID` | Required. The inference endpoint and model id |
 | `--model-provider PROVIDER` | Optional Hermes provider override. Defaults to `openai-codex` for the official ChatGPT Codex backend, otherwise `custom` |
@@ -427,7 +427,7 @@ What it writes, and with what mode:
 | `<root>/.burrow-stamp.json` | this CLI | default | Stamp record: harness, writer and harness version, plugin ref, inputs digest, token ref, last verdict. A run that fails after its first write records `fail`, so an older `pass` never outlives it and `--gateway-only` refuses the root. A refusal before any write leaves it as it was. No secret |
 | `$HERMES_HOME/mcp-tokens/burrow-platform.runtime-token` | the channel installer | `0600` | The runtime token: the one sanctioned copy |
 | `$HERMES_HOME/.env` | the channel installer; this CLI adds `CUSTOM_MODEL_API_KEY` | `0600` for this CLI's write | Channel keys; the model key when `--model-api-key-ref` is given |
-| `$HERMES_HOME/config.yaml` | `hermes config set` (model keys, headless policy, the toolset key); the channel installer (`mcp_servers.burrow`) | Hermes's own | Model routing; `approvals.mode: off` and `hooks_auto_accept: true` when absent; `platform_toolsets.startup_suite` unless `--full-toolset` |
+| `$HERMES_HOME/config.yaml` | `hermes config set` (model keys, headless policy, the toolset key); the channel installer (`mcp_servers.burrow`) | Hermes's own | Model routing; `approvals.mode: off` and `hooks_auto_accept: true` when absent; `platform_toolsets.burrow` unless `--full-toolset` |
 | `$HERMES_HOME/plugins/burrow-platform` | the channel installer | the installer's | The channel plugin |
 | `~/.local/share/burrow/burrow-channel-hermes` | this CLI (`git`) | git's | The channel checkout, pinned to one commit |
 | `~/.local/state/burrow/agents.json` | this CLI | default | The roster entry, on session creation |
@@ -444,7 +444,7 @@ named pip`), so after `python -m pip` fails that way the install falls back to
 `uv pip install --python <that python>`. With no `uv` on PATH, the failure
 names the command to run.
 
-**The token file.** hermes-suite-channel has no keychain resolver yet, so a
+**The token file.** burrow-channel-hermes has no keychain resolver yet, so a
 `keychain:` ref is resolved in memory, handed to the installer on stdin, and
 materialised into the `0600` token file above. The stamp says so in `warnings`.
 
@@ -476,11 +476,11 @@ is preserved and reported in the stamp warnings.
 - **The opt-out.** `--full-toolset` removes either Burrow-managed list and leaves
   the key to Hermes's own platform default. It does not write a second "full"
   list.
-- **An operator's value wins.** Any other `platform_toolsets.startup_suite`
+- **An operator's value wins.** Any other `platform_toolsets.burrow`
   value is left unchanged in either mode and reported in `warnings`.
 - **Idempotent.** A re-run in the same mode writes nothing. Switching modes is
   one `config set` or `config unset`, reported under
-  `config_set platform_toolsets.startup_suite`.
+  `config_set platform_toolsets.burrow`.
 
 ## `burrow openclaw`
 
@@ -509,7 +509,7 @@ is added to the list.
 | Flag | Meaning |
 | --- | --- |
 | `--root DIR` | Required. The agent root; its directory name is the agent id |
-| `--suite-url URL`, `--runtime-id ID` | The Burrow runtime |
+| `--burrow-url URL`, `--runtime-id ID` | The Burrow runtime (the legacy `--suite-url` is still accepted) |
 | `--token-ref REF`, `--keychain-service SVC` | The runtime token, by reference only. The plugin resolves the ref itself: this CLI never reads the token |
 | `--model-base-url URL`, `--model ID` | Required. The custom model provider |
 | `--model-compat openai\|openai-responses\|anthropic` | Provider API shape. Default `openai` |
@@ -711,11 +711,11 @@ Hermes env ships `ruamel.yaml`, because Hermes needs it to read its own config.
    versions its config shape was measured against. Any other version gets one
    warning and no drift detection. Detection belongs in `measuredHarnessVersions`
    and the `.burrow-stamp.json` record, not inside a writer.
-2. **A keychain resolver in hermes-suite-channel**, so the Hermes token needs
+2. **A keychain resolver in burrow-channel-hermes**, so the Hermes token needs
    no `0600` file.
 3. **The OpenClaw secret-contract SecretRef**, as an alternative to the
    channel plugin's prefix resolver.
-4. **openclaw-suite-channel's `install.sh` passes `--token` on argv.** This CLI
+4. **burrow-channel-openclaw's (formerly openclaw-suite-channel) `install.sh` passes `--token` on argv.** This CLI
    does not call it, but other callers should not either until it is fixed.
 5. **Operator headers**, which neither channel plugin can forward yet.
 6. **The upstream Hermes `.env` child-env leak.** Hermes copies `.env` into its
@@ -869,8 +869,8 @@ attached and restored, and a stale one comes back as `burrow-*`.
 **MCP server ids were unchanged by 0.8.0; 0.11.0 renames them.** See
 [The 0.11.0 rename](#the-0110-rename-mcp-server-ids-config-key-launch-flag).
 
-**Still named `suite`, on purpose:** the `--suite-url` flag (`--burrow-url`
-is accepted too, and wins), the `SUITE_CONVENTIONS.md` file in folders that
+**Legacy `suite` names still accepted, on purpose:** the `--suite-url` flag
+(`--burrow-url` is the documented name, and wins when both are given), the `SUITE_CONVENTIONS.md` file in folders that
 already have it, and the `SUITE_CONVENTIONS` export of `src/claude_md.ts`
 (an alias of `BURROW_CONVENTIONS`, the same string), which core's agent-host
 imports from the installed library.
@@ -936,6 +936,30 @@ is refused (exit 7) with nothing moved. Tool names change for codex and dsh
 agents the same way they did for Claude (`mcp__burrow__…`); `suite_reply` and
 the other channel tool names do not.
 
+### The 0.20.0 rename: the Hermes platform key
+
+burrow-channel-hermes v0.5.0 registers the gateway platform as `burrow` (the
+legacy key was `startup_suite`), so a Hermes agent reads `Source: Burrow`,
+`Platform: burrow` and "No home channel is set for Burrow". Hermes keys
+durable state on that name, so the next `burrow hermes` START moves a home
+that holds it, inside the same snapshot-and-restore transaction as the 0.12.0
+moves, and never under a running agent (an attach moves nothing and says so):
+
+| Where | Before | From 0.20.0 | How |
+| --- | --- | --- | --- |
+| config.yaml | `platform_toolsets.startup_suite` | `platform_toolsets.burrow` | `hermes config set` the old value under the new key, then `hermes config unset` the old one |
+| config.yaml | `platforms.startup_suite` (the `/sethome` home channel, its `platform` included) | `platforms.burrow` | the same |
+| `.env` | `STARTUP_SUITE_HOME_CHANNEL` (`_THREAD_ID`, `_NAME`), if present | `BURROW_HOME_CHANNEL` (...) | in place, other lines kept |
+| state.db, `sessions/sessions.json`, `cron/jobs.json` | routes, sessions and cron targets keyed `startup_suite` | keyed `burrow` | the plugin's own `python -m hermes_burrow_channel.platform_rename`, with Hermes's interpreter, LAST (after the installer) |
+
+A home is on the old key when it holds any of those config or `.env` names,
+or when its installed plugin is a pre-v0.5.0 build (the tree holds
+`hermes_suite_channel`). Old beside new is refused (exit 7) with nothing
+moved. If the session move refuses (a gateway is running for the home, or a
+moved key already exists) or fails, the start fails and the home is put back
+as it was; the session move is one state.db transaction, so it never leaves
+state half-moved. Without the move every chat would start a fresh session.
+
 **The repo is `burrow-cli`; it was `suite-cli` before 0.9.0.** GitHub
 redirects the old name after a repo rename, but nothing here relies on that:
 the installer, the tarball download and `burrow update` ask `burrow-cli` first
@@ -962,7 +986,7 @@ the shipped version, so the two cannot drift apart silently.
 ## Credentials and config
 
 Credentials are **pasted in**: you click Federate in the Burrow UI and paste the
-values at the prompt. There is deliberately no device-code or `suite login`
+values at the prompt. There is deliberately no device-code or `burrow login`
 flow yet — it is deferred, and when it lands it becomes another provider behind
 the same credential store, changing nothing else.
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# A stand-in for hermes-suite-channel's install.sh, for test/hermes.test.ts.
+# A stand-in for burrow-channel-hermes's install.sh, for test/hermes.test.ts.
 #
 # Same argument surface and the same observable contract as the real one at
 # the pinned HERMES_CHANNEL_REF (it takes --python, and registers it as the
@@ -8,7 +8,10 @@
 # only when it changed; sets SUITE_* keys in .env in place (never the token);
 # installs and enables the plugin; registers the stdio mcp_servers entry
 # through `hermes config set` only for keys that differ; logs "already ..."
-# on a no-op; ends stdout with exactly `hermes-suite-channel: installed`.
+# on a no-op; ends stdout with exactly `burrow-channel-hermes: installed`.
+# Installs the v0.5.0 package `hermes_burrow_channel`, and (as the real
+# `hermes plugins install --force` replaces the whole tree) drops a pre-v0.5.0
+# `hermes_suite_channel` package left in the tree.
 #
 # Each call is recorded under $HOME/installer-calls/<n>/: argv (NUL separated),
 # env (env -0), and stdin (only when the token came from stdin).
@@ -20,8 +23,8 @@
 #   token-0644   do everything, then leave the token file mode 0644 and succeed
 set -euo pipefail
 
-log() { printf 'hermes-suite-channel: %s\n' "$*" >&2; }
-die() { printf 'hermes-suite-channel: error: %s\n' "$*" >&2; exit 1; }
+log() { printf 'burrow-channel-hermes: %s\n' "$*" >&2; }
+die() { printf 'burrow-channel-hermes: error: %s\n' "$*" >&2; exit 1; }
 
 LOG="$HOME/installer-calls"
 mkdir -p "$LOG"
@@ -105,11 +108,12 @@ env_set SUITE_RUNTIME_TOKEN_FILE "$TP"
 
 SHA="$(git -C "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)" rev-parse HEAD)"
 PD="$HH/plugins/burrow-platform"
-BUILD="$PD/hermes_suite_channel/_build.py"
-if [ -f "$BUILD" ] && grep -q "^BUILD = \"$SHA\"\$" "$BUILD"; then
+BUILD="$PD/hermes_burrow_channel/_build.py"
+if [ -f "$BUILD" ] && grep -q "^BUILD = \"$SHA\"\$" "$BUILD" && [ ! -e "$PD/hermes_suite_channel" ]; then
   log "plugin burrow-platform already installed at $SHA"
 else
-  mkdir -p "$PD/hermes_suite_channel"
+  rm -rf "$PD/hermes_suite_channel"
+  mkdir -p "$PD/hermes_burrow_channel"
   printf 'name: burrow-platform\n' >"$PD/plugin.yaml"
   printf 'BUILD = "%s"\n' "$SHA" >"$BUILD"
   log "installing plugin burrow-platform at $SHA"
@@ -123,7 +127,7 @@ fi
 MCP="$(printf '%s' "$URL" | sed -e 's#^wss://#https://#' -e 's#^ws://#http://#' -e 's#^\(https*://[^/]*\).*#\1/mcp#')"
 [ -n "$PY" ] || die "the stub requires --python (the CLI always passes it)"
 want_cmd="$PY"
-want_args="[\"$PD/hermes_suite_channel/mcp_bridge.py\",\"--url\",\"$MCP\",\"--token-file\",\"$TP\"]"
+want_args="[\"$PD/hermes_burrow_channel/mcp_bridge.py\",\"--url\",\"$MCP\",\"--token-file\",\"$TP\"]"
 have_cmd="$("$HB" config get mcp_servers.burrow.command 2>/dev/null || true)"
 have_args="$("$HB" config get mcp_servers.burrow.args --json 2>/dev/null || true)"
 [ "$have_cmd" = "$want_cmd" ] || "$HB" config set mcp_servers.burrow.command "$want_cmd" >&2
@@ -132,4 +136,4 @@ have_args="$("$HB" config get mcp_servers.burrow.args --json 2>/dev/null || true
 [ "$KNOB" != fail-late ] || die "injected failure after every write (fail-late)"
 [ "$KNOB" != token-0644 ] || chmod 644 "$TP"
 log "restart the gateway to load it: hermes gateway restart"
-printf '%s\n' "hermes-suite-channel: installed"
+printf '%s\n' "burrow-channel-hermes: installed"
