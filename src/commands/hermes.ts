@@ -144,7 +144,7 @@ type Env = Record<string, string | undefined>;
  * burrow-channel-hermes v0.5.0 (PR #11), the head of its branch
  * rename/platform-burrow. MERGE THAT PR FIRST: a squash merge makes a new
  * commit on main and this pin must move to it (a merge commit keeps this
- * sha). v0.5.0 registers the platform as `burrow` (was `startup_suite`),
+ * sha). v0.5.0 registers the platform as `burrow` (the legacy key was `startup_suite`),
  * renames the package to `hermes_burrow_channel` and the result line to
  * `burrow-channel-hermes: installed`, and ships the `platform_rename`
  * module this verb runs on start (legacy_names.ts "0.20.0"). Before:
@@ -154,7 +154,7 @@ type Env = Record<string, string | undefined>;
  * always passes, so the pin cannot move older). Pin a commit on main,
  * never a branch tip: a squash merge deletes the branch.
  */
-export const HERMES_CHANNEL_REF = "95cea62dbf96c4ee09c0216432d445452638a267";
+export const HERMES_CHANNEL_REF = "1df1199f674868840affc7738f60ffb1f8daf632";
 /** The channel repo's name. Its owner comes from repo_source.ts (SUITE_GITHUB_OWNER). */
 // The repo's own name since Burrow rename C. Its old name, hermes-suite-channel, redirects; nothing relies on that.
 export const HERMES_CHANNEL_REPO_NAME = "burrow-channel-hermes";
@@ -212,7 +212,7 @@ export const MODEL_KEY_ENV = "CUSTOM_MODEL_API_KEY";
 /**
  * The gateway platform key burrow-channel-hermes registers (`PLATFORM_NAME`,
  * hermes_burrow_channel/adapter.py at {@link HERMES_CHANNEL_REF}; it was
- * `startup_suite` before the plugin's v0.5.0, and a home keyed on that is
+ * the legacy key `startup_suite` before the plugin's v0.5.0, and a home keyed on that is
  * moved on the start path: legacy_names.ts "0.20.0").
  */
 export const PLATFORM_NAME = "burrow";

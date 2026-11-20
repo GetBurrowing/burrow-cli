@@ -1,5 +1,5 @@
 /**
- * The one-shot rename of the last `suite` names this CLI wrote (0.11.0).
+ * The one-shot rename of the last legacy `suite` names this CLI wrote (0.11.0).
  *
  *   MCP server ids     suite-channel  -> burrow-channel
  *                      startup-suite  -> burrow
@@ -351,8 +351,8 @@ export function renameFiles(configFiles: readonly string[], claudeRoot: string |
 /* ------------------------------------------------------------------------- */
 
 /*
- * A Hermes home (`HERMES_HOME`, `<root>/.hermes`) holds three names that
- * burrow-channel-hermes before v0.4.0 wrote, and that PERSIST across starts:
+ * A Hermes home (`HERMES_HOME`, `<root>/.hermes`) holds three legacy names
+ * that burrow-channel-hermes before v0.4.0 wrote, and that PERSIST across starts:
  *
  *   config.yaml `mcp_servers.<id>`            startup-suite          -> burrow
  *   the platform plugin (plugins/<name>/,     startup-suite-platform -> burrow-platform
@@ -391,9 +391,9 @@ export function renameFiles(configFiles: readonly string[], claudeRoot: string |
  * both names.
  */
 
-/** `[old, new]` Hermes MCP server id. The new one is hermes.ts MCP_SERVER_NAME (asserted by test). */
+/** `[legacy, new]` Hermes MCP server id. The new one is hermes.ts MCP_SERVER_NAME (asserted by test). */
 export const HERMES_MCP_RENAME = ["startup-suite", "burrow"] as const;
-/** `[old, new]` Hermes platform plugin name. The new one is hermes.ts PLUGIN_NAME. */
+/** `[legacy, new]` Hermes platform plugin name. The new one is hermes.ts PLUGIN_NAME. */
 export const HERMES_PLUGIN_RENAME = ["startup-suite-platform", "burrow-platform"] as const;
 /** `[old, new]` runtime token path, relative to HERMES_HOME. The new one is hermes.ts TOKEN_RELPATH. */
 export const HERMES_TOKEN_RENAME = [
@@ -405,7 +405,7 @@ export const HERMES_TOKEN_RENAME = [
 const HERMES_SINCE = "0.12.0";
 
 /*
- * 0.20.0: the gateway PLATFORM key (burrow-channel-hermes v0.5.0).
+ * 0.20.0: the legacy gateway PLATFORM key (burrow-channel-hermes v0.5.0).
  *
  *   config.yaml `platform_toolsets.<key>`       startup_suite -> burrow
  *   config.yaml `platforms.<key>` (with its      startup_suite -> burrow
@@ -432,11 +432,11 @@ const HERMES_SINCE = "0.12.0";
  * build is what keyed the home's sessions, whatever config.yaml says.
  */
 
-/** `[old, new]` Hermes gateway platform key. The new one is hermes.ts PLATFORM_NAME (asserted by test). */
+/** `[legacy, new]` Hermes gateway platform key. The new one is hermes.ts PLATFORM_NAME (asserted by test). */
 export const HERMES_PLATFORM_RENAME = ["startup_suite", "burrow"] as const;
 /** `[old, new]` the platform plugin's Python package; an installed tree holding the old one registers the old key. */
 export const HERMES_PACKAGE_RENAME = ["hermes_suite_channel", "hermes_burrow_channel"] as const;
-/** `[old, new]` the home-channel variable Hermes derives from the key (`<KEY>_HOME_CHANNEL`). */
+/** `[legacy, new]` the home-channel variable Hermes derives from the key (`<KEY>_HOME_CHANNEL`). */
 export const HERMES_HOME_ENV_RENAME = ["STARTUP_SUITE_HOME_CHANNEL", "BURROW_HOME_CHANNEL"] as const;
 /** The suffixes Hermes writes beside it (`_THREAD_ID` on /sethome, `_NAME` from setup). */
 const HOME_ENV_SUFFIXES = ["", "_THREAD_ID", "_NAME"] as const;
@@ -693,7 +693,7 @@ export async function renameHermesHome(home: string, cli: HermesRenameCli): Prom
 }
 
 /**
- * A `platforms.<key>` value with every `platform: startup_suite` inside it
+ * A `platforms.<key>` value with every legacy `platform: startup_suite` inside it
  * (the `home_channel` Hermes's /sethome wrote) naming the new key.
  */
 export function retargetPlatform(value: unknown): unknown {
@@ -727,7 +727,7 @@ function renameEnvLine(file: string, oldName: string, newName: string): void {
 
 /*
  * burrow-channel-openclaw v0.9.0 renamed its plugin id and channel id. An
- * openclaw.json that a pre-0.12.0 stamp wrote holds the old ones in:
+ * openclaw.json that a pre-0.12.0 stamp wrote holds the legacy ones in:
  *
  *   channels.<channel id>                       startup-suite                -> burrow
  *   bindings[].match.channel                    startup-suite                -> burrow
@@ -749,9 +749,9 @@ function renameEnvLine(file: string, oldName: string, newName: string): void {
  * stamping (openclaw.ts), and the refusal waits for the next start.
  */
 
-/** `[old, new]` OpenClaw plugin id. The new one is openclaw.ts PLUGIN_ID (asserted by test). */
+/** `[legacy, new]` OpenClaw plugin id. The new one is openclaw.ts PLUGIN_ID (asserted by test). */
 export const OPENCLAW_PLUGIN_RENAME = ["startup-suite-channel-plugin", "burrow-channel-plugin"] as const;
-/** `[old, new]` OpenClaw channel id. The new one is openclaw.ts CHANNEL_ID (asserted by test). */
+/** `[legacy, new]` OpenClaw channel id. The new one is openclaw.ts CHANNEL_ID (asserted by test). */
 export const OPENCLAW_CHANNEL_RENAME = ["startup-suite", "burrow"] as const;
 
 /** The release from which the OpenClaw adapter reads only the new ids. */

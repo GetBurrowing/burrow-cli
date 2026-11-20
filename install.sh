@@ -374,7 +374,7 @@ fi
 # never created. Every `suite update` reintroduced that until this line
 # existed.
 cp -R "$src_root/assets" "$staged_lib/assets" ||
-	die "could not stage assets/ — suite deepseek needs the bundled plugin"
+	die "could not stage assets/ — burrow deepseek needs the bundled plugin"
 
 staged_bin="$TMPDIR_SUITE/burrow"
 sed -e "s|@BURROW_LIB_DIR@|$lib_dir|g" -e "s|@BURROW_VERSION@|$version|g" \
