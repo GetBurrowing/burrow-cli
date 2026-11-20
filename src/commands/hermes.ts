@@ -141,20 +141,21 @@ type Env = Record<string, string | undefined>;
 /**
  * DEPLOYER: BUMP THIS BEFORE burrow-cli MERGES.
  *
- * burrow-channel-hermes v0.5.0 (PR #11), the head of its branch
- * rename/platform-burrow. MERGE THAT PR FIRST: a squash merge makes a new
- * commit on main and this pin must move to it (a merge commit keeps this
- * sha). v0.5.0 registers the platform as `burrow` (the legacy key was `startup_suite`),
- * renames the package to `hermes_burrow_channel` and the result line to
- * `burrow-channel-hermes: installed`, and ships the `platform_rename`
- * module this verb runs on start (legacy_names.ts "0.20.0"). Before:
+ * burrow-channel-hermes v0.5.1 (PR #12), the head of its branch
+ * fix/vendor-gateway-running-check. MERGE THAT PR FIRST, with a merge commit
+ * (a squash makes a new commit on main and this pin must move to it). v0.5.1
+ * drops the import Hermes removed on 2026-09-14 (`gateway.status.
+ * is_gateway_running`), for which Hermes refused to load v0.5.0 at all.
+ * v0.5.0 (1df1199f, #11) registered the platform as `burrow` (legacy:
+ * `startup_suite`) and ships the `platform_rename` module this verb runs on
+ * start (legacy_names.ts "0.20.0"). Before:
  * 189683ae (v0.4.1, #10), 4d640067 (v0.4.0, #9: MCP id, plugin name and
  * token path, see legacy_names.ts "Hermes"), 36e3d539 (v0.3.1), f1399d77
  * (v0.3.0), 71041456 (v0.2.0), d9918533 (#3: `--python`, which this verb
  * always passes, so the pin cannot move older). Pin a commit on main,
  * never a branch tip: a squash merge deletes the branch.
  */
-export const HERMES_CHANNEL_REF = "1df1199f674868840affc7738f60ffb1f8daf632";
+export const HERMES_CHANNEL_REF = "71a14f1120166ac00895d122b0bef7a1e56ce665";
 /** The channel repo's name. Its owner comes from repo_source.ts (SUITE_GITHUB_OWNER). */
 // The repo's own name since Burrow rename C. Its old name, hermes-suite-channel, redirects; nothing relies on that.
 export const HERMES_CHANNEL_REPO_NAME = "burrow-channel-hermes";

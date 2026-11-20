@@ -10,6 +10,16 @@ that matters in the field: is this one newer than what I had?
 Minor for a new capability or a changed default; patch for a fix that changes no
 behaviour anyone was relying on.
 
+## 0.20.1
+
+**The Hermes channel pin moves to burrow-channel-hermes 0.5.1**
+(`HERMES_CHANNEL_REF` 71a14f11, PR #12). Current Hermes refuses to load 0.5.0
+at all: its `platform_rename` module imported `gateway.status.is_gateway_running`,
+a path Hermes removed on 2026-09-14 ("Plugin 'burrow-platform' not loaded: uses
+1 import path(s) removed on 2026-09-14"), so the gateway started with no Burrow
+platform and skipped every `burrow` session. 0.5.1 vendors a read-only copy of
+that check; `burrow hermes`'s start-path migration behaves as in 0.20.0.
+
 ## 0.20.0
 
 **The Hermes platform key moves from `startup_suite` to `burrow`, and an
