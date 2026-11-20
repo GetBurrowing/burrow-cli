@@ -141,23 +141,20 @@ type Env = Record<string, string | undefined>;
 /**
  * DEPLOYER: BUMP THIS BEFORE burrow-cli MERGES.
  *
- * This is the commit tagged v0.4.1 on burrow-channel-hermes main (PR #10): its
- * MCP bridge sends `User-Agent: burrow-channel-hermes/<version>`, because
- * some hosts' access proxies refuse urllib's default Python-urllib UA (403,
- * error code 1010). It replaced 4d640067 (v0.4.0, PR #9: the MCP id, plugin name and token
- * path renamed to burrow / burrow-platform /
- * mcp-tokens/burrow-platform.runtime-token, with no alias and no migration in
- * that repo; an existing home is moved by this verb's start path, see
- * legacy_names.ts "Hermes"). Before that: 36e3d539 (v0.3.1, PR #8), f1399d77
- * (v0.3.0, PR #7), 71041456 (v0.2.0, PR #6), d9918533 (PR #3, the #!/bin/sh
- * launcher fix and `--python`). PLATFORM_NAME and the installer's result line
- * are unchanged from f1399d77 to v0.4.1 (v0.4.0 -> v0.4.1 touches no
- * install.sh). This verb always passes `--python`, which
- * installers before d9918533 refuse, so the pin cannot move older than that.
- * Pin a commit on main, never a branch tip: a squash merge deletes the branch
- * and the tip would dangle.
+ * burrow-channel-hermes v0.5.0 (PR #11), the head of its branch
+ * rename/platform-burrow. MERGE THAT PR FIRST: a squash merge makes a new
+ * commit on main and this pin must move to it (a merge commit keeps this
+ * sha). v0.5.0 registers the platform as `burrow` (was `startup_suite`),
+ * renames the package to `hermes_burrow_channel` and the result line to
+ * `burrow-channel-hermes: installed`, and ships the `platform_rename`
+ * module this verb runs on start (legacy_names.ts "0.20.0"). Before:
+ * 189683ae (v0.4.1, #10), 4d640067 (v0.4.0, #9: MCP id, plugin name and
+ * token path, see legacy_names.ts "Hermes"), 36e3d539 (v0.3.1), f1399d77
+ * (v0.3.0), 71041456 (v0.2.0), d9918533 (#3: `--python`, which this verb
+ * always passes, so the pin cannot move older). Pin a commit on main,
+ * never a branch tip: a squash merge deletes the branch.
  */
-export const HERMES_CHANNEL_REF = "189683ae8a0c7272221d13d0fef0f4e14bb242e1";
+export const HERMES_CHANNEL_REF = "95cea62dbf96c4ee09c0216432d445452638a267";
 /** The channel repo's name. Its owner comes from repo_source.ts (SUITE_GITHUB_OWNER). */
 // The repo's own name since Burrow rename C. Its old name, hermes-suite-channel, redirects; nothing relies on that.
 export const HERMES_CHANNEL_REPO_NAME = "burrow-channel-hermes";
@@ -197,7 +194,7 @@ export const TOKEN_RELPATH = join("mcp-tokens", "burrow-platform.runtime-token")
 export const LEGACY_CONFLICT_CODE = "legacy_name_conflict";
 
 /** The channel installer's last stdout line on success. */
-export const INSTALLER_RESULT_LINE = "hermes-suite-channel: installed";
+export const INSTALLER_RESULT_LINE = "burrow-channel-hermes: installed";
 
 /**
  * The gateway's program name as `ps` reports it. MEASURED: hermes_cli/main.py
@@ -213,12 +210,22 @@ export const HERMES_AGENT_COMM = "hermes";
 export const MODEL_KEY_ENV = "CUSTOM_MODEL_API_KEY";
 
 /**
- * The Burrow channel platform's toolset key. `startup_suite` is the platform
- * name hermes-suite-channel registers (`PLATFORM_NAME`, adapter.py:74 at
- * {@link HERMES_CHANNEL_REF}); the gateway reads `platform_toolsets.<name>`
- * per turn (`_get_platform_tools`, hermes_cli/tools_config.py at fdec926e).
+ * The gateway platform key burrow-channel-hermes registers (`PLATFORM_NAME`,
+ * hermes_burrow_channel/adapter.py at {@link HERMES_CHANNEL_REF}; it was
+ * `startup_suite` before the plugin's v0.5.0, and a home keyed on that is
+ * moved on the start path: legacy_names.ts "0.20.0").
  */
-export const TOOLSET_KEY = "platform_toolsets.startup_suite";
+export const PLATFORM_NAME = "burrow";
+
+/**
+ * The Burrow channel platform's toolset key. The gateway reads
+ * `platform_toolsets.<name>` per turn (`_get_platform_tools`,
+ * hermes_cli/tools_config.py at fdec926e).
+ */
+export const TOOLSET_KEY = `platform_toolsets.${PLATFORM_NAME}`;
+
+/** The plugin module that moves a home's session state to {@link PLATFORM_NAME} (run with Hermes's interpreter). */
+export const PLATFORM_RENAME_MODULE = "hermes_burrow_channel.platform_rename";
 
 /**
  * The managed headless default for that key. `suite hermes` is an unattended
@@ -293,7 +300,7 @@ export interface HermesOptions {
   allowedUsers?: string;
   hermes?: string;
   installHermes: boolean;
-  /** Leave `platform_toolsets.startup_suite` to Hermes's own default (see {@link HEADLESS_TOOLSET}). */
+  /** Leave `platform_toolsets.burrow` to Hermes's own default (see {@link HEADLESS_TOOLSET}). */
   fullToolset: boolean;
   hermesHome: string;
   stampOnly: boolean;
@@ -489,6 +496,46 @@ export function pythonFromActivation(stdout: string): string | null {
     if (m?.[1] !== undefined) return join(m[1], "bin", "python");
   }
   return null;
+}
+
+/** The PYTHONPATH of that activation environment (Hermes's repo, then its venv), or null. */
+export function pythonPathFromActivation(stdout: string): string | null {
+  try {
+    const doc = JSON.parse(stdout.trim()) as Record<string, unknown> | null;
+    return doc !== null && typeof doc === "object" && typeof doc.PYTHONPATH === "string" && doc.PYTHONPATH !== "" ? doc.PYTHONPATH : null;
+  } catch {
+    return null;
+  }
+}
+
+export type PlatformRenameOutcome =
+  | { kind: "moved"; moved: Record<string, number> }
+  | { kind: "refused"; message: string }
+  | { kind: "failed"; message: string };
+
+/**
+ * What `python -m hermes_burrow_channel.platform_rename` reported: ONE JSON
+ * object on stdout, exit 0 moved (`moved` may be empty), 2 refused having
+ * changed nothing (a running gateway, a collision), 1 anything else. A 0 whose
+ * stdout is not that object is a failure, never a success.
+ */
+export function parsePlatformRename(exitCode: number, stdout: string): PlatformRenameOutcome {
+  let doc: Record<string, unknown> | null = null;
+  try {
+    const parsed = JSON.parse(lastLine(stdout)) as unknown;
+    if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) doc = parsed as Record<string, unknown>;
+  } catch {
+    doc = null;
+  }
+  const message = typeof doc?.error === "string" ? doc.error : "";
+  if (exitCode === 2 && doc?.ok === false) return { kind: "refused", message };
+  if (exitCode !== 0 || doc?.ok !== true) return { kind: "failed", message: message || (doc === null ? "no JSON result on stdout" : "") };
+  const moved: Record<string, number> = {};
+  const raw = doc.moved;
+  if (raw !== null && typeof raw === "object" && !Array.isArray(raw)) {
+    for (const [k, v] of Object.entries(raw)) if (typeof v === "number") moved[k] = v;
+  }
+  return { kind: "moved", moved };
 }
 
 /**
@@ -737,12 +784,16 @@ interface WriterState {
   bin: string | null;
   installedNow: boolean;
   python: string | null;
+  /** Hermes's own PYTHONPATH (`pm.environments`), when it answered; the platform rename imports Hermes through it. */
+  pythonPath: string | null;
+  /** The Hermes install directory `--version` names, for a Hermes that gave no PYTHONPATH. */
+  installDir: string | null;
   modelKey?: string;
   before: Record<ChannelPart, string | null> | null;
   /** Whether this root carried a stamp record before this run: an absent part is then a repair. */
   stampedBefore: boolean;
   channelActions: Map<ChannelPart, StampAction>;
-  /** The pre-0.12.0 names this start moves (legacy_names.ts "Hermes"), and their actions. */
+  /** The earlier names this start moves (legacy_names.ts "Hermes", 0.12.0 and 0.20.0), and their actions. */
   renames: HermesRename[];
   renameActions: StampAction[];
   warnings: string[];
@@ -875,6 +926,8 @@ export function hermesWriter(ctx: { opts: HermesOptions | null }, deps: HermesDe
     bin: null,
     installedNow: false,
     python: null,
+    pythonPath: null,
+    installDir: null,
     before: null,
     stampedBefore: false,
     channelActions: new Map(),
@@ -1037,10 +1090,10 @@ export function hermesWriter(ctx: { opts: HermesOptions | null }, deps: HermesDe
       deps.stderr(`${line}\n`);
     }
     if (r.exitCode !== 0) {
-      throw fail("channel_install_failed", `the hermes-suite-channel installer exited ${r.exitCode}: ${lastLine(r.stderr)}`);
+      throw fail("channel_install_failed", `the burrow-channel-hermes installer exited ${r.exitCode}: ${lastLine(r.stderr)}`);
     }
     if (lastLine(r.stdout) !== INSTALLER_RESULT_LINE) {
-      throw fail("channel_install_unparseable", `the hermes-suite-channel installer did not end with "${INSTALLER_RESULT_LINE}": ${lastLine(r.stdout)}`);
+      throw fail("channel_install_unparseable", `the burrow-channel-hermes installer did not end with "${INSTALLER_RESULT_LINE}": ${lastLine(r.stdout)}`);
     }
   }
 
@@ -1057,7 +1110,39 @@ export function hermesWriter(ctx: { opts: HermesOptions | null }, deps: HermesDe
     const r = await spawn([bin, "--run-module", "pm.environments"]);
     if (r.exitCode !== 0) return null;
     const py = pythonFromActivation(r.stdout);
-    return py !== null && isExecutable(py) ? py : null;
+    if (py === null || !isExecutable(py)) return null;
+    state.pythonPath = pythonPathFromActivation(r.stdout);
+    return py;
+  }
+
+  /**
+   * Move the home's session state from the old platform key (legacy_names.ts
+   * "0.20.0"): the plugin's own module, from the pinned checkout, with
+   * Hermes's interpreter and Hermes's modules importable. It refuses, having
+   * changed nothing, while a gateway runs for the home or when a moved key
+   * already exists; it is one state.db transaction, so a failure here leaves
+   * the sessions as they were and the caller's restore puts the rest back.
+   */
+  async function migrateSessionRoutes(home: string): Promise<void> {
+    const paths = [checkout(), ...(state.pythonPath !== null ? [state.pythonPath] : state.installDir !== null ? [state.installDir] : [])];
+    const env = { ...childEnvFor(deps, home), PYTHONPATH: paths.join(":") };
+    const r = await spawn([state.python as string, "-m", PLATFORM_RENAME_MODULE, "--hermes-home", home], { cwd: checkout(), env });
+    const outcome = parsePlatformRename(r.exitCode, r.stdout);
+    if (outcome.kind === "refused") {
+      throw refused("platform_rename_refused", `could not move ${home}'s sessions to the ${PLATFORM_NAME} platform key: ${outcome.message}`);
+    }
+    if (outcome.kind === "failed") {
+      throw fail(
+        "platform_rename_failed",
+        `${PLATFORM_RENAME_MODULE} exited ${r.exitCode}: ${outcome.message || lastLine(r.stderr || r.stdout)}`,
+      );
+    }
+    const moved = Object.entries(outcome.moved);
+    deps.stderr(
+      moved.length === 0
+        ? `${CLI_NAME}: ${home} holds no session state under the old platform key; nothing to move\n`
+        : `${CLI_NAME}: moved ${home}'s sessions to the ${PLATFORM_NAME} platform key: ${moved.map(([k, n]) => `${k} ${n}`).join(", ")}\n`,
+    );
   }
 
   async function importsMcp(py: string): Promise<boolean> {
@@ -1095,7 +1180,7 @@ export function hermesWriter(ctx: { opts: HermesOptions | null }, deps: HermesDe
       });
     } catch (e) {
       if (e instanceof LegacyNameConflict) throw refused(LEGACY_CONFLICT_CODE, e.message);
-      throw fail("legacy_rename_failed", `could not rename ${home}'s pre-0.12.0 names: ${e instanceof Error ? e.message : String(e)}`);
+      throw fail("legacy_rename_failed", `could not rename ${home}'s earlier names: ${e instanceof Error ? e.message : String(e)}`);
     }
     for (const c of changes) deps.stderr(`${CLI_NAME}: renamed ${c.file}: ${c.what}\n`);
     for (const a of state.renameActions) a.applied = true;
@@ -1125,6 +1210,7 @@ export function hermesWriter(ctx: { opts: HermesOptions | null }, deps: HermesDe
       // The install's own commit, from git, when it is a git checkout; the
       // --version line's local token otherwise (never its `upstream` token).
       const dir = parseHermesInstallDir(r.stdout);
+      state.installDir = dir;
       if (dir !== null && existsSync(join(dir, ".git"))) {
         const head = await spawn(["git", "-C", dir, "rev-parse", "HEAD"], { env: gitEnv(deps) });
         const sha = head.stdout.trim();
@@ -1196,7 +1282,10 @@ export function hermesWriter(ctx: { opts: HermesOptions | null }, deps: HermesDe
           planned("config_set", key, current === undefined || current === null ? absent : sameConfigValue(current, value) ? "unchanged" : "repaired"),
         );
       }
-      const toolsets = lookupKey(config, TOOLSET_KEY);
+      // A toolset list that moves from the old platform key (renameHermesHome runs before
+      // the step that writes this key) is the value this key will hold.
+      const movingToolsets = state.renames.find((r) => r.place === "platform_toolsets");
+      const toolsets = lookupKey(config, movingToolsets !== undefined ? movingToolsets.oldName : TOOLSET_KEY);
       actions.push(planned("config_set", TOOLSET_KEY, toolsetOutcome(toolsets, o.fullToolset, absent)));
       if (isOperatorToolset(toolsets)) {
         state.warnings.push(
@@ -1259,18 +1348,22 @@ export function hermesWriter(ctx: { opts: HermesOptions | null }, deps: HermesDe
           tokens: [HERMES_TOKEN_RENAME[0], TOKEN_RELPATH],
         });
       } catch (e) {
-        throw fail("rename_snapshot_failed", `could not snapshot ${home} before renaming its pre-0.12.0 names, so nothing was renamed: ${e instanceof Error ? e.message : String(e)}`);
+        throw fail("rename_snapshot_failed", `could not snapshot ${home} before renaming its earlier names, so nothing was renamed: ${e instanceof Error ? e.message : String(e)}`);
       }
       try {
         await renameLegacyNames(home, bin);
         await installAndConfigure(inputs, actions);
+        // LAST: the session state is not in the snapshot. Moved only once
+        // everything above held, so a restore never pairs moved sessions
+        // with the old plugin it puts back.
+        if (state.renames.some((r) => r.place === "session_routes")) await migrateSessionRoutes(home);
       } catch (e) {
         const failed = snapshot.restore();
         for (const a of state.renameActions) a.applied = false;
         remeasureAfterRestore();
         const original = e instanceof Error ? e.message : String(e);
         if (failed.length === 0) {
-          deps.stderr(`${CLI_NAME}: the start failed after renaming ${home}'s pre-0.12.0 names; they were put back as they were\n`);
+          deps.stderr(`${CLI_NAME}: the start failed after renaming ${home}'s earlier names; they were put back as they were\n`);
           throw e;
         }
         const both =
@@ -1394,7 +1487,7 @@ export function hermesWriter(ctx: { opts: HermesOptions | null }, deps: HermesDe
     );
     if (inputs.tokenRef.kind === "keychain") {
       state.warnings.push(
-        `keychain ref ${inputs.tokenRef.raw} was materialised into ${tokenPath} (0600): hermes-suite-channel has no keychain resolver (follow-up)`,
+        `keychain ref ${inputs.tokenRef.raw} was materialised into ${tokenPath} (0600): burrow-channel-hermes has no keychain resolver (follow-up)`,
       );
     }
 

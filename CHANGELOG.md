@@ -10,6 +10,29 @@ that matters in the field: is this one newer than what I had?
 Minor for a new capability or a changed default; patch for a fix that changes no
 behaviour anyone was relying on.
 
+## 0.20.0
+
+**The Hermes platform key moves from `startup_suite` to `burrow`, and an
+existing home moves with it.** The channel pin moves to burrow-channel-hermes
+0.5.0 (`HERMES_CHANNEL_REF`), which registers the gateway platform as `burrow`
+and wraps Burrow messages in `<burrow-untrusted>`, so a Hermes agent no longer
+reads the old product name in its prompt ("Platform: startup_suite", "No home
+channel is set for Startup_Suite"). `TOOLSET_KEY` is now
+`platform_toolsets.burrow`, and the installer's result line
+`burrow-channel-hermes: installed`.
+
+Hermes keys sessions, toolsets and the home channel on the platform name, so
+the next `burrow hermes` START moves a home that still holds the old one:
+`platform_toolsets.startup_suite` and `platforms.startup_suite` (the `/sethome`
+home channel included) through `hermes config set` / `unset`, a
+`STARTUP_SUITE_HOME_CHANNEL` `.env` mirror in place, and, last, the session
+routes through the plugin's own `hermes_burrow_channel.platform_rename`, run
+with Hermes's interpreter. All of it is inside the 0.12.2 snapshot-and-restore
+transaction, only on a start (an attach to a running agent moves nothing), and
+idempotent: a second start moves nothing. Old beside new refuses with exit 7.
+Without the session move every existing chat would silently start a new
+session. See README "The 0.20.0 rename".
+
 ## 0.19.0
 
 **`burrow watch --host-only`: serve the host connections and never type.**

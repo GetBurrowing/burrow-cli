@@ -404,9 +404,56 @@ export const HERMES_TOKEN_RENAME = [
 /** The release from which the Hermes adapter reads only the new names. */
 const HERMES_SINCE = "0.12.0";
 
+/*
+ * 0.20.0: the gateway PLATFORM key (burrow-channel-hermes v0.5.0).
+ *
+ *   config.yaml `platform_toolsets.<key>`       startup_suite -> burrow
+ *   config.yaml `platforms.<key>` (with its      startup_suite -> burrow
+ *     `home_channel.platform`)
+ *   .env `<KEY>_HOME_CHANNEL` (+ `_THREAD_ID`,   STARTUP_SUITE_ -> BURROW_
+ *     `_NAME`), the names Hermes derives from
+ *     the key when it mirrors /sethome
+ *   the session state keyed on it (state.db,     moved by the plugin's own
+ *     sessions/sessions.json, cron/jobs.json)    platform_rename module
+ *
+ * The first three move here, in renameHermesHome, like the 0.12.0 names: the
+ * config keys through `hermes config set` / `unset` (MEASURED at fdec926e in
+ * a throwaway HERMES_HOME: `config set platforms.burrow '<json object>'`
+ * stores the structure, `config unset platforms.startup_suite` removes it and
+ * exits 1 "Config key not set" once gone), the .env lines in place. The
+ * session state is NOT moved here: hermes.ts runs the plugin's
+ * `hermes_burrow_channel.platform_rename` with Hermes's interpreter as the
+ * LAST step of the start, after the installer, so a start that fails earlier
+ * restores a home whose sessions still match its (restored) old plugin.
+ *
+ * A home is on the old key when any of the three is present, or when its
+ * installed platform plugin is a pre-v0.5.0 build (its tree holds the
+ * `hermes_suite_channel` package, which registers `startup_suite`): that
+ * build is what keyed the home's sessions, whatever config.yaml says.
+ */
+
+/** `[old, new]` Hermes gateway platform key. The new one is hermes.ts PLATFORM_NAME (asserted by test). */
+export const HERMES_PLATFORM_RENAME = ["startup_suite", "burrow"] as const;
+/** `[old, new]` the platform plugin's Python package; an installed tree holding the old one registers the old key. */
+export const HERMES_PACKAGE_RENAME = ["hermes_suite_channel", "hermes_burrow_channel"] as const;
+/** `[old, new]` the home-channel variable Hermes derives from the key (`<KEY>_HOME_CHANNEL`). */
+export const HERMES_HOME_ENV_RENAME = ["STARTUP_SUITE_HOME_CHANNEL", "BURROW_HOME_CHANNEL"] as const;
+/** The suffixes Hermes writes beside it (`_THREAD_ID` on /sethome, `_NAME` from setup). */
+const HOME_ENV_SUFFIXES = ["", "_THREAD_ID", "_NAME"] as const;
+
+/** The release from which the Hermes adapter registers only the new platform key. */
+const PLATFORM_SINCE = "0.20.0";
+
 const PLUGIN_LISTS = ["enabled", "disabled"] as const;
 
-export type HermesPlace = "mcp_server" | "plugin" | "token_file";
+export type HermesPlace =
+  | "mcp_server"
+  | "plugin"
+  | "token_file"
+  | "platform_toolsets"
+  | "platform_config"
+  | "home_env"
+  | "session_routes";
 
 /** One Hermes name the start would move. `file` is absolute. */
 export interface HermesRename {
@@ -473,6 +520,67 @@ export function pendingHermesRenames(home: string, config: Json | null): HermesR
     if (presentPath(join(home, newToken))) throw new LegacyNameConflict(join(home, "mcp-tokens"), oldToken, newToken, HERMES_SINCE);
     todo.push({ place: "token_file", file: join(home, oldToken), oldName: oldToken, newName: newToken });
   }
+
+  todo.push(...pendingPlatformRenames(home, config));
+  return todo;
+}
+
+function platformSection(config: Json | null, section: "platform_toolsets" | "platforms"): Json {
+  return config !== null && isObject(config[section]) ? config[section] : {};
+}
+
+/** `.env` as `[name, value]` per assignment line, in order; [] when there is none. */
+function envAssignments(home: string): [string, string][] {
+  let text: string;
+  try {
+    text = readFileSync(join(home, ".env"), "utf8");
+  } catch {
+    return [];
+  }
+  const out: [string, string][] = [];
+  for (const line of text.split("\n")) {
+    const m = /^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/.exec(line);
+    if (m !== null) out.push([m[1] as string, m[2] as string]);
+  }
+  return out;
+}
+
+/** Whether an installed platform plugin tree in this home is a pre-v0.5.0 build. */
+function oldPlatformPluginInstalled(home: string): boolean {
+  const [oldPackage] = HERMES_PACKAGE_RENAME;
+  return [HERMES_PLUGIN_RENAME[0], HERMES_PLUGIN_RENAME[1]].some((p) => presentPath(join(home, "plugins", p, oldPackage)));
+}
+
+/** The 0.20.0 platform-key places (see the section comment). Throws {@link LegacyNameConflict}. Read-only. */
+function pendingPlatformRenames(home: string, config: Json | null): HermesRename[] {
+  const [oldKey, newKey] = HERMES_PLATFORM_RENAME;
+  const configFile = join(home, "config.yaml");
+  const todo: HermesRename[] = [];
+  for (const [section, place] of [
+    ["platform_toolsets", "platform_toolsets"],
+    ["platforms", "platform_config"],
+  ] as const) {
+    const held = platformSection(config, section);
+    if (!has(held, oldKey)) continue;
+    if (has(held, newKey)) throw new LegacyNameConflict(`${configFile} ${section}`, oldKey, newKey, PLATFORM_SINCE);
+    todo.push({ place, file: configFile, oldName: `${section}.${oldKey}`, newName: `${section}.${newKey}` });
+  }
+  const envFile = join(home, ".env");
+  const env = envAssignments(home);
+  const [oldEnv, newEnv] = HERMES_HOME_ENV_RENAME;
+  for (const suffix of HOME_ENV_SUFFIXES) {
+    const oldName = `${oldEnv}${suffix}`;
+    const newName = `${newEnv}${suffix}`;
+    const oldValues = env.filter(([k]) => k === oldName).map(([, v]) => v);
+    if (oldValues.length === 0) continue;
+    const newValues = env.filter(([k]) => k === newName).map(([, v]) => v);
+    // The same value under both names is one statement made twice: the old line just goes.
+    if (new Set([...oldValues, ...newValues]).size > 1) throw new LegacyNameConflict(envFile, oldName, newName, PLATFORM_SINCE);
+    todo.push({ place: "home_env", file: envFile, oldName, newName });
+  }
+  if (todo.length > 0 || oldPlatformPluginInstalled(home)) {
+    todo.push({ place: "session_routes", file: join(home, "state.db"), oldName: oldKey, newName: newKey });
+  }
   return todo;
 }
 
@@ -491,6 +599,15 @@ export function hermesLegacyNames(home: string, config: Json | null): string[] {
   for (const k of PLUGIN_LISTS) if (lists[k].includes(oldPlugin)) out.push(`${join(home, "config.yaml")} plugins.${k}: ${oldPlugin}`);
   const [oldToken] = HERMES_TOKEN_RENAME;
   if (presentPath(join(home, oldToken))) out.push(join(home, oldToken));
+  const [oldKey] = HERMES_PLATFORM_RENAME;
+  for (const section of ["platform_toolsets", "platforms"] as const) {
+    if (has(platformSection(config, section), oldKey)) out.push(`${join(home, "config.yaml")} ${section}.${oldKey}`);
+  }
+  const [oldEnv] = HERMES_HOME_ENV_RENAME;
+  for (const suffix of HOME_ENV_SUFFIXES) {
+    if (envAssignments(home).some(([k]) => k === `${oldEnv}${suffix}`)) out.push(`${join(home, ".env")} ${oldEnv}${suffix}`);
+  }
+  if (oldPlatformPluginInstalled(home)) out.push(`${join(home, "plugins")}: a platform plugin that registers ${oldKey}`);
   return out;
 }
 
@@ -550,13 +667,58 @@ export async function renameHermesHome(home: string, cli: HermesRenameCli): Prom
         throw new Error(`hermes plugins disable/remove exited 0 but ${r.oldName} is still installed or listed`);
       }
       changes.push({ file: r.file, what: `plugin ${r.oldName} removed; the installer installs ${r.newName}` });
-    } else {
+    } else if (r.place === "token_file") {
       const to = join(home, r.newName);
       renameSync(r.file, to);
       changes.push({ file: to, what: `renamed from ${r.file}` });
+    } else if (r.place === "platform_toolsets" || r.place === "platform_config") {
+      const [oldKey, newKey] = HERMES_PLATFORM_RENAME;
+      const section = r.place === "platform_toolsets" ? "platform_toolsets" : "platforms";
+      const value = retargetPlatform(platformSection(cli.readConfig(), section)[oldKey]);
+      const carried = isObject(value) || Array.isArray(value);
+      if (carried) await hermes(["config", "set", r.newName, JSON.stringify(value)]);
+      await hermes(["config", "unset", r.oldName]);
+      const after = platformSection(cli.readConfig(), section);
+      if (has(after, oldKey) || (carried && canonical(after[newKey]) !== canonical(value))) {
+        throw new Error(`hermes config set/unset exited 0 but ${r.file} does not hold ${r.newName} in place of ${r.oldName}`);
+      }
+      changes.push({ file: r.file, what: `${r.oldName} -> ${r.newName}` });
+    } else if (r.place === "home_env") {
+      renameEnvLine(r.file, r.oldName, r.newName);
+      changes.push({ file: r.file, what: `${r.oldName} -> ${r.newName}` });
     }
+    // "session_routes" moves later, through the plugin (hermes.ts migrateSessionRoutes).
   }
   return changes;
+}
+
+/**
+ * A `platforms.<key>` value with every `platform: startup_suite` inside it
+ * (the `home_channel` Hermes's /sethome wrote) naming the new key.
+ */
+export function retargetPlatform(value: unknown): unknown {
+  const [oldKey, newKey] = HERMES_PLATFORM_RENAME;
+  if (Array.isArray(value)) return value.map(retargetPlatform);
+  if (!isObject(value)) return value;
+  const out: Json = {};
+  for (const [k, v] of Object.entries(value)) out[k] = k === "platform" && v === oldKey ? newKey : retargetPlatform(v);
+  return out;
+}
+
+/**
+ * Rename one `.env` assignment in place, every other byte kept: the old line
+ * becomes the new name, or goes when the new name already holds the same
+ * value (pendingPlatformRenames refused a different one). Mode kept.
+ */
+function renameEnvLine(file: string, oldName: string, newName: string): void {
+  const lines = readFileSync(file, "utf8").split("\n");
+  const hasNew = lines.some((l) => l.startsWith(`${newName}=`));
+  const out: string[] = [];
+  for (const line of lines) {
+    if (!line.startsWith(`${oldName}=`)) out.push(line);
+    else if (!hasNew) out.push(`${newName}=${line.slice(oldName.length + 1)}`);
+  }
+  replaceFile(file, out.join("\n"));
 }
 
 /* ------------------------------------------------------------------------- */
