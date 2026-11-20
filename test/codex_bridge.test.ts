@@ -399,7 +399,13 @@ describe("approval requests follow the configured policy", () => {
 });
 
 describe("burrow-channel tool calls become socket pushes", () => {
-  test("suite_reply pushes a reply to the named space", async () => {
+  test("burrow_reply pushes a reply to the named space", async () => {
+    const t = setup();
+    expect(await t.bridge.channelTool("burrow_reply", { space_id: SPACE_A, content: "done" })).toEqual({ ok: true, text: "reply sent" });
+    expect(t.channel.events("reply")).toEqual([{ space_id: SPACE_A, content: "done" }]);
+  });
+
+  test("the deprecated suite_reply name (from an older reply MCP server) pushes the same reply", async () => {
     const t = setup();
     expect(await t.bridge.channelTool("suite_reply", { space_id: SPACE_A, content: "done" })).toEqual({ ok: true, text: "reply sent" });
     expect(t.channel.events("reply")).toEqual([{ space_id: SPACE_A, content: "done" }]);
@@ -407,15 +413,15 @@ describe("burrow-channel tool calls become socket pushes", () => {
 
   test("a space id that is not a UUID is refused before anything is pushed", async () => {
     const t = setup();
-    const r = await t.bridge.channelTool("suite_reply", { space_id: "task-123", content: "x" });
+    const r = await t.bridge.channelTool("burrow_reply", { space_id: "task-123", content: "x" });
     expect(r.ok).toBe(false);
     expect(t.channel.pushes).toEqual([]);
   });
 
   test("a final chunk persists a reply BEFORE the done chunk", async () => {
     const t = setup();
-    await t.bridge.channelTool("suite_reply_chunk", { space_id: SPACE_A, chunk_id: "c", text: "part", done: false });
-    await t.bridge.channelTool("suite_reply_chunk", { space_id: SPACE_A, chunk_id: "c", text: "part two", done: true });
+    await t.bridge.channelTool("burrow_reply_chunk", { space_id: SPACE_A, chunk_id: "c", text: "part", done: false });
+    await t.bridge.channelTool("burrow_reply_chunk", { space_id: SPACE_A, chunk_id: "c", text: "part two", done: true });
     expect(t.channel.pushes.map((p) => p.event)).toEqual(["reply_chunk", "reply", "reply_chunk"]);
   });
 });

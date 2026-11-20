@@ -181,7 +181,7 @@ The wiring writes a starting `CLAUDE.md` into the working directory: a short bri
 on how an agent is expected to behave on this platform. It covers the
 conventions a new agent gets wrong by default — **a task assignment is already
 the authorization** so there is nothing to wait for, a terminal-only answer is
-an answer nobody received so substantive replies go through `suite_reply`, spawn
+an answer nobody received so substantive replies go through `burrow_reply`, spawn
 a subagent before you ack, never self-approve a human gate, and prefer org
 memory over local notes.
 
@@ -553,7 +553,7 @@ burrow codex --root ~/agents/oddjob --approvals decline --sandbox profile --mode
 burrow codex                    connection, Codex login, then tmux session burrow-<agent>
   └ burrow codex --no-session   the bridge: Burrow runtime socket ⇄ app-server
       └ codex app-server       Burrow MCP servers passed as -c overrides
-          └ burrow codex --reply-mcp   the burrow-channel MCP server (suite_reply …)
+          └ burrow codex --reply-mcp   the burrow-channel MCP server (burrow_reply …)
 ```
 
 - **Connection.** The one `burrow init` saved for this folder (`agents/<key>.credentials.json`),
@@ -570,9 +570,10 @@ burrow codex                    connection, Codex login, then tmux session burro
   - `burrow`, the install's `/mcp` endpoint, which has the same tool
     bundles a Claude agent has. The runtime token reaches Codex only as the
     environment variable named by `bearer_token_env_var`, never in an argv.
-  - `burrow-channel`, which provides `suite_reply`, `suite_typing`,
-    `suite_reply_chunk` and `suite_reply_with_media`, the same names and
-    schemas as the Claude channel plugin. Codex runs it as a child process. It
+  - `burrow-channel`, which provides `burrow_reply`, `burrow_typing`,
+    `burrow_reply_chunk` and `burrow_reply_with_media`, the same names and
+    schemas as the Claude channel plugin. The pre-rename `suite_*` names are
+    still listed as deprecated aliases that behave identically. Codex runs it as a child process. It
     forwards each call over a unix socket to the bridge, which owns the one
     runtime connection.
 - **One persistent thread per Burrow space.** A space is a conversation, and
@@ -581,7 +582,7 @@ burrow codex                    connection, Codex login, then tmux session burro
   `thread/resume`. Turns run one at a time per space and in parallel across
   spaces.
 - **Replies are the agent's.** Codex's final message is not posted. The agent
-  calls `suite_reply`, exactly as a Claude agent does. A turn that **fails** is
+  calls `burrow_reply`, exactly as a Claude agent does. A turn that **fails** is
   reported in the space, so a failure is never mistaken for being ignored.
 - **Approvals: `--approvals accept|decline`, `--sandbox MODE`.** The defaults,
   `accept` and `danger-full-access`, match `burrow claude`'s
@@ -893,8 +894,9 @@ each agent renames what is there.
 **Claude Code names every MCP tool `mcp__<server id>__<tool>`, so this renames
 every Burrow tool:** `mcp__startup-suite__task_ack` becomes
 `mcp__burrow__task_ack`, and `mcp__suite-channel__suite_reply` becomes
-`mcp__burrow-channel__suite_reply` (the plugin's own tool names, `suite_reply`
-and the rest, are unchanged). Anything outside this CLI that names a tool by
+`mcp__burrow-channel__suite_reply` (the plugin's own tool names were renamed
+separately, in plugin 0.5.0 and CLI 0.21.0: `burrow_reply` and the rest, with
+the `suite_*` names kept as deprecated aliases). Anything outside this CLI that names a tool by
 its full name has to move at the same restart: subagent `tools:` allowlists,
 `permissions` allow-lists, hooks that match tool names, and `CLAUDE.md` text.
 Claude Code re-reads subagent files and settings while a session runs, so
@@ -933,8 +935,9 @@ one is reported by the convergence check, with the command to remove it); the
 An attach to a running agent changes nothing and refuses nothing new; the
 move or refusal waits for its next start. Old beside new in one Hermes place
 is refused (exit 7) with nothing moved. Tool names change for codex and dsh
-agents the same way they did for Claude (`mcp__burrow__…`); `suite_reply` and
-the other channel tool names do not.
+agents the same way they did for Claude (`mcp__burrow__…`). The channel tool
+names moved later, in 0.21.0: `burrow_reply` and the rest, with `suite_reply`
+and the other old names kept as deprecated aliases.
 
 ### The 0.20.0 rename: the Hermes platform key
 
