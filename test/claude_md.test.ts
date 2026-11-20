@@ -51,7 +51,7 @@ describe("the starting CLAUDE.md", () => {
     // Not a spell-check of the prose: each of these is a rule a new agent gets
     // wrong by default, so losing one silently is the regression that matters.
     expect(CLAUDE_MD).toContain("assignment IS the authorization");
-    expect(CLAUDE_MD).toContain("suite_reply");
+    expect(CLAUDE_MD).toContain("burrow_reply");
     expect(CLAUDE_MD).toContain("Never self-approve a human gate");
     expect(CLAUDE_MD).toContain("memory_");
   });
@@ -126,6 +126,13 @@ describe("delivering the conventions when CLAUDE.md is someone else's file", () 
       expect(SUITE_CONVENTIONS).toContain(marker);
     }
     expect(missingConventions(SUITE_CONVENTIONS)).toEqual([]);
+    // A CLAUDE.md seeded before the rename names only `suite_reply`: it still
+    // states the reply convention. Control: with neither name it is missing.
+    const preRename = SUITE_CONVENTIONS.split("burrow_reply").join("suite_reply");
+    expect(preRename).not.toContain("burrow_reply");
+    expect(missingConventions(preRename)).toEqual([]);
+    const neither = preRename.split("suite_reply").join("some_tool");
+    expect(missingConventions(neither)).toEqual(["always respond in channel"]);
     expect(missingConventions("# nothing to do with Burrow\n")).toEqual(
       CONVENTION_MARKERS.map((c) => c.name),
     );

@@ -5,10 +5,10 @@
  *
  * Two processes, one verb:
  *
- *   suite codex                 (outer) connection, login, then tmux
- *     └ suite codex --no-session (in the pane) the bridge: runtime socket ⇄ app-server
- *         └ codex app-server     with the Burrow MCP servers as `-c` overrides
- *             └ suite codex --reply-mcp   the `burrow-channel` MCP server (suite_reply …)
+ *   burrow codex                 (outer) connection, login, then tmux
+ *     └ burrow codex --no-session (in the pane) the bridge: runtime socket ⇄ app-server
+ *         └ codex app-server      with the Burrow MCP servers as `-c` overrides
+ *             └ burrow codex --reply-mcp the `burrow-channel` MCP server (burrow_reply …)
  *
  * FOUR RULES:
  *

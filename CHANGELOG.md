@@ -10,6 +10,30 @@ that matters in the field: is this one newer than what I had?
 Minor for a new capability or a changed default; patch for a fix that changes no
 behaviour anyone was relying on.
 
+## 0.21.0
+
+**Channel tools are `burrow_reply`, `burrow_reply_chunk`, `burrow_reply_with_media`
+and `burrow_typing`; the `suite_*` names are deprecated aliases.** The Codex
+`burrow-channel` reply server (`burrow codex --reply-mcp`) lists the four
+`burrow_*` tools first, then the four `suite_*` names. Each alias has the same
+schema, a description that starts "Deprecated alias of", and is forwarded to the
+bridge under its `burrow_*` name. The bridge accepts both names, so a reply
+server from before this release still works against a newer bridge. The
+DeepSeek federation plugin registers `burrow_reply` plus a `suite_reply` alias
+that runs the same send path. The conventions text (`CLAUDE.md`,
+`BURROW_CONVENTIONS.md`) now names the `burrow_*` tools, and names the
+`suite_*` names once, as the fallback for an older channel plugin. That mention
+also keeps core's agent-host `--check` passing, because the check still
+requires `suite_reply`. The "always respond in channel" marker accepts either
+name, so a `CLAUDE.md` seeded before the rename is not reported as missing it.
+
+**The Claude Code plugin pin moves to burrow-channel-claude-code 0.5.0.**
+`CLAUDE_CODE_CHANNEL_REF` is `f55cfb6a6a5b0409776fe1887f4c1d4cf4928175` (was
+`e9641d9c66a505ae071c56ae469c6b5bbb15a827`, 0.4.3), the commit tagged 0.5.0,
+kept on main by a merge commit (PR #32). 0.5.0 is the release that serves the
+`burrow_*` channel tools beside the deprecated `suite_*` aliases. An agent picks
+it up on its next `burrow claude` start; a running agent keeps its old plugin
+process, which serves only the `suite_*` names, until then.
 ## 0.20.1
 
 **The Hermes channel pin moves to burrow-channel-hermes 0.5.1**

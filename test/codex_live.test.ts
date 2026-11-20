@@ -10,7 +10,7 @@
  *  - the `-c mcp_servers.*` overrides from `appServerArgv` parse, and Codex
  *    spawns `suite codex --reply-mcp` as the `burrow-channel` MCP server and
  *    lists its four tools;
- *  - `mcpServer/tool/call` on `suite_reply` goes Codex → reply MCP server →
+ *  - `mcpServer/tool/call` on `burrow_reply` goes Codex → reply MCP server →
  *    unix socket → bridge → a `reply` push: the agent's reply path, end to end;
  *  - an attention becomes a real `thread/start` + `turn/start`, and the turn
  *    — which cannot run without a login — comes back failed and is reported in
@@ -44,7 +44,7 @@ test("the live codex smoke test below is not silently skipped", () => {
 
 describe.if(CODEX !== null)("real codex app-server, no login", () => {
   test(
-    "handshake, MCP wiring, suite_reply through Codex, and a turn that fails out loud",
+    "handshake, MCP wiring, burrow_reply through Codex, and a turn that fails out loud",
     async () => {
       Bun.spawnSync(["mkdir", "-p", HOME]);
       const socketPath = join(ROOT, "b.sock");
@@ -116,14 +116,23 @@ describe.if(CODEX !== null)("real codex app-server, no login", () => {
           await Bun.sleep(250);
         }
         const tools = Object.keys(status.data.find((s) => s.name === CHANNEL_MCP)?.tools ?? {}).sort();
-        expect(tools).toEqual(["suite_reply", "suite_reply_chunk", "suite_reply_with_media", "suite_typing"]);
+        expect(tools).toEqual([
+          "burrow_reply",
+          "burrow_reply_chunk",
+          "burrow_reply_with_media",
+          "burrow_typing",
+          "suite_reply",
+          "suite_reply_chunk",
+          "suite_reply_with_media",
+          "suite_typing",
+        ]);
 
-        // suite_reply, called through Codex, lands as a reply push.
+        // burrow_reply, called through Codex, lands as a reply push.
         pushes.length = 0;
         const r = await client.request<{ content: { text?: string }[]; isError?: boolean }>("mcpServer/tool/call", {
           threadId,
           server: CHANNEL_MCP,
-          tool: "suite_reply",
+          tool: "burrow_reply",
           arguments: { space_id: SPACE, content: "hello from codex" },
         });
         expect(r.isError ?? false).toBe(false);

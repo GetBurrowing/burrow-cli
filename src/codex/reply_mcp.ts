@@ -1,7 +1,9 @@
 /**
- * The `burrow-channel` MCP server Codex runs: `suite_reply`, `suite_typing`,
- * `suite_reply_chunk` and `suite_reply_with_media` — the same names and input
- * schemas as the Claude channel plugin, so an agent's habits carry over.
+ * The `burrow-channel` MCP server Codex runs: `burrow_reply`, `burrow_typing`,
+ * `burrow_reply_chunk` and `burrow_reply_with_media` — the same names and input
+ * schemas as the Claude channel plugin, so an agent's habits carry over. The
+ * pre-rename `suite_*` names are still listed as deprecated aliases
+ * ({@link DEPRECATED_TOOL_ALIASES}), exactly as the Claude plugin lists them.
  *
  * WHY A SEPARATE PROCESS, AND HOW IT REACHES SUITE. Codex spawns stdio MCP
  * servers itself, so this runs as Codex's child (`suite codex --reply-mcp`),
@@ -27,9 +29,27 @@ export const BRIDGE_SOCKET_ENVS = [burrowName("CODEX_BRIDGE_SOCKET"), suiteName(
 /** The name named in diagnostics. */
 export const BRIDGE_SOCKET_ENV = burrowName("CODEX_BRIDGE_SOCKET");
 
-export const TOOL_SPECS = [
+/**
+ * Deprecated `suite_*` tool names → their `burrow_*` tool. A thread started
+ * before the rename was told the old names, so each alias stays listed and is
+ * forwarded to the bridge under its `burrow_*` name. Remove once no running
+ * agent calls them.
+ */
+export const DEPRECATED_TOOL_ALIASES: Readonly<Record<string, string>> = {
+  suite_reply: "burrow_reply",
+  suite_reply_with_media: "burrow_reply_with_media",
+  suite_typing: "burrow_typing",
+  suite_reply_chunk: "burrow_reply_chunk",
+};
+
+/** The `burrow_*` name for a channel tool name, old or new. */
+export function canonicalToolName(name: string): string {
+  return DEPRECATED_TOOL_ALIASES[name] ?? name;
+}
+
+const PRIMARY_TOOL_SPECS = [
   {
-    name: "suite_reply",
+    name: "burrow_reply",
     description:
       "Send a text reply into a Burrow space. Use this to answer a message that arrived via the channel. Pass the space_id attribute from the inbound <channel> tag.",
     inputSchema: {
@@ -39,7 +59,7 @@ export const TOOL_SPECS = [
     },
   },
   {
-    name: "suite_reply_with_media",
+    name: "burrow_reply_with_media",
     description:
       "Send a text reply with base64-encoded file attachments (e.g. a screenshot or diagram). Use when a visual artifact belongs in the thread.",
     inputSchema: {
@@ -61,7 +81,7 @@ export const TOOL_SPECS = [
     },
   },
   {
-    name: "suite_typing",
+    name: "burrow_typing",
     description: "Toggle a typing indicator in the Burrow space so humans can see that a reply is being composed.",
     inputSchema: {
       type: "object",
@@ -70,7 +90,7 @@ export const TOOL_SPECS = [
     },
   },
   {
-    name: "suite_reply_chunk",
+    name: "burrow_reply_chunk",
     description:
       "Send a partial reply chunk to a Burrow space, appearing to the human as a progressively-revealed message. Call it several times with the same chunk_id, passing the cumulative text each call. Set done:true on the last call.",
     inputSchema: {
@@ -85,6 +105,18 @@ export const TOOL_SPECS = [
     },
   },
 ] as const;
+
+export const TOOL_SPECS = [
+  ...PRIMARY_TOOL_SPECS,
+  ...Object.entries(DEPRECATED_TOOL_ALIASES).map(([alias, target]) => {
+    const primary = PRIMARY_TOOL_SPECS.find((t) => t.name === target)!;
+    return {
+      ...primary,
+      name: alias,
+      description: `Deprecated alias of \`${target}\`; behaves identically. Call \`${target}\` instead. ${primary.description}`,
+    };
+  }),
+];
 
 /* Bridge side -------------------------------------------------------------- */
 
@@ -169,7 +201,7 @@ export async function handleMcpMessage(line: string, io: McpIo, version: string)
       }
       let r: { ok: boolean; text: string };
       try {
-        r = await io.forward(name, args);
+        r = await io.forward(canonicalToolName(name), args);
       } catch (e) {
         r = { ok: false, text: `the ${CLI_NAME} codex bridge is not reachable: ${e instanceof Error ? e.message : String(e)}` };
       }

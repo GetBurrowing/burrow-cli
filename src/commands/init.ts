@@ -162,15 +162,16 @@ export const PLUGIN_REPO_NAME = "burrow-channel-claude-code";
 /**
  * DEPLOYER: BUMP THIS BEFORE burrow-cli MERGES.
  *
- * This is the commit tagged 0.4.3 on burrow-channel-claude-code main (PR #31,
- * attention_ack and message_id dedupe for core's DeliveryQueue). Before 0.9.0 the checkout was
+ * This is the commit tagged 0.5.0 on burrow-channel-claude-code main (PR #32,
+ * merged with a merge commit so this commit stays on main: the burrow_* channel
+ * tools, with the suite_* names as deprecated aliases). Before 0.9.0 the checkout was
  * cloned once and never moved again: hive's sat at b238164 (2026-07-31) while
  * main moved on. `burrow claude` now holds the checkout at this commit; see
  * {@link ensurePluginAtPin} in claude_wiring.ts.
  * Pin a commit on main, never a branch tip: a squash merge deletes the branch
  * and the tip would dangle.
  */
-export const CLAUDE_CODE_CHANNEL_REF = "e9641d9c66a505ae071c56ae469c6b5bbb15a827";
+export const CLAUDE_CODE_CHANNEL_REF = "f55cfb6a6a5b0409776fe1887f4c1d4cf4928175";
 
 /** The plugin's clone URL under the owner `env` names (SUITE_GITHUB_OWNER). */
 export function pluginRepo(env: Env = process.env): string {

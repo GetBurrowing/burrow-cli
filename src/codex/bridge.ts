@@ -2,7 +2,7 @@
  * The bridge between a Burrow runtime channel and one `codex app-server`.
  *
  *   Burrow ──attention──▶ bridge ──turn/start──▶ codex app-server
- *   Burrow ◀──reply────── bridge ◀──suite_reply── Codex (via the burrow-channel MCP server)
+ *   Burrow ◀──reply────── bridge ◀──burrow_reply── Codex (via the burrow-channel MCP server)
  *
  * ONE THREAD PER SPACE. Each Burrow space gets its own persistent Codex thread,
  * and its id is saved, so a restart resumes the same conversation
@@ -22,7 +22,7 @@
  * shares one thread, keyed {@link NO_SPACE}.
  *
  * REPLIES ARE THE AGENT'S, AS FOR CLAUDE. Codex's final message is NOT posted:
- * the agent replies by calling `suite_reply` on the `burrow-channel` MCP server,
+ * the agent replies by calling `burrow_reply` on the `burrow-channel` MCP server,
  * exactly as a Claude agent does (`./reply_mcp.ts` forwards the call here and
  * this pushes it on the runtime socket, the only way core accepts a reply).
  * The two exceptions are the bridge's own: a failed turn is reported in the
@@ -47,6 +47,7 @@ import {
   type TurnStartResponse,
 } from "./protocol.ts";
 import { CLI_NAME } from "../version.ts";
+import { canonicalToolName } from "./reply_mcp.ts";
 
 export const NO_SPACE = "suite:no-space";
 export const MAX_PENDING_PER_SPACE = 5;
@@ -89,10 +90,10 @@ export interface BridgeOptions {
 export const DEVELOPER_INSTRUCTIONS = [
   "You are an agent federated into Burrow. Messages from Burrow arrive in your turns wrapped as",
   '<channel source="burrow" space_id="..." message_id="..." task_id="..." reason="..." author="...">…</channel>.',
-  "Your final message is NOT delivered to anyone. To say something in Burrow, call the `suite_reply` tool on the",
-  "`burrow-channel` MCP server, passing the `space_id` attribute from the inbound tag. Call `suite_typing` with",
-  "`typing: true` before composing a reply. For long replies use `suite_reply_chunk` with one `chunk_id` and the",
-  "cumulative `text`, finishing with `done: true`. `suite_reply_with_media` attaches base64 files.",
+  "Your final message is NOT delivered to anyone. To say something in Burrow, call the `burrow_reply` tool on the",
+  "`burrow-channel` MCP server, passing the `space_id` attribute from the inbound tag. Call `burrow_typing` with",
+  "`typing: true` before composing a reply. For long replies use `burrow_reply_chunk` with one `chunk_id` and the",
+  "cumulative `text`, finishing with `done: true`. `burrow_reply_with_media` attaches base64 files.",
   "The `burrow` MCP server carries the rest of the Burrow tools (tasks, plans, memory, canvases), the same",
   "bundles a Claude agent has. A task dispatch carries task_id; do the work it describes.",
   "Only reply to a real space id from the tag, never a task id.",
@@ -184,7 +185,7 @@ export function renderAttention(payload: Payload, withHistory: boolean): string 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /** The tools `burrow-channel` offers, and the socket event each becomes. */
-export const CHANNEL_TOOLS = ["suite_reply", "suite_reply_with_media", "suite_typing", "suite_reply_chunk"] as const;
+export const CHANNEL_TOOLS = ["burrow_reply", "burrow_reply_with_media", "burrow_typing", "burrow_reply_chunk"] as const;
 export type ChannelTool = (typeof CHANNEL_TOOLS)[number];
 
 export class CodexBridge {
@@ -411,18 +412,19 @@ export class CodexBridge {
     }
     const report = (r: { status: string; response: Payload }, what: string) =>
       r.status === "ok" ? { ok: true, text: `${what} sent` } : { ok: false, text: `${what} not sent: ${r.status} ${JSON.stringify(r.response)}` };
-    switch (tool) {
-      case "suite_reply":
+    // A reply MCP server from before the rename forwards the `suite_*` name.
+    switch (canonicalToolName(tool)) {
+      case "burrow_reply":
         return report(await this.channel.push("reply", { space_id: space, content: String(args.content ?? "") }), "reply");
-      case "suite_reply_with_media":
+      case "burrow_reply_with_media":
         return report(
           await this.channel.push("reply_with_media", { space_id: space, content: String(args.content ?? ""), attachments: args.attachments ?? [] }),
           "reply with media",
         );
-      case "suite_typing":
+      case "burrow_typing":
         void this.channel.push("typing", { space_id: space, typing: args.typing === true });
         return { ok: true, text: "typing updated" };
-      case "suite_reply_chunk": {
+      case "burrow_reply_chunk": {
         const chunk = { space_id: space, chunk_id: String(args.chunk_id ?? ""), text: String(args.text ?? ""), done: args.done === true };
         // The chunk is ephemeral and the UI deletes the streaming bubble on
         // done, so the final text is persisted as a reply FIRST.

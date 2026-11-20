@@ -7,7 +7,7 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } f
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PhoenixChannel, redactUrl, socketUrl, type SocketLike } from "../src/codex/phoenix.ts";
-import { handleMcpMessage, listenBridgeSocket, socketForwarder, TOOL_SPECS } from "../src/codex/reply_mcp.ts";
+import { DEPRECATED_TOOL_ALIASES, handleMcpMessage, listenBridgeSocket, socketForwarder, TOOL_SPECS } from "../src/codex/reply_mcp.ts";
 import {
   CHANNEL_MCP,
   MCP_TOKEN_ENV,
@@ -155,17 +155,32 @@ describe("the burrow-channel MCP server", () => {
     expect(out.result.serverInfo.name).toBe(CHANNEL_MCP);
   });
 
-  test("offers the Claude channel plugin's tool names", async () => {
+  test("offers the Claude channel plugin's tool names, burrow_* first, then the deprecated suite_* aliases", async () => {
     const out = JSON.parse((await handleMcpMessage('{"jsonrpc":"2.0","id":1,"method":"tools/list"}', io(), "0"))!);
-    expect(out.result.tools.map((t: { name: string }) => t.name)).toEqual(["suite_reply", "suite_reply_with_media", "suite_typing", "suite_reply_chunk"]);
-    expect(TOOL_SPECS[0].inputSchema.required).toEqual(["space_id", "content"]);
+    expect(out.result.tools.map((t: { name: string }) => t.name)).toEqual([
+      "burrow_reply",
+      "burrow_reply_with_media",
+      "burrow_typing",
+      "burrow_reply_chunk",
+      "suite_reply",
+      "suite_reply_with_media",
+      "suite_typing",
+      "suite_reply_chunk",
+    ]);
+    for (const [alias, target] of Object.entries(DEPRECATED_TOOL_ALIASES)) {
+      const a = TOOL_SPECS.find((t) => t.name === alias)!;
+      const p = TOOL_SPECS.find((t) => t.name === target)!;
+      expect(a.inputSchema).toEqual(p.inputSchema);
+      expect(a.description).toStartWith(`Deprecated alias of \`${target}\``);
+    }
+    expect(TOOL_SPECS[0]!.inputSchema.required).toEqual(["space_id", "content"]);
   });
 
   test("a call is forwarded and its result becomes the tool's text", async () => {
     const seen: unknown[] = [];
     const out = JSON.parse(
       (await handleMcpMessage(
-        '{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"suite_reply","arguments":{"space_id":"s","content":"hi"}}}',
+        '{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"burrow_reply","arguments":{"space_id":"s","content":"hi"}}}',
         io(async (tool, args) => {
           seen.push([tool, args]);
           return { ok: true, text: "reply sent" };
@@ -173,14 +188,30 @@ describe("the burrow-channel MCP server", () => {
         "0",
       ))!,
     );
-    expect(seen).toEqual([["suite_reply", { space_id: "s", content: "hi" }]]);
+    expect(seen).toEqual([["burrow_reply", { space_id: "s", content: "hi" }]]);
     expect(out).toEqual({ jsonrpc: "2.0", id: 7, result: { content: [{ type: "text", text: "reply sent" }], isError: false } });
+  });
+
+  test("a deprecated suite_* call is forwarded under its burrow_* name", async () => {
+    const seen: unknown[] = [];
+    const fwd = io(async (tool, args) => {
+      seen.push([tool, args]);
+      return { ok: true, text: "reply sent" };
+    });
+    for (const alias of Object.keys(DEPRECATED_TOOL_ALIASES)) {
+      await handleMcpMessage(JSON.stringify({ jsonrpc: "2.0", id: 9, method: "tools/call", params: { name: alias, arguments: {} } }), fwd, "0");
+    }
+    expect(seen.map((c) => (c as [string])[0])).toEqual(Object.values(DEPRECATED_TOOL_ALIASES));
+    // Control: a name that is neither is refused, not forwarded.
+    const out = JSON.parse((await handleMcpMessage('{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"suite_nope","arguments":{}}}', fwd, "0"))!);
+    expect(out.error.code).toBe(-32602);
+    expect(seen.length).toBe(4);
   });
 
   test("an unreachable bridge is a tool error the model can read, not a crash", async () => {
     const out = JSON.parse(
       (await handleMcpMessage(
-        '{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"suite_typing","arguments":{}}}',
+        '{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"burrow_typing","arguments":{}}}',
         io(async () => {
           throw new Error("ECONNREFUSED");
         }),
@@ -208,8 +239,8 @@ describe("the burrow-channel MCP server", () => {
       () => {},
     );
     const forward = socketForwarder(path);
-    expect(await forward("suite_reply", { space_id: "s", content: "a" })).toEqual({ ok: true, text: "suite_reply ok" });
-    expect(await forward("suite_typing", { space_id: "s", typing: true })).toEqual({ ok: true, text: "suite_typing ok" });
+    expect(await forward("burrow_reply", { space_id: "s", content: "a" })).toEqual({ ok: true, text: "burrow_reply ok" });
+    expect(await forward("burrow_typing", { space_id: "s", typing: true })).toEqual({ ok: true, text: "burrow_typing ok" });
     expect(calls.length).toBe(2);
     server.close();
   });

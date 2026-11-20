@@ -45,11 +45,18 @@
  *
  * Deliberately static — no interpolation, so rule 2 holds by construction.
  *
- * The prose says Burrow; the tool names in it (`suite_reply`, `suite_reply_chunk`,
- * `suite_reply_with_media`, `suite_typing`) are the channel plugin's own tool
- * names, renamed only when the plugin renames them. The MCP server ids that
- * prefix them for Claude Code (`mcp__burrow-channel__suite_reply`) are this
- * CLI's (init.ts CHANNEL_SERVER) and appear nowhere in this text.
+ * The tool names in it (`burrow_reply`, `burrow_reply_chunk`,
+ * `burrow_reply_with_media`, `burrow_typing`) are the channel plugin's own
+ * tool names since plugin 0.5.0 (the Codex reply server and the DeepSeek
+ * federation plugin use the same names). The pre-rename `suite_*` names are
+ * still served as deprecated aliases, and the text names them ONCE, as the
+ * fallback for an agent whose plugin predates 0.5.0: an agent told only
+ * `burrow_reply` on an old plugin would have no reply tool at all. That one
+ * mention also keeps core's agent-host `--check` (which requires
+ * `suite_reply`) passing until core's check accepts `burrow_reply`. Drop it
+ * once no install runs a plugin older than 0.5.0. The MCP server ids that
+ * prefix the tools for Claude Code (`mcp__burrow-channel__burrow_reply`) are
+ * this CLI's (init.ts CHANNEL_SERVER) and appear nowhere in this text.
  */
 export const BURROW_CONVENTIONS = `## You are a Burrow runtime, not a standalone assistant
 
@@ -84,19 +91,22 @@ useless.
 
 ## Always respond in channel
 
-Every substantive reply goes into the Burrow channel via \`suite_reply\`, not only
+Every substantive reply goes into the Burrow channel via \`burrow_reply\`, not only
 to your terminal. Humans read Burrow; a terminal-only answer is an answer they
 never received.
 
 - Reply in-channel by default — status updates, blockers and questions included.
 - Use the \`space_id\` from the inbound \`<channel>\` tag.
-- For long or multi-step replies use \`suite_reply_chunk\` (one \`chunk_id\`,
+- For long or multi-step replies use \`burrow_reply_chunk\` (one \`chunk_id\`,
   cumulative \`text\`, finish with \`done:true\`) so readers get progressive
-  reveal; pair it with \`suite_typing\` while composing.
-- Attachments go through \`suite_reply_with_media\`. Review evidence for a
+  reveal; pair it with \`burrow_typing\` while composing.
+- Attachments go through \`burrow_reply_with_media\`. Review evidence for a
   \`manual_approval\` gate does **not** — that flows through
   \`review_request_create\` with a canvas.
 - Having already answered in the terminal is not a reason to skip the channel.
+- The \`suite_reply\`, \`suite_reply_chunk\`, \`suite_reply_with_media\` and
+  \`suite_typing\` names are deprecated aliases of these tools. Use them only if
+  your channel plugin is too old to offer the \`burrow_*\` names.
 
 ## Spawn a subagent for task work
 
@@ -165,7 +175,8 @@ wrong, and the next agent would repeat the mistake without a note.
  * and reads this export (from 0.9.0 install.sh puts the library at
  * `<data>/burrow/cli`, so core's import path and its chmod of
  * `/usr/local/share/suite` must move when its pin moves to 0.9), and its `--check` image-build gate requires a
- * non-empty string containing `suite_reply`. Same string object, not a copy.
+ * non-empty string containing `suite_reply` (core's newer check accepts
+ * `burrow_reply` too). Same string object, not a copy.
  */
 export const SUITE_CONVENTIONS = BURROW_CONVENTIONS;
 
@@ -238,9 +249,11 @@ export const CONVENTIONS_MD = conventionsMd(CONVENTIONS_FILENAME);
  * never match — and would report every file as missing everything — fails
  * loudly instead of turning the report into noise.
  */
-export const CONVENTION_MARKERS: ReadonlyArray<{ name: string; marker: string }> = [
+export const CONVENTION_MARKERS: ReadonlyArray<{ name: string; marker: string; alternates?: readonly string[] }> = [
   { name: "an assignment is already the authorization", marker: "assignment IS the authorization" },
-  { name: "always respond in channel", marker: "suite_reply" },
+  // A CLAUDE.md seeded before the rename says `suite_reply` and still states
+  // the convention; it must not be reported as missing it.
+  { name: "always respond in channel", marker: "burrow_reply", alternates: ["suite_reply"] },
   { name: "spawn a subagent for task work", marker: "Spawn a subagent for task work" },
   { name: "never self-approve a human gate", marker: "Never self-approve a human gate" },
   { name: "prefer org memory over local memory", marker: "memory_search" },
@@ -248,7 +261,9 @@ export const CONVENTION_MARKERS: ReadonlyArray<{ name: string; marker: string }>
 
 /** Which conventions a `CLAUDE.md` does not state. Pure; content in, names out. */
 export function missingConventions(claudeMd: string): string[] {
-  return CONVENTION_MARKERS.filter((c) => !claudeMd.includes(c.marker)).map((c) => c.name);
+  return CONVENTION_MARKERS.filter((c) => ![c.marker, ...(c.alternates ?? [])].some((m) => claudeMd.includes(m))).map(
+    (c) => c.name,
+  );
 }
 
 export interface ClaudeMdPlan {

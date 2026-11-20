@@ -155,12 +155,12 @@ function captureStderr(run: () => void): string {
   return lines.join("");
 }
 
-describe("suite_reply", () => {
+describe("burrow_reply", () => {
   test("resolves ok when no error event arrives within the grace window", async () => {
     const registered: any[] = [];
     const ctx = fakeCtx({ tools: (def) => void registered.push(def) });
     applyPlugin(ctx);
-    const tool = registered.find((t) => t.name === "suite_reply");
+    const tool = registered.find((t) => t.name === "burrow_reply");
     expect(tool).toBeDefined();
 
     await withCapturedGraceTimer(async (fireGrace) => {
@@ -177,7 +177,7 @@ describe("suite_reply", () => {
     const registered: any[] = [];
     const ctx = fakeCtx({ tools: (def) => void registered.push(def) });
     applyPlugin(ctx);
-    const tool = registered.find((t) => t.name === "suite_reply");
+    const tool = registered.find((t) => t.name === "burrow_reply");
 
     await withCapturedGraceTimer(async () => {
       const pending = tool.execute({ space_id: "sp-1", content: "hello" });
@@ -198,6 +198,25 @@ describe("suite_reply", () => {
       expect(result.ok).toBe(false);
       expect(String(result.error)).toContain("code");
     });
+  });
+
+  test("the deprecated suite_reply alias pushes the same reply and says it is deprecated", async () => {
+    const registered: any[] = [];
+    const ctx = fakeCtx({ tools: (def) => void registered.push(def) });
+    applyPlugin(ctx);
+    const primary = registered.find((t) => t.name === "burrow_reply");
+    const alias = registered.find((t) => t.name === "suite_reply");
+    expect(alias).toBeDefined();
+    expect(alias.description).toStartWith("Deprecated alias of `burrow_reply`");
+    expect(primary.description).not.toContain("Deprecated");
+
+    pushes.length = 0;
+    await withCapturedGraceTimer(async (fireGrace) => {
+      const pending = alias.execute({ space_id: "sp-9", content: "via alias" });
+      fireGrace();
+      expect(await pending).toEqual({ ok: true, space_id: "sp-9" });
+    });
+    expect(pushes.filter((p) => p.event === "reply").map((p) => p.payload)).toEqual([{ space_id: "sp-9", content: "via alias" }]);
   });
 
   test("a build with no tools service mounts the plugin with no send path", () => {
@@ -333,7 +352,7 @@ describe("composition with a real cordis Context", () => {
     for (let i = 0; i < 50; i++) await new Promise((resolve) => setImmediate(resolve));
   }
 
-  test("activates with no tools service mounted — federation survives, suite_reply does not", async () => {
+  test("activates with no tools service mounted — federation survives, burrow_reply does not", async () => {
     handlers.clear();
     pushes.length = 0;
     const ctx = new Context();
@@ -351,7 +370,7 @@ describe("composition with a real cordis Context", () => {
     expect(registered).toHaveLength(0);
   });
 
-  test("registers suite_reply once a tools service mounts", async () => {
+  test("registers burrow_reply and its deprecated suite_reply alias once a tools service mounts", async () => {
     handlers.clear();
     pushes.length = 0;
     const ctx = new Context();
@@ -368,8 +387,7 @@ describe("composition with a real cordis Context", () => {
     await settle();
 
     // The nested inject fired and registered the tool through the stub.
-    expect(registered).toHaveLength(1);
-    expect(registered[0].name).toBe("suite_reply");
+    expect(registered.map((t) => t.name)).toEqual(["burrow_reply", "suite_reply"]);
 
     // The tool is live through the channel contract: a `reply` push carries
     // the space and the message body.

@@ -12,7 +12,8 @@
  * One session per Burrow space, held for the process lifetime, so a channel
  * conversation keeps its history the way a human participant would expect.
  *
- * THE ONE TOOL REGISTERED HERE IS `suite_reply` — the send path. Everything
+ * THE ONE TOOL REGISTERED HERE IS `burrow_reply` (plus its deprecated alias
+ * `suite_reply`, the same tool under the pre-rename name) — the send path. Everything
  * else arrives through the MCP surface, which today has no tool that posts a
  * message into a space, and a runtime that can only ever answer the space that
  * dispatched it cannot start a conversation. See the registration below.
@@ -381,8 +382,8 @@ export function apply(ctx, config) {
   // The hosted Burrow MCP surface has 100 tools and none of them post a
   // message to a space — only reads (`space_get_messages`,
   // `space_search_messages`) and `dm_create`, which is humans-only. Claude-side
-  // agents get `suite_reply` from a SEPARATE local MCP server (the
-  // claude-code-suite-channel bridge), so they can start a conversation
+  // agents get `burrow_reply` from a SEPARATE local MCP server (the
+  // burrow-channel-claude-code plugin), so they can start a conversation
   // anywhere; a dsh agent could only ever answer the space that had just
   // dispatched it.
   //
@@ -419,15 +420,19 @@ export function apply(ctx, config) {
   ctx.inject(['tools'], (toolCtx) => {
     try {
       const tools = toolCtx.get('tools')
-      if (!tools) throw new Error('the tools service is not mounted — suite_reply is unavailable on this build')
-      const disposer = tools.register(
+      if (!tools) throw new Error('the tools service is not mounted — burrow_reply is unavailable on this build')
+      const DESCRIPTION =
+        'Post a message into a Burrow space. Use the space_id from the ' +
+        'dispatch you are answering, or one from space_list. You must already ' +
+        'be a participant of that space — Burrow refuses a post to a space you ' +
+        'have not joined.'
+      // `suite_reply` is the pre-rename name: an agent whose session started
+      // before the rename was told it, so it stays registered as a deprecated
+      // alias with the same execute. Remove once no running agent calls it.
+      const replyTool = (name, description) =>
         defineTool({
-          name: 'suite_reply',
-          description:
-            'Post a message into a Burrow space. Use the space_id from the ' +
-            'dispatch you are answering, or one from space_list. You must already ' +
-            'be a participant of that space — Burrow refuses a post to a space you ' +
-            'have not joined.',
+          name,
+          description,
           parameters: {
             space_id: { type: 'string', required: true, description: 'Target space UUID.' },
             content: { type: 'string', required: true, description: 'Message body, markdown.' },
@@ -504,13 +509,23 @@ export function apply(ctx, config) {
               }
             })
           },
-        }),
-      )
-      process.stderr.write('[suite-federation] TOOL-REGISTERED suite_reply\n')
-      return disposer
+        })
+      const disposers = [
+        tools.register(replyTool('burrow_reply', DESCRIPTION)),
+        tools.register(
+          replyTool(
+            'suite_reply',
+            'Deprecated alias of `burrow_reply`; behaves identically. Call `burrow_reply` instead. ' + DESCRIPTION,
+          ),
+        ),
+      ]
+      process.stderr.write('[suite-federation] TOOL-REGISTERED burrow_reply suite_reply\n')
+      return () => {
+        for (const dispose of disposers) if (typeof dispose === 'function') dispose()
+      }
     } catch (error) {
       // NON-FATAL, deliberately: the plugin continues without the send path.
-      // See the comment above — federation is worth more than suite_reply.
+      // See the comment above — federation is worth more than burrow_reply.
       process.stderr.write(`[suite-federation] TOOL-REGISTER-FAILED (non-fatal, continuing) ${error?.stack ?? error}\n`)
     }
   })
