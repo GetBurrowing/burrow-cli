@@ -24,11 +24,23 @@ import {
 } from "../src/terminal/crypto.ts";
 import { livePty, type PtyHandle, type SpawnPty } from "../src/terminal/pty.ts";
 import { ENABLEABLE_KINDS, FEDERATION_OWN_AGENT, remoteTerminalPermission } from "../src/terminal/permission.ts";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { readAgentRecordExact, writeAgentConnection } from "../src/agent_connections.ts";
+import { dirname } from "node:path";
+import {
+  agentConfigPath,
+  agentCredentialsPath,
+  canonicalDir,
+  readAgentRecordExact,
+  serializeAgentRecord,
+  writeAgentConnection,
+} from "../src/agent_connections.ts";
+import { liveRestoreDeps, runRestore, type RestoreDeps } from "../src/commands/restore.ts";
+import { parseRoster } from "../src/roster.ts";
 import { ENABLEABLE_KINDS as HOST_ENABLEABLE_KINDS, setConfigAccess } from "../src/host/access.ts";
-import { HostManager } from "../src/host/manager.ts";
+import { HostManager, type HostDeps } from "../src/host/manager.ts";
+import { rosterKeepsTerminal } from "../src/host/live.ts";
+import { rosterPath } from "../src/roster.ts";
 import { HostSocket } from "../src/host/socket.ts";
 import { launchRemoteTerminal, remoteTerminalOf, setRemoteTerminal } from "../src/terminal/host.ts";
 
@@ -676,5 +688,265 @@ describe("the terminal rides the folder's ONE shared socket", () => {
     expect(a.isJoined()).toBe(false);
     sock.leaveTopic("a");
     expect(() => sock.topic("a", () => ({}))).not.toThrow();
+  });
+});
+
+/* ------------------------------------- a token named by reference, and restore */
+
+/** A HostManager on fake sockets and a fake tmux whose agent session is alive while `alive()` says so. */
+function hostOn(
+  env: Record<string, string | undefined>,
+  alive: () => boolean = () => true,
+  extra: Pick<HostDeps, "keepTerminal" | "resolveRef"> = {},
+) {
+  const sockets: FakeBinarySocket[] = [];
+  const logs: string[] = [];
+  const mgr = new HostManager({
+    ...extra,
+    env,
+    socket: (url) => {
+      const s = new FakeBinarySocket(url);
+      sockets.push(s);
+      return s;
+    },
+    log: (l) => logs.push(l),
+    harnessFor: () => "hermes",
+    codexHomeFor: () => null,
+    setTimer: () => 0,
+    clearTimer: () => {},
+    terminal: {
+      spawn: () => ({ write: () => {}, resize: () => {}, kill: () => {} }),
+      tmux: async (argv) => ({ exitCode: argv.includes("has-session") && !alive() ? 1 : 0, stdout: "", stderr: "" }),
+    },
+  });
+  return { mgr, sockets, logs };
+}
+
+/** Let the ref reads and the session checks a pass started finish. */
+const settle = () => Bun.sleep(10);
+
+/** A folder whose record names its token only by `tokenRef`, as a stamped root's identity does: no credentials file. */
+function refFolder(ref: (home: string) => string) {
+  const home = mkdtempSync(resolve(tmpdir(), "rt-home-"));
+  homes.push(home);
+  const agent = canonicalDir(resolve(home, "dingus"));
+  mkdirSync(agent);
+  const env = { HOME: home };
+  const path = agentConfigPath(env, agent);
+  mkdirSync(dirname(path), { recursive: true });
+  const record = { dir: canonicalDir(agent), suiteUrl: "https://one.example.invalid", runtimeId: "rt-h-00000000", headerNames: [], tokenRef: ref(home) };
+  writeFileSync(path, serializeAgentRecord(record), { mode: 0o600 });
+  return { env, agent: canonicalDir(agent) };
+}
+
+describe("the host resolves a record's tokenRef", () => {
+  test("a record with only a file: tokenRef gets its socket, with the token read from the ref", async () => {
+    const token = `tok-${crypto.randomUUID()}`;
+    const f = refFolder((home) => {
+      const p = resolve(home, "runtime.token");
+      writeFileSync(p, `${token}\n`);
+      chmodSync(p, 0o600);
+      return `file:${p}`;
+    });
+    expect(existsSync(agentCredentialsPath(f.env, f.agent))).toBe(false);
+    expect(setRemoteTerminal(f.env, f.agent, "burrow-dingus").ok).toBe(true);
+    const h = hostOn(f.env);
+    h.mgr.sync();
+    await settle();
+    expect(h.sockets).toHaveLength(1);
+    expect(new URL(h.sockets[0]!.url).searchParams.get("token")).toBe(token);
+    expect(h.mgr.terminalFolders()).toEqual([f.agent]);
+    // Later passes reuse the connection rather than reopening it.
+    h.mgr.sync();
+    await settle();
+    expect(h.sockets).toHaveLength(1);
+    expect(h.logs.join("\n")).not.toContain(token);
+  });
+
+  test("a folder with a host feature on and no token it can resolve is said once, not skipped silently", async () => {
+    const f = refFolder((home) => `file:${resolve(home, "no-such.token")}`);
+    setRemoteTerminal(f.env, f.agent, "burrow-dingus");
+    const h = hostOn(f.env);
+    for (let i = 0; i < 3; i++) {
+      h.mgr.sync();
+      await settle();
+    }
+    expect(h.sockets).toHaveLength(0);
+    const said = h.logs.filter((l) => l.includes("rt-h-00000000") && l.includes("token"));
+    expect(said).toHaveLength(1);
+    expect(said[0]).toContain("no-such.token");
+  });
+
+  test("a keychain: tokenRef is resolved once, in the background, and the pass is run again with it", async () => {
+    const token = `tok-${crypto.randomUUID()}`;
+    const f = refFolder(() => "keychain:dingus-token");
+    const path = agentConfigPath(f.env, f.agent);
+    const rec = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
+    writeFileSync(path, `${JSON.stringify({ ...rec, keychainService: "burrow" }, null, 2)}\n`);
+    setRemoteTerminal(f.env, f.agent, "burrow-dingus");
+    const asked: string[] = [];
+    const h = hostOn(f.env, () => true, {
+      resolveRef: async (ref) => {
+        asked.push(ref.raw);
+        return token;
+      },
+    });
+    h.mgr.sync();
+    expect(h.sockets).toHaveLength(0);
+    await settle();
+    expect(h.sockets).toHaveLength(1);
+    expect(new URL(h.sockets[0]!.url).searchParams.get("token")).toBe(token);
+    h.mgr.sync();
+    await settle();
+    expect(asked).toEqual(["keychain:dingus-token"]);
+    expect(h.sockets).toHaveLength(1);
+    expect(h.logs.join("\n")).not.toContain(token);
+  });
+
+  test("a folder with no host feature on says nothing about its token", async () => {
+    const f = refFolder((home) => `file:${resolve(home, "no-such.token")}`);
+    const h = hostOn(f.env);
+    h.mgr.sync();
+    await settle();
+    expect(h.sockets).toHaveLength(0);
+    expect(h.logs).toEqual([]);
+  });
+});
+
+/** Restore deps on the live wiring (liveRestoreDeps), with a tmux that has no sessions and a roster in memory. */
+function restoreOn(env: Record<string, string | undefined>, written: Record<string, string>): RestoreDeps & { ran: string[][] } {
+  const ran: string[][] = [];
+  const { dialogs: _none, ...live } = liveRestoreDeps(env as NodeJS.ProcessEnv);
+  return {
+    ...live,
+    ran,
+    tmux: {
+      env: {},
+      which: () => "/usr/bin/tmux",
+      run: async (argv) => {
+        ran.push(argv);
+        return { exitCode: argv.includes("list-panes") ? 1 : 0, stdout: "", stderr: "" };
+      },
+    },
+    readRoster: (p) => written[p] ?? null,
+    writeRoster: (p, c) => void (written[p] = c),
+    now: () => new Date("2026-11-20T00:00:00Z"),
+    log: () => {},
+  };
+}
+
+describe("the opt-in survives a restore", () => {
+  test("claude: the flag is recorded on the roster entry with the launch", async () => {
+    const r = launch(true);
+    const written: Record<string, string> = {};
+    r.deps.restore = restoreOn(r.folder.env, written);
+    await runClaude(r.deps, r.options);
+    const roster = parseRoster(Object.values(written)[0] ?? "");
+    expect(roster).toHaveLength(1);
+    expect(roster[0]).toMatchObject({ session: r.agentSession(), remoteTerminal: true });
+    // A launch without the flag drops it again, attached or not.
+    await runClaude(r.deps, { ...r.options, remoteTerminal: undefined });
+    expect(parseRoster(Object.values(written)[0] ?? "")[0]?.remoteTerminal).toBeUndefined();
+  });
+
+  test("claude: the session ends (a reboot) and watch keeps the opt-in; `burrow restore` replays the launch and the terminal is back", async () => {
+    const r = launch(true);
+    const written: Record<string, string> = {};
+    r.deps.restore = restoreOn(r.folder.env, written);
+    await runClaude(r.deps, r.options);
+    const session = r.agentSession()!;
+    expect(r.marker()).toBe(session);
+
+    // The roster is what watch reads to decide (liveHostDeps).
+    const keepTerminal = (dir: string, s: string) => rosterKeepsTerminal(parseRoster(written[rosterPath(r.folder.env.HOME)] ?? ""), dir, s);
+    let alive = true;
+    const h = hostOn(r.folder.env, () => alive, { keepTerminal });
+    h.mgr.sync();
+    expect(h.mgr.terminalFolders()).toHaveLength(1);
+    alive = false;
+    h.mgr.sync();
+    await settle();
+    // Detached, but still on: the operator asked for it at launch.
+    expect(h.mgr.terminalFolders()).toEqual([]);
+    expect(r.marker()).toBe(session);
+    expect(h.logs.join("\n")).toContain("kept on");
+    // While the session is down, later passes do not attach it to nothing.
+    for (let i = 0; i < 3; i++) {
+      h.mgr.sync();
+      await settle();
+    }
+    expect(h.mgr.terminalFolders()).toEqual([]);
+
+    const restore = restoreOn(r.folder.env, written);
+    const res = await runRestore(restore, r.folder.env.HOME);
+    expect(res.started).toEqual([session]);
+    expect(r.marker()).toBe(session);
+    alive = true;
+    h.mgr.sync();
+    await settle();
+    expect(h.mgr.terminalFolders()).toEqual([canonicalDir(r.folder.agent)]);
+  });
+
+  test("a restore that runs BEFORE watch's next pass, or a marker cleared by an older watch, still ends with the terminal on", async () => {
+    const r = launch(true);
+    const written: Record<string, string> = {};
+    r.deps.restore = restoreOn(r.folder.env, written);
+    await runClaude(r.deps, r.options);
+    const session = r.agentSession()!;
+    setRemoteTerminal(r.folder.env, r.folder.agent, null);
+    await runRestore(restoreOn(r.folder.env, written), r.folder.env.HOME);
+    expect(r.marker()).toBe(session);
+  });
+
+  test("without the opt-in on the launch's roster entry, the session's end still turns the terminal off", async () => {
+    const r = launch(true);
+    const written: Record<string, string> = {};
+    r.deps.restore = restoreOn(r.folder.env, written);
+    await runClaude(r.deps, r.options);
+    // Something else switched it on for a launch that never asked: the roster says no.
+    await runClaude(r.deps, { ...r.options, remoteTerminal: undefined });
+    const session = r.agentSession()!;
+    setRemoteTerminal(r.folder.env, r.folder.agent, session);
+    const keepTerminal = (dir: string, s: string) => rosterKeepsTerminal(parseRoster(written[rosterPath(r.folder.env.HOME)] ?? ""), dir, s);
+    let alive = true;
+    const h = hostOn(r.folder.env, () => alive, { keepTerminal });
+    h.mgr.sync();
+    alive = false;
+    h.mgr.sync();
+    await settle();
+    expect(r.marker()).toBeNull();
+    expect(h.logs.join("\n")).toContain("remote terminal off");
+  });
+
+  test("rosterKeepsTerminal: only the named session, in the named folder, launched with the flag", () => {
+    const entry = { session: "burrow-dingus", command: ["tmux"], cwd: "/a/dingus", kind: "hermes" as const, recordedAt: "", remoteTerminal: true as const };
+    expect(rosterKeepsTerminal([entry], "/a/dingus", "burrow-dingus")).toBe(true);
+    expect(rosterKeepsTerminal([entry], "/a/other", "burrow-dingus")).toBe(false);
+    expect(rosterKeepsTerminal([entry], "/a/dingus", "burrow-other")).toBe(false);
+    const { remoteTerminal: _off, ...plain } = entry;
+    expect(rosterKeepsTerminal([plain], "/a/dingus", "burrow-dingus")).toBe(false);
+    expect(parseRoster(JSON.stringify({ agents: [entry, { ...plain, session: "x", remoteTerminal: "yes" }] })).map((e) => e.remoteTerminal)).toEqual([true, undefined]);
+  });
+
+  test("an entry launched without the flag comes back with the terminal off", async () => {
+    const r = launch(undefined);
+    const written: Record<string, string> = {};
+    r.deps.restore = restoreOn(r.folder.env, written);
+    await runClaude(r.deps, r.options);
+    const session = r.agentSession()!;
+    // A marker left by something else is not revived by a replay of a launch that never asked.
+    setRemoteTerminal(r.folder.env, r.folder.agent, session);
+    await runRestore(restoreOn(r.folder.env, written), r.folder.env.HOME);
+    expect(r.marker()).toBeNull();
+  });
+
+  test("a dry run writes no opt-in", async () => {
+    const r = launch(true);
+    const written: Record<string, string> = {};
+    r.deps.restore = restoreOn(r.folder.env, written);
+    await runClaude(r.deps, r.options);
+    setRemoteTerminal(r.folder.env, r.folder.agent, null);
+    await runRestore(restoreOn(r.folder.env, written), r.folder.env.HOME, { apply: false });
+    expect(r.marker()).toBeNull();
   });
 });

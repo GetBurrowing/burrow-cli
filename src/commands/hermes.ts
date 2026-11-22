@@ -109,7 +109,11 @@ import {
 import { derivedCandidates, liveTmuxDeps, sessionLiveness, type TmuxDeps } from "../tmux.ts";
 import { httpsCloneUrl } from "../repo_source.ts";
 import { classifyPullFailure, noGitPrompt, pullRemedyLines } from "./init.ts";
-import { loadRoster, recordLaunch, liveRestoreDeps, type RestoreDeps } from "./restore.ts";
+import { loadRoster, recordLaunch, recordLaunchTerminal, liveRestoreDeps, type RestoreDeps } from "./restore.ts";
+import { writeAgentRecord } from "../agent_connections.ts";
+import { parseConfig } from "../config.ts";
+import { IDENTITY_FILE } from "../stamp.ts";
+import { launchRemoteTerminal } from "../terminal/host.ts";
 import {
   liveDeepseekDeps,
   runInSession,
@@ -308,6 +312,12 @@ export interface HermesOptions {
   noSession: boolean;
   /** Internal to the session relaunch: run the stamped gateway, stamp nothing. */
   gatewayOnly: boolean;
+  /**
+   * `--remote-terminal`: let the owner open the `burrow-<name>` session from
+   * the web (src/terminal/host.ts). Off by default and per launch; needs a
+   * session, so it is refused with `--no-session`. Never reaches the gateway.
+   */
+  remoteTerminal: boolean;
   /** Everything after `--`, handed to `hermes gateway run`. */
   rest: string[];
   /** Our own arguments as given, minus `--stamp-only`: the session command. */
@@ -332,8 +342,9 @@ const VALUE_FLAGS: Record<string, keyof HermesOptions> = {
   "--hermes-home": "hermesHome",
 };
 
-const BOOL_FLAGS: Record<string, "installHermes" | "fullToolset" | "stampOnly" | "noSession" | "gatewayOnly"> = {
+const BOOL_FLAGS: Record<string, "installHermes" | "fullToolset" | "stampOnly" | "noSession" | "gatewayOnly" | "remoteTerminal"> = {
   "--install-hermes": "installHermes",
+  "--remote-terminal": "remoteTerminal",
   "--full-toolset": "fullToolset",
   "--stamp-only": "stampOnly",
   "--no-session": "noSession",
@@ -357,7 +368,7 @@ export function wantsStampOnly(args: string[]): boolean {
 export function parseHermesOptions(args: string[], cwd: string = process.cwd()): HermesOptions {
   const { tokenRef, keychainService, rest } = takeTokenRefFlags(args);
   const raw: Record<string, string> = {};
-  const bools = { installHermes: false, fullToolset: false, stampOnly: false, noSession: false, gatewayOnly: false };
+  const bools = { installHermes: false, fullToolset: false, stampOnly: false, noSession: false, gatewayOnly: false, remoteTerminal: false };
   let gatewayArgs: string[] = [];
   for (let i = 0; i < rest.length; i++) {
     const arg = rest[i] ?? "";
@@ -1609,6 +1620,29 @@ export function relaunchArgv(self: string[], opts: HermesOptions, bin: string): 
   ];
 }
 
+/**
+ * Record the stamped root as an agent folder, so `burrow watch` can serve its
+ * host features, then apply this launch's `--remote-terminal` opt-in (on with
+ * the flag, cleared without it). The record holds the identity's token REF,
+ * never a value, and no credentials file is written. Never fails the launch.
+ */
+export function recordHostFolder(opts: HermesOptions, deps: Pick<HermesDeps, "env" | "stderr">, session: string): void {
+  const say = (line: string) => deps.stderr(`${line}\n`);
+  try {
+    const identity = parseConfig(readFileSync(join(opts.root, IDENTITY_FILE), "utf8"));
+    if (identity.suiteUrl === "" || identity.runtimeId === "" || identity.tokenRef === undefined) {
+      if (opts.remoteTerminal) say(`remote terminal: ${join(opts.root, IDENTITY_FILE)} names no Burrow URL, runtime id and token ref; not recorded`);
+      return;
+    }
+    writeAgentRecord(deps.env, opts.root, identity);
+  } catch (e) {
+    say(`${CLI_NAME} hermes: could not record ${opts.root} for \`${CLI_NAME} watch\`: ${(e as Error).message}`);
+    if (!opts.remoteTerminal) return;
+  }
+  const note = launchRemoteTerminal(deps.env, opts.root, session, opts.remoteTerminal);
+  if (note !== null) say(note);
+}
+
 /** The gateway's environment: the allowlist plus HERMES_HOME. No Burrow credential, by construction. */
 export function gatewayEnv(deps: Pick<HermesDeps, "env">, opts: HermesOptions): Record<string, string> {
   return harnessChildEnv(deps.env, { HERMES_HOME: opts.hermesHome });
@@ -1761,6 +1795,7 @@ export async function runHermes(args: string[], deps: HermesDeps): Promise<numbe
   const bin = writer.state.bin as string;
 
   if (opts.noSession) {
+    if (opts.remoteTerminal) deps.stderr("remote terminal: refused: --no-session runs no tmux session for it to serve\n");
     const argv = gatewayArgv(bin, opts.rest);
     assertNoSecretsInArgv(argv, createStore());
     return await deps.session.exec(argv, { cwd: opts.root, env: gatewayEnv(deps, opts) });
@@ -1769,6 +1804,10 @@ export async function runHermes(args: string[], deps: HermesDeps): Promise<numbe
   const session = sessionNameForAgent(agentNameForRoot(opts.root));
   const relaunch = relaunchArgv(deps.self ?? selfArgv(deps.env as NodeJS.ProcessEnv), opts, bin);
   const home = deps.env.HOME ?? "";
+  recordHostFolder(opts, deps, session);
+  // A launch that attaches to the running session records nothing new, but the
+  // roster entry must still say what this launch asked for (restore and watch read it).
+  if (deps.restore) recordLaunchTerminal(deps.restore, home, session, opts.remoteTerminal);
   // TMUX is not on the child allowlist, but the nesting decision reads it:
   // without it a run from inside tmux would nest an attach instead of switching.
   const sessionEnv = harnessChildEnv(deps.env, { HERMES_HOME: opts.hermesHome, TMUX: deps.env.TMUX });
@@ -1776,7 +1815,15 @@ export async function runHermes(args: string[], deps: HermesDeps): Promise<numbe
     agentName: HERMES_AGENT_COMM,
     tmux: deps.tmux,
     onCreated: (createArgv) => {
-      if (deps.restore) recordLaunch(deps.restore, home, { session, command: createArgv, cwd: opts.root, kind: "hermes" });
+      if (deps.restore) {
+        recordLaunch(deps.restore, home, {
+          session,
+          command: createArgv,
+          cwd: opts.root,
+          kind: "hermes",
+          ...(opts.remoteTerminal ? { remoteTerminal: true as const } : {}),
+        });
+      }
     },
     wasRecorded: () => deps.restore !== undefined && loadRoster(deps.restore, home).some((e) => e.session === session),
   });

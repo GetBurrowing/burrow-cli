@@ -62,8 +62,10 @@ export interface AgentRecord {
   configAccess?: "owner_only" | "admins";
   /**
    * The agent session this folder's remote terminal is switched on for
-   * (src/terminal/host.ts). Set by `burrow claude --remote-terminal`, cleared
-   * when that session ends or the next launch has no flag. Absent is off. Not a
+   * (src/terminal/host.ts). Set by `burrow claude|hermes --remote-terminal`,
+   * cleared by the next launch with no flag, and when that session ends unless
+   * the launch asked for it (the roster's `remoteTerminal`); set again by a
+   * `burrow restore` replay of a launch that asked for it. Absent is off. Not a
    * secret.
    */
   remoteTerminal?: string;
@@ -293,6 +295,42 @@ export function writeAgentConnection(
   atomicWrite(credsPath, credsBody, 0o600);
   atomicWrite(recordPath, recordBody, 0o600);
   return { configPath: recordPath, credentialsPath: credsPath };
+}
+
+/**
+ * Save `dir`'s record ONLY, for an agent whose identity names its token by
+ * reference (a stamped root's `burrow.json`): no credentials file is written,
+ * and one already there is left as it is. The opt-ins already on the record
+ * (config access, the remote terminal) are kept. Written only when the bytes
+ * change, through the same write guard.
+ */
+export function writeAgentRecord(
+  env: Env,
+  dir: string,
+  config: Pick<SuiteConfig, "suiteUrl" | "runtimeId" | "headerNames" | "tokenRef" | "keychainService">,
+  options: AgentWriteOptions = {},
+): { configPath: string; changed: boolean } {
+  const canon = canonicalDir(dir);
+  const recordPath = agentConfigPath(env, canon);
+  const previous = readAgentRecordExact(env, canon);
+  const record: AgentRecord = {
+    dir: canon,
+    suiteUrl: config.suiteUrl,
+    runtimeId: config.runtimeId,
+    headerNames: config.headerNames,
+    ...(config.tokenRef !== undefined ? { tokenRef: config.tokenRef } : {}),
+    ...(config.keychainService !== undefined ? { keychainService: config.keychainService } : {}),
+    ...(previous?.record.configAccess !== undefined ? { configAccess: previous.record.configAccess } : {}),
+    ...(previous?.record.remoteTerminal !== undefined ? { remoteTerminal: previous.record.remoteTerminal } : {}),
+  };
+  const body = serializeAgentRecord(record);
+  if (previous !== null && previous.path === recordPath && serializeAgentRecord(previous.record) === body) {
+    return { configPath: recordPath, changed: false };
+  }
+  assertWritable(recordPath, options.probe ?? gitProbe);
+  mkdirSync(dirname(recordPath), { recursive: true, mode: 0o700 });
+  atomicWrite(recordPath, body, 0o600);
+  return { configPath: recordPath, changed: true };
 }
 
 /* ------------------------------------------------------------------------- */

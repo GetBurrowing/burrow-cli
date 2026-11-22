@@ -190,6 +190,7 @@ export function usage(): string {
     row("claude new", "force a new session"),
     row("deepseek", "run a DeepSeek Harness agent federated into Burrow"),
     row("hermes", "stamp a Hermes agent root and run its gateway (--stamp-only: JSON contract)"),
+    row("", "--remote-terminal: as for claude, for the burrow-<name> session (kept across restarts and restore)"),
     row("openclaw", "stamp an OpenClaw agent root and run its gateway (--stamp-only: JSON contract)"),
     row("codex", "run a Codex agent through codex app-server, federated into Burrow, in a persistent session"),
     row("doctor", "diagnose a broken setup"),

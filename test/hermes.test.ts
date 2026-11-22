@@ -55,8 +55,13 @@ import {
 } from "../src/commands/hermes.ts";
 import { renderStampResult, type StampResult } from "../src/stamp_result.ts";
 import { classify, parseProcesses, type TmuxDeps } from "../src/tmux.ts";
-import type { RestoreDeps } from "../src/commands/restore.ts";
+import { liveRestoreDeps, runRestore, type RestoreDeps } from "../src/commands/restore.ts";
 import { parseRoster } from "../src/roster.ts";
+import { agentCredentialsPath, canonicalDir, listAgentConnections, readAgentRecordExact } from "../src/agent_connections.ts";
+import { HostManager } from "../src/host/manager.ts";
+import { remoteTerminalOf, setRemoteTerminal } from "../src/terminal/host.ts";
+import { rosterKeepsTerminal } from "../src/host/live.ts";
+import type { SocketLike } from "../src/codex/phoenix.ts";
 import { canary, scanEnv, scanText, scanTexts, scanTree } from "./leak-scan.ts";
 
 /**
@@ -1973,5 +1978,145 @@ describe("pins", () => {
     const src = readFileSync(resolve(import.meta.dir, "..", "src", "commands", "hermes.ts"), "utf8");
     const at = src.indexOf("export const HERMES_CHANNEL_REF");
     expect(src.slice(Math.max(0, at - 1200), at)).toContain("DEPLOYER: BUMP THIS BEFORE burrow-cli MERGES.");
+  });
+});
+
+describe("--remote-terminal: the owner can open burrow-<name> from the web", () => {
+  function rosterDeps(written: Record<string, string>, tmux: TmuxDeps): RestoreDeps {
+    return {
+      tmux,
+      readRoster: (p) => written[p] ?? null,
+      writeRoster: (p, c) => void (written[p] = c),
+      now: () => new Date("2026-11-20T00:00:00Z"),
+      log: () => {},
+    };
+  }
+  const session = () => `burrow-${agentNameForRoot(root)}`;
+  const marker = (env: Record<string, string>) => {
+    const found = readAgentRecordExact(env, root);
+    return found === null ? null : remoteTerminalOf(found.record);
+  };
+
+  /** A HostManager over `env` on fake sockets: what `burrow watch` would open. */
+  function host(env: Record<string, string>, alive: () => boolean = () => true, keepTerminal?: (dir: string, session: string) => boolean) {
+    const urls: string[] = [];
+    const mgr = new HostManager({
+      ...(keepTerminal !== undefined ? { keepTerminal } : {}),
+      env,
+      socket: (url) => {
+        urls.push(url);
+        return { readyState: 0, send: () => {}, close: () => {}, onopen: null, onclose: null, onerror: null, onmessage: null } as SocketLike;
+      },
+      log: () => {},
+      harnessFor: () => "hermes",
+      codexHomeFor: () => null,
+      setTimer: () => 0,
+      clearTimer: () => {},
+      terminal: {
+        spawn: () => ({ write: () => {}, resize: () => {}, kill: () => {} }),
+        tmux: async (argv) => ({ exitCode: argv.includes("has-session") && !alive() ? 1 : 0, stdout: "", stderr: "" }),
+      },
+    });
+    return { mgr, urls };
+  }
+
+  test("the flag parses, is off by default, and never reaches the gateway", () => {
+    expect(parseHermesOptions(stampArgs()).remoteTerminal).toBe(false);
+    const o = parseHermesOptions(stampArgs(["--remote-terminal"]));
+    expect(o.remoteTerminal).toBe(true);
+    expect(o.rest).toEqual([]);
+    expect(relaunchArgv([], o, STUB_HERMES)).not.toContain("--remote-terminal");
+  });
+
+  test("a launch with the flag records the folder and the opt-in, with no token copy, and watch can serve it", async () => {
+    makeManagedPython();
+    const env = baseEnv();
+    const tmux = fakeTmux();
+    const written: Record<string, string> = {};
+    expect(await runHermes(stampArgs(["--remote-terminal"]), makeDeps({ tmux: tmux.deps, restore: rosterDeps(written, tmux.deps) }, env))).toBe(0);
+
+    const found = readAgentRecordExact(env, root);
+    expect(found?.record).toMatchObject({
+      dir: canonicalDir(root),
+      runtimeId: "hermes-01a0d8f8-rt",
+      suiteUrl: "https://suite.example.invalid",
+      tokenRef: `file:${tokenPath}`,
+      remoteTerminal: session(),
+    });
+    expect(existsSync(agentCredentialsPath(env, root))).toBe(false);
+    expect(readFileSync(found!.path, "utf8")).not.toContain(token);
+    expect(parseRoster(Object.values(written)[0] ?? "")[0]).toMatchObject({ session: session(), kind: "hermes", remoteTerminal: true });
+    expect(stderr.join("")).toContain(`remote terminal: on for ${session()}`);
+
+    // `burrow watch` finds the folder and resolves its token from the ref.
+    const h = host(env);
+    h.mgr.sync();
+    await Bun.sleep(10);
+    expect(h.urls).toHaveLength(1);
+    expect(new URL(h.urls[0]!).searchParams.get("token")).toBe(token);
+    expect(h.mgr.terminalFolders()).toEqual([canonicalDir(root)]);
+  });
+
+  test("without the flag the folder is still recorded (config access can be set), and the opt-in is cleared", async () => {
+    makeManagedPython();
+    const env = baseEnv();
+    expect(await runHermes(stampArgs(["--remote-terminal"]), makeDeps({ tmux: fakeTmux().deps }, env))).toBe(0);
+    expect(marker(env)).toBe(session());
+    expect(await runHermes(stampArgs(), makeDeps({ tmux: fakeTmux().deps }, env))).toBe(0);
+    expect(marker(env)).toBeNull();
+    expect(listAgentConnections(env).map((c) => c.record.dir)).toEqual([canonicalDir(root)]);
+  });
+
+  test("--no-session has no tmux session to serve: the flag is refused out loud and nothing is recorded", async () => {
+    makeManagedPython();
+    const env = baseEnv();
+    expect(await runHermes(stampArgs(["--no-session", "--remote-terminal"]), makeDeps({}, env))).toBe(0);
+    expect(marker(env)).toBeNull();
+    expect(stderr.join("")).toContain("--no-session");
+  });
+
+  test("the session ends (a reboot): watch keeps the opt-in, and `burrow restore` brings the gateway AND the terminal back", async () => {
+    makeManagedPython();
+    const env = baseEnv();
+    const tmux = fakeTmux();
+    const written: Record<string, string> = {};
+    expect(await runHermes(stampArgs(["--remote-terminal"]), makeDeps({ tmux: tmux.deps, restore: rosterDeps(written, tmux.deps) }, env))).toBe(0);
+
+    let alive = true;
+    const keep = (dir: string, s: string) => rosterKeepsTerminal(parseRoster(Object.values(written)[0] ?? ""), dir, s);
+    const h = host(env, () => alive, keep);
+    h.mgr.sync();
+    await Bun.sleep(10);
+    expect(h.mgr.terminalFolders()).toEqual([canonicalDir(root)]);
+    alive = false;
+    h.mgr.sync();
+    await Bun.sleep(10);
+    expect(h.mgr.terminalFolders()).toEqual([]);
+    expect(marker(env)).toBe(session());
+
+    // Even had an older watch cleared it, the replay switches it back on.
+    setRemoteTerminal(env, root, null);
+    const { dialogs: _none, ...live } = liveRestoreDeps(env);
+    const res = await runRestore({ ...live, ...rosterDeps(written, fakeTmux().deps) }, home);
+    expect(res.started).toEqual([session()]);
+    expect(marker(env)).toBe(session());
+    alive = true;
+    h.mgr.sync();
+    await Bun.sleep(10);
+    expect(h.mgr.terminalFolders()).toEqual([canonicalDir(root)]);
+  });
+
+  test("a relaunch that attaches to the running session updates the roster entry's opt-in", async () => {
+    makeManagedPython();
+    const env = baseEnv();
+    const written: Record<string, string> = {};
+    const t1 = fakeTmux();
+    expect(await runHermes(stampArgs(["--remote-terminal"]), makeDeps({ tmux: t1.deps, restore: rosterDeps(written, t1.deps) }, env))).toBe(0);
+    const entry = () => parseRoster(Object.values(written)[0] ?? "")[0];
+    expect(entry()?.remoteTerminal).toBe(true);
+    const t2 = fakeTmux();
+    expect(await runHermes(stampArgs(), makeDeps({ tmux: t2.deps, restore: rosterDeps(written, t2.deps) }, env))).toBe(0);
+    expect(entry()?.remoteTerminal).toBeUndefined();
+    expect(entry()?.command).not.toContain("--remote-terminal");
   });
 });

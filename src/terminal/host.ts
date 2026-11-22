@@ -8,9 +8,12 @@
  * `terminal:<runtime id>` to it (never `runtime:<id>`, never a second socket)
  * and runs the bridge in-process. No inbound port is opened.
  *
- * Off by default and per launch: the marker is cleared when the agent session
- * ends and by the next launch that has no flag. A kind outside
- * ENABLEABLE_KINDS cannot be switched on, opted in or not.
+ * Off by default and per launch: the marker is cleared by the next launch that
+ * has no flag, and when the agent session ends unless the launch's roster
+ * entry asked for the terminal (then it is kept for the session's return, and
+ * `burrow restore` sets it again). `burrow hermes --remote-terminal` records it
+ * the same way. A kind outside ENABLEABLE_KINDS cannot be switched on, opted
+ * in or not.
  */
 import { chmodSync, renameSync, writeFileSync } from "node:fs";
 import { agentConfigPath, canonicalDir, readAgentConnection, readAgentRecordExact, serializeAgentRecord, type AgentRecord } from "../agent_connections.ts";

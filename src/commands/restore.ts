@@ -39,6 +39,7 @@ import { answerLaunchDialogs, liveDialogIo, type AnswerResult, type DialogIo } f
 import { CLI_NAME } from "../version.ts";
 import { isLegacyContinueWrapper, renamedLaunchArgv } from "../legacy_names.ts";
 import { CHANNEL_SERVER } from "./init.ts";
+import { launchRemoteTerminal } from "../terminal/host.ts";
 
 export interface RestoreDeps {
   tmux: TmuxDeps;
@@ -58,6 +59,13 @@ export interface RestoreDeps {
    * Optional: a caller that supplies nothing replays unchecked.
    */
   wire?(entry: RosterEntry): Promise<number | null>;
+  /**
+   * Makes a started entry's folder's remote-terminal opt-in match the entry:
+   * on for an entry launched with `--remote-terminal`, off otherwise (as a
+   * launch without the flag does). Returns a note for the log, or null.
+   * Optional: a caller that supplies nothing leaves the opt-in alone.
+   */
+  remoteTerminal?(entry: RosterEntry): string | null;
 }
 
 export function liveRestoreDeps(env = process.env): RestoreDeps {
@@ -77,6 +85,7 @@ export function liveRestoreDeps(env = process.env): RestoreDeps {
     now: () => new Date(),
     log: (line) => console.log(`${CLI_NAME} restore: ${line}`),
     dialogs: liveDialogIo(liveTmuxDeps(env), env.HOME ?? "", (line) => console.log(`${CLI_NAME} restore: ${line}`)),
+    remoteTerminal: (entry) => launchRemoteTerminal(env, entry.cwd, entry.session, entry.remoteTerminal === true),
   };
 }
 
@@ -102,6 +111,24 @@ export function recordLaunch(
       recordedAt: deps.now().toISOString(),
     });
     deps.writeRoster(rosterPath(home), serializeRoster(next));
+  } catch {
+    // Never let bookkeeping stop an agent from starting.
+  }
+}
+
+/**
+ * Set or drop the `remoteTerminal` flag on `session`'s existing roster entry,
+ * for a launch that attached to a running session instead of recording a new
+ * one. No entry, no change. Never throws.
+ */
+export function recordLaunchTerminal(deps: RestoreDeps, home: string, session: string, on: boolean): void {
+  try {
+    const entries = loadRoster(deps, home);
+    const at = entries.findIndex((e) => e.session === session);
+    if (at === -1 || (entries[at]!.remoteTerminal === true) === on) return;
+    const { remoteTerminal: _off, ...rest } = entries[at]!;
+    entries[at] = on ? { ...rest, remoteTerminal: true } : rest;
+    deps.writeRoster(rosterPath(home), serializeRoster(entries));
   } catch {
     // Never let bookkeeping stop an agent from starting.
   }
@@ -346,6 +373,8 @@ export async function runRestore(
     if (exitCode === 0) {
       result.started.push(entry.session);
       deps.log(`${entry.session}: started in ${entry.cwd}${renamedSession ? ` (recorded as ${recordedEntry.session})` : ""}`);
+      const terminalNote = deps.remoteTerminal?.(entry) ?? null;
+      if (terminalNote !== null) deps.log(`${entry.session}: ${terminalNote}`);
       if (entry.kind === "claude" && deps.dialogs !== undefined) {
         answering.push(answerLaunchDialogs(deps.dialogs, { session: entry.session, cwd: entry.cwd, home }));
       }
