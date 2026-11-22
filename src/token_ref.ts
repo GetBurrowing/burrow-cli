@@ -216,6 +216,17 @@ function stripOneNewline(value: string): string {
 }
 
 /**
+ * A `file:` ref's value, synchronously, after the same stat checks as
+ * {@link checkFileRef}. Same handling rules as {@link resolveTokenRef}.
+ */
+export function resolveFileTokenRef(path: string, deps: FileRefDeps = {}): string {
+  checkFileRef(path, deps);
+  const value = stripOneNewline(readFileSync(path, "utf8"));
+  if (value === "") throw refused("token_file_empty", `token file ${path} is empty`);
+  return value;
+}
+
+/**
  * Resolve a ref to its value, IN MEMORY. The caller hands it to a child on a
  * stdin pipe, or does not need it at all when the harness resolves the ref
  * itself. Never log, print, serialise or put the return value in argv/env of
@@ -223,11 +234,7 @@ function stripOneNewline(value: string): string {
  */
 export async function resolveTokenRef(ref: TokenRef, deps: ResolveDeps = {}): Promise<string> {
   validateTokenRef(ref, deps);
-  if (ref.kind === "file") {
-    const value = stripOneNewline(readFileSync(ref.path, "utf8"));
-    if (value === "") throw refused("token_file_empty", `token file ${ref.path} is empty`);
-    return value;
-  }
+  if (ref.kind === "file") return resolveFileTokenRef(ref.path, deps);
   const exec = deps.exec ?? execFileNoShell;
   let r: { exitCode: number; stdout: string };
   try {

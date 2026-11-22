@@ -44,7 +44,7 @@ import {
   type PendingRenames,
 } from "../claude_wiring.ts";
 import { LegacyNameConflict, serverEntry } from "../legacy_names.ts";
-import { type RestoreDeps, liveRestoreDeps, recordLaunch } from "./restore.ts";
+import { type RestoreDeps, liveRestoreDeps, recordLaunch, recordLaunchTerminal } from "./restore.ts";
 import type { RosterEntry } from "../roster.ts";
 import { type SupervisorIo, ensureSupervision, installedBinary, liveSupervisorIo } from "../supervisor.ts";
 import { CHANNEL_SERVER, TOOLS_SERVER, confirm, defaultCheckout, type InstallPlan, type Runner } from "./init.ts";
@@ -855,6 +855,7 @@ export async function runClaude(deps: ClaudeDeps, options: ClaudeOptions): Promi
         command: plan.create,
         cwd: deps.cwd,
         kind: "claude",
+        ...(options.remoteTerminal === true ? { remoteTerminal: true as const } : {}),
       });
     }
 
@@ -897,6 +898,8 @@ export async function runClaude(deps: ClaudeDeps, options: ClaudeOptions): Promi
   // the agent.
   const terminalNote = launchRemoteTerminal(deps.env, deps.cwd, session, options.remoteTerminal === true);
   if (terminalNote !== null) deps.err(terminalNote);
+  // Attached rather than created: the roster entry still says what the last launch asked for.
+  if (deps.restore && plan.create === undefined) recordLaunchTerminal(deps.restore, deps.env.HOME ?? "", session, options.remoteTerminal === true);
 
   // ANSWER THE PRE-LAUNCH DIALOGS — only for a session this call created, and
   // CONCURRENTLY with the attach, so a person who is watching sees it happen

@@ -36,6 +36,12 @@ export interface RosterEntry {
   kind: "claude" | "deepseek" | "hermes" | "openclaw" | "codex";
   /** ISO timestamp of the most recent launch. */
   recordedAt: string;
+  /**
+   * The launch asked for the remote terminal (`--remote-terminal`). `burrow
+   * restore` switches it back on when it replays the entry, and `burrow watch`
+   * keeps it on while the session is down. Absent is off.
+   */
+  remoteTerminal?: true;
 }
 
 export const ROSTER_VERSION = 1;
@@ -78,6 +84,7 @@ export function parseRoster(text: string): RosterEntry[] {
       cwd: e.cwd,
       kind: e.kind === "deepseek" || e.kind === "hermes" || e.kind === "openclaw" || e.kind === "codex" ? e.kind : "claude",
       recordedAt: typeof e.recordedAt === "string" ? e.recordedAt : "",
+      ...(e.remoteTerminal === true ? { remoteTerminal: true as const } : {}),
     });
   }
   return out;

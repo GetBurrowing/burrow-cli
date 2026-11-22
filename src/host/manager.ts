@@ -15,6 +15,18 @@
  * with config access off: a folder gets a socket when either feature wants one,
  * and each topic is registered only for the feature that is on.
  *
+ * The runtime token comes from the folder's credentials file, its `tokenEnv`,
+ * or its `tokenRef` (a stamped root's identity names its token only by
+ * reference). A `file:` ref is read on each pass; a `keychain:` ref is
+ * resolved once in the background and the pass is run again. A folder with a
+ * feature on and no token is said once, not skipped silently.
+ *
+ * When the agent session the terminal serves is gone, the terminal detaches.
+ * The opt-in is cleared too, UNLESS the launch that recorded the session asked
+ * for the terminal (`keepTerminal`, the roster's `remoteTerminal`): then it
+ * stays on, and the terminal re-attaches when the session is back after a
+ * restart, a reboot or `burrow restore`.
+ *
  * `sync()` is called once per watch pass; it opens what is newly enabled,
  * replaces a connection whose URL or access changed, and closes what is
  * switched off. Reconnect with backoff lives in {@link HostSocket}.
@@ -22,6 +34,7 @@
 import { channelWsUrl } from "../commands/init.ts";
 import { socketUrl, type Payload, type SocketFactory } from "../codex/phoenix.ts";
 import { listAgentConnections, readAgentSecrets, type AgentConnection } from "../agent_connections.ts";
+import { parseTokenRef, resolveFileTokenRef, resolveTokenRef, type TokenRef } from "../token_ref.ts";
 import { VERSION } from "../version.ts";
 import { accessOf, type ConfigAccess } from "./access.ts";
 import { remoteTerminalPermission } from "../terminal/permission.ts";
@@ -47,7 +60,16 @@ export interface HostDeps {
   clearTimer?(h: unknown): void;
   /** What the remote terminal needs (a pty and tmux). Absent: the terminal is never attached. */
   terminal?: TerminalDeps;
+  /**
+   * Did the launch that recorded `session` in `dir` ask for the remote
+   * terminal? Then its end does not clear the opt-in. Absent: never.
+   */
+  keepTerminal?(dir: string, session: string): boolean;
+  /** Resolves a `keychain:` ref. Defaults to {@link resolveTokenRef}. */
+  resolveRef?(ref: TokenRef): Promise<string>;
 }
+
+type TokenLookup = { token: string } | { pending: true } | { error: string };
 
 interface Live {
   sock: HostSocket;
@@ -76,6 +98,12 @@ export class HostManager {
   private readonly access = new Map<string, ConfigAccess>();
   /** Folders with the remote terminal attached to their shared socket. */
   private readonly terminals = new Map<string, TerminalAttachment>();
+  /** Folders whose kept-on terminal is waiting for its agent session to come back. */
+  private readonly dormant = new Set<string>();
+  /** keychain ref -> its value or its in-flight resolution, so `security` is not run each pass. */
+  private readonly keychain = new Map<string, { token: string } | { pending: true }>();
+  /** The dir -> the last "no token" line said for it, so it is said once. */
+  private readonly saidNoToken = new Map<string, string>();
 
   constructor(private readonly deps: HostDeps) {}
 
@@ -99,8 +127,21 @@ export class HostManager {
       const session = this.deps.terminal === undefined ? null : remoteTerminalOf(conn.record);
       const terminalOn = session !== null && remoteTerminalPermission(connectionKind(conn.record), true).enabled;
       if (access === "off" && !terminalOn) continue;
-      const token = this.tokenOf(conn);
-      if (token === null) continue;
+      const found = this.tokenOf(conn);
+      if ("pending" in found) {
+        // Keep what is open until the ref resolves; the pass is run again then.
+        if (this.live.has(dir)) seen.add(dir);
+        continue;
+      }
+      if ("error" in found) {
+        if (this.saidNoToken.get(dir) !== found.error) {
+          this.saidNoToken.set(dir, found.error);
+          this.deps.log(`host ${conn.record.runtimeId}: no runtime token for ${dir} (${found.error}); not connected`);
+        }
+        continue;
+      }
+      this.saidNoToken.delete(dir);
+      const token = found.token;
       seen.add(dir);
       if (terminalOn) wanted.set(dir, { session, runtimeId: conn.record.runtimeId });
       const url = socketUrl(channelWsUrl(conn.record.suiteUrl), { runtime_id: conn.record.runtimeId, token });
@@ -134,24 +175,44 @@ export class HostManager {
       const have = this.terminals.get(dir)!;
       if (want === undefined || want.session !== have.session || this.live.get(dir)?.sock !== have.sock) this.endTerminal(dir);
     }
+    for (const dir of [...this.dormant]) if (!wanted.has(dir)) this.dormant.delete(dir);
     for (const [dir, want] of wanted) {
       const sock = this.live.get(dir)?.sock;
       if (sock === undefined) continue;
       const have = this.terminals.get(dir);
       if (have === undefined) {
-        const log = (line: string) => this.deps.log(`terminal ${want.runtimeId}: ${line}`);
-        this.terminals.set(dir, attachTerminal(sock, { runtimeId: want.runtimeId, session: want.session, env: this.deps.env, deps: terminal, log }));
-        this.deps.log(`terminal ${want.runtimeId}: attached for session ${want.session}`);
+        if (!this.dormant.has(dir)) {
+          this.attach(dir, sock, want, terminal);
+          continue;
+        }
+        // Kept on across a restart: attach again once the agent session is back.
+        void sessionAlive(terminal, want.session).then((alive) => {
+          if (!alive || !this.dormant.has(dir) || this.terminals.has(dir) || this.live.get(dir)?.sock !== sock) return;
+          this.dormant.delete(dir);
+          this.attach(dir, sock, want, terminal);
+        });
         continue;
       }
-      // The terminal serves one agent session; when that session is gone the opt-in is over.
+      // The terminal serves one agent session. When it is gone the terminal
+      // detaches; the opt-in ends with it unless the launch asked to keep it.
       void sessionAlive(terminal, have.session).then((alive) => {
         if (alive || this.terminals.get(dir) !== have) return;
         this.endTerminal(dir);
+        if (this.deps.keepTerminal?.(dir, have.session) === true) {
+          this.dormant.add(dir);
+          this.deps.log(`terminal ${want.runtimeId}: agent session is gone; detached, and kept on for when ${have.session} is back (it was launched with --remote-terminal)`);
+          return;
+        }
         setRemoteTerminal(this.deps.env, dir, null);
         this.deps.log(`terminal ${want.runtimeId}: agent session is gone; remote terminal off`);
       });
     }
+  }
+
+  private attach(dir: string, sock: HostSocket, want: { session: string; runtimeId: string }, terminal: TerminalDeps): void {
+    const log = (line: string) => this.deps.log(`terminal ${want.runtimeId}: ${line}`);
+    this.terminals.set(dir, attachTerminal(sock, { runtimeId: want.runtimeId, session: want.session, env: this.deps.env, deps: terminal, log }));
+    this.deps.log(`terminal ${want.runtimeId}: attached for session ${want.session}`);
   }
 
   private endTerminal(dir: string): void {
@@ -172,11 +233,50 @@ export class HostManager {
     this.live.clear();
   }
 
-  private tokenOf(conn: AgentConnection): string | null {
+  /**
+   * The folder's runtime token: its credentials file, then `tokenEnv`, then
+   * `tokenRef`. Never logged; an error names the ref, never a value.
+   */
+  private tokenOf(conn: AgentConnection): TokenLookup {
     const stored = readAgentSecrets(this.deps.env, conn.record.dir)?.token;
-    if (stored !== undefined && stored !== "") return stored;
-    const fromEnv = conn.record.tokenEnv === undefined ? undefined : this.deps.env[conn.record.tokenEnv];
-    return fromEnv !== undefined && fromEnv !== "" ? fromEnv : null;
+    if (stored !== undefined && stored !== "") return { token: stored };
+    if (conn.record.tokenEnv !== undefined) {
+      const fromEnv = this.deps.env[conn.record.tokenEnv];
+      if (fromEnv !== undefined && fromEnv !== "") return { token: fromEnv };
+      if (conn.record.tokenRef === undefined) return { error: `${conn.record.tokenEnv} is not set in watch's environment` };
+    }
+    if (conn.record.tokenRef === undefined) return { error: "no credentials file, tokenEnv or tokenRef" };
+    let ref: TokenRef;
+    try {
+      ref = parseTokenRef(conn.record.tokenRef, conn.record.keychainService !== undefined ? { keychainService: conn.record.keychainService } : {});
+    } catch (e) {
+      return { error: (e as Error).message };
+    }
+    if (ref.kind === "file") {
+      try {
+        return { token: resolveFileTokenRef(ref.path) };
+      } catch (e) {
+        return { error: (e as Error).message };
+      }
+    }
+    const key = `${ref.service}\0${ref.item}`;
+    const cached = this.keychain.get(key);
+    if (cached !== undefined) return cached;
+    this.keychain.set(key, { pending: true });
+    void (this.deps.resolveRef ?? resolveTokenRef)(ref).then(
+      (token) => {
+        this.keychain.set(key, { token });
+        this.sync();
+      },
+      (e: Error) => {
+        // Forgotten, so a later pass asks the keychain again (it may be unlocked by then).
+        this.keychain.delete(key);
+        if (this.saidNoToken.get(conn.record.dir) === e.message) return;
+        this.saidNoToken.set(conn.record.dir, e.message);
+        this.deps.log(`host ${conn.record.runtimeId}: no runtime token for ${conn.record.dir} (${e.message}); not connected`);
+      },
+    );
+    return { pending: true };
   }
 
   private open(conn: AgentConnection, url: string, signature: string, access: ConfigAccess): void {

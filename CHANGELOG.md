@@ -10,6 +10,39 @@ that matters in the field: is this one newer than what I had?
 Minor for a new capability or a changed default; patch for a fix that changes no
 behaviour anyone was relying on.
 
+## 0.22.0
+
+**`burrow hermes --remote-terminal`.** The flag Claude agents already had,
+for a Hermes agent's `burrow-<name>` session. Off by default and per launch:
+a launch without it switches the terminal off again. It needs a session, so
+with `--no-session` it is refused out loud, and it never reaches `hermes
+gateway run`. Every `burrow hermes` launch that runs a session now also
+records the stamped root as an agent folder (`<config>/agents/<key>.json`)
+from its `burrow.json` identity: URL, runtime id and the token REF, never the
+token, and no credentials file. Before this, a Hermes agent had no record
+for `burrow watch` to find, so turning its terminal on took a hand-written
+record and credentials file.
+
+**`burrow watch` resolves a record's `tokenRef`.** The host connections read
+the runtime token only from `<key>.credentials.json` or `tokenEnv`, and
+silently skipped a folder whose record names its token by `tokenRef`, as a
+stamped root's does. A `file:` ref is now read on each pass, with the same
+owner and mode checks as the stamp. A `keychain:` ref is resolved once, in the
+background. A folder that has a host feature on and no token watch can resolve
+is now reported once in watch's log, naming the ref (never a value), instead
+of being skipped without a word.
+
+**A terminal the operator asked for survives a restart, a reboot and `burrow
+restore`.** The roster entry now records `remoteTerminal: true` for a launch
+made with the flag (`burrow claude` or `burrow hermes`). A relaunch that only
+attaches updates it too. When the agent session ends, `burrow watch` still
+detaches the terminal. It now clears the opt-in only when the launch did not
+ask for it. Otherwise the opt-in stays on, and watch attaches the terminal
+again once the session is back. `burrow restore` makes each replayed folder's
+opt-in match its entry: on for an entry launched with the flag, even if an
+older watch cleared it, and off for one launched without. A dry run changes
+nothing.
+
 ## 0.21.0
 
 **Channel tools are `burrow_reply`, `burrow_reply_chunk`, `burrow_reply_with_media`

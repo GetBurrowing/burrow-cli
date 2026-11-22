@@ -26,6 +26,23 @@ function rosterFor(env: Env, dir: string): RosterEntry | null {
   }
 }
 
+/**
+ * Did the launch recorded for `session` in `dir` ask for the remote terminal?
+ * Then `burrow watch` keeps the opt-in while that session is down. Pure.
+ */
+export function rosterKeepsTerminal(entries: RosterEntry[], dir: string, session: string): boolean {
+  const canon = canonicalDir(dir);
+  return entries.some((e) => e.session === session && e.remoteTerminal === true && canonicalDir(e.cwd) === canon);
+}
+
+function readRoster(env: Env): RosterEntry[] {
+  try {
+    return parseRoster(readFileSync(rosterPath(env.HOME ?? "", env), "utf8"));
+  } catch {
+    return [];
+  }
+}
+
 const HARNESS: Record<RosterEntry["kind"], string> = {
   claude: "claude_code",
   codex: "codex",
@@ -81,5 +98,6 @@ export function liveHostDeps(env: Env, log: (line: string) => void): HostDeps {
     harnessFor: (dir) => harnessOf(rosterFor(env, dir), dir),
     codexHomeFor: (dir) => codexHomeOf(rosterFor(env, dir)),
     terminal: liveTerminalDeps(env),
+    keepTerminal: (dir, session) => rosterKeepsTerminal(readRoster(env), dir, session),
   };
 }
