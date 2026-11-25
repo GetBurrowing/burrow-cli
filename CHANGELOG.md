@@ -10,6 +10,39 @@ that matters in the field: is this one newer than what I had?
 Minor for a new capability or a changed default; patch for a fix that changes no
 behaviour anyone was relying on.
 
+## 0.23.0
+
+**The Codex bridge no longer drops waiting messages.** While a turn ran in a
+space, `burrow codex` kept at most 5 waiting dispatches for it and silently
+discarded the oldest past that, with a log line and nothing in the space. It
+also ran one turn per waiting message, so a burst of ten cost ten turns in a
+row, and the agent acted on early messages before it saw a later one that
+superseded them. Now a backlog that built up during a turn is delivered as ONE
+turn, in arrival order, newest last, under a header that says how many arrived
+and that the last may supersede the rest. A single message renders exactly as
+before.
+
+**A backstop of 50 messages or 200000 characters remains, and crossing it is
+said in the space.** Past either bound the oldest waiting messages are removed,
+and when the backlog is handed to Codex the space gets one notice naming how
+many were not delivered and from whom (message ids, first ten, then a count),
+asking for a resend. The turn itself says that earlier messages were dropped. A
+dispatch with no space has nowhere to post, so its losses are logged and told
+to the agent only.
+
+**A turn that fails to start is now reported in the space.** When the thread
+or the turn could not be started, the bridge logged it and the messages were
+gone. It now replies in the space that it could not start a turn for N
+message(s), with the error, and clears the typing indicator.
+
+**Upgrade note.** Every release from 0.7.0, where the bridge landed, through
+0.22.0, 0.18.0 included, has the silent drop at 5. The fix is in the client, so
+a Codex runtime gets it only when its operator runs `burrow update` and restarts
+that runtime's `burrow codex` session. To check an old version's log for past
+losses, grep it for `queue full, dropped the oldest waiting dispatch`; 0.23.0
+no longer writes that line, and logs `backlog over limit, N not delivered`
+instead.
+
 ## 0.22.0
 
 **`burrow hermes --remote-terminal`.** The flag Claude agents already had,

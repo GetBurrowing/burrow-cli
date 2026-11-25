@@ -14,9 +14,13 @@
  *  - task work already arrives per space — each task dispatches into its own
  *    execution space — so per space is also per task, without a second rule;
  *  - two turns on one thread interleave into nonsense, so turns are serialised
- *    per space (later dispatches queue, oldest dropped past
- *    {@link MAX_PENDING_PER_SPACE}, said out loud), while different spaces run
- *    concurrently instead of waiting behind each other.
+ *    per space: dispatches that arrive during a turn wait, and when it ends the
+ *    WHOLE backlog becomes the space's next turn, in arrival order with the
+ *    newest last ({@link renderBatch}); different spaces run concurrently
+ *    instead of waiting behind each other. A backlog past the memory backstop
+ *    ({@link MAX_PENDING_PER_SPACE} messages or {@link MAX_PENDING_CHARS}
+ *    characters) loses its OLDEST messages, and the space is told which ones,
+ *    once, before the backlog's turn starts.
  *
  * A dispatch with no space (a responsibility with no `metadata.space_id`)
  * shares one thread, keyed {@link NO_SPACE}.
@@ -50,7 +54,17 @@ import { CLI_NAME } from "../version.ts";
 import { canonicalToolName } from "./reply_mcp.ts";
 
 export const NO_SPACE = "suite:no-space";
-export const MAX_PENDING_PER_SPACE = 5;
+/**
+ * The memory backstop on one space's backlog: past either bound the OLDEST
+ * waiting dispatch is removed, recorded, and named in a notice in the space
+ * when the backlog is handed to Codex. Not a context budget; a backlog under
+ * both bounds is delivered whole.
+ */
+export const MAX_PENDING_PER_SPACE = 50;
+/** The same backstop in characters: the sum of {@link attentionBody} lengths. */
+export const MAX_PENDING_CHARS = 200_000;
+/** How many undelivered messages a notice names before "and K more". */
+export const UNDELIVERED_NAMED = 10;
 export const HISTORY_TURNS = 20;
 /** Two copies of one dispatch closer together than this are one dispatch. */
 export const DEDUPE_MS = 2_000;
@@ -182,6 +196,72 @@ export function renderAttention(payload: Payload, withHistory: boolean): string 
   return `<channel source="burrow"${attrs}>\n${body.replace(/<\/channel>/gi, "<\\/channel>")}\n</channel>`;
 }
 
+/**
+ * (the backlog a space built up during a turn, is this the first turn in its
+ * space since start) → ONE turn text. Two or more attentions get a header and
+ * follow in arrival order, newest last, so the agent sees the whole backlog,
+ * including a later message that supersedes an earlier one, before it acts.
+ * History goes with the first envelope only, so it is prepended at most once.
+ * A single attention renders exactly as {@link renderAttention}.
+ */
+export function renderBatch(payloads: Payload[], withHistory: boolean, dropped: DroppedNote | null = null): string {
+  const lines: string[] = [];
+  if (payloads.length > 1) {
+    lines.push(
+      `${payloads.length} messages arrived in this space while your previous turn was running. ` +
+        "They follow in the order they arrived; the LAST is the newest and may supersede earlier ones. Read all of them before acting.",
+    );
+  }
+  if (dropped !== null && dropped.count > 0) {
+    lines.push(
+      dropped.told
+        ? `${dropped.count} earlier messages in this backlog were dropped and the space was told.`
+        : `${dropped.count} earlier messages in this backlog were dropped; there was no space to tell.`,
+    );
+  }
+  return [...lines, ...payloads.map((p, i) => renderAttention(p, withHistory && i === 0))].join("\n\n");
+}
+
+/** How many of a backlog's messages the backstop removed, and whether a space was told. */
+export interface DroppedNote {
+  count: number;
+  told: boolean;
+}
+
+/** What is kept of a message the backstop removed: enough to name it to its sender. */
+export interface Undelivered {
+  message_id?: string;
+  author?: string;
+  task_id?: string;
+}
+
+function undeliveredOf(payload: Payload): Undelivered {
+  const sig = (payload.signal ?? {}) as Signal;
+  const msg = (payload.message ?? {}) as Record<string, unknown>;
+  const out: Undelivered = {};
+  const id = field(sig, "message_id");
+  const author = str(msg.author);
+  const task = field(sig, "task_id");
+  if (id !== undefined) out.message_id = id;
+  if (author !== undefined) out.author = author;
+  if (task !== undefined) out.task_id = task;
+  return out;
+}
+
+/** The notice a space gets when the backstop removed messages sent to it. */
+export function renderUndeliveredNotice(lost: Undelivered[]): string {
+  const named = lost.slice(0, UNDELIVERED_NAMED).map((u) => {
+    const ref = u.message_id !== undefined ? `message ${u.message_id}` : u.task_id !== undefined ? `task ${u.task_id}` : "no message id";
+    return `from ${u.author ?? "unknown"} (${ref})`;
+  });
+  const more = lost.length > UNDELIVERED_NAMED ? `, and ${lost.length - UNDELIVERED_NAMED} more` : "";
+  return (
+    `${lost.length} message(s) sent to me in this space while I was busy were NOT delivered to me ` +
+    `(backlog limit ${MAX_PENDING_PER_SPACE} messages / ${MAX_PENDING_CHARS} characters): ${named.join(", ")}${more}. ` +
+    "Please resend anything still needed."
+  );
+}
+
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /** The tools `burrow-channel` offers, and the socket event each becomes. */
@@ -194,6 +274,8 @@ export class CodexBridge {
   private readonly historySent = new Set<string>();
   private readonly inflight = new Set<string>();
   private readonly pending = new Map<string, Payload[]>();
+  /** Per space: what the backstop removed since the backlog was last handed to Codex. */
+  private readonly undelivered = new Map<string, Undelivered[]>();
   private readonly turnWaiters = new Map<string, (n: TurnCompletedNotification) => void>();
   private readonly recent = new Map<string, number>();
   private readonly idle: (() => void)[] = [];
@@ -246,30 +328,60 @@ export class CodexBridge {
     void this.dispatch(payload);
   }
 
-  private async dispatch(payload: Payload): Promise<void> {
+  private dispatch(payload: Payload): void {
     const space = spaceKey(payload);
     if (this.inflight.has(space)) {
+      // The whole queue becomes the space's next turn (see dispatchBatch).
+      // Past the backstop the OLDEST goes (the newest is what was just sent),
+      // and is recorded so the drain can name it; the newest always stays.
       const queue = this.pending.get(space) ?? [];
       queue.push(payload);
-      while (queue.length > MAX_PENDING_PER_SPACE) {
-        queue.shift();
-        this.opts.log(`${space}: queue full, dropped the oldest waiting dispatch`);
+      let chars = queue.reduce((n, p) => n + attentionBody(p).length, 0);
+      while (queue.length > 1 && (queue.length > MAX_PENDING_PER_SPACE || chars > MAX_PENDING_CHARS)) {
+        const oldest = queue.shift() as Payload;
+        chars -= attentionBody(oldest).length;
+        const lost = this.undelivered.get(space) ?? [];
+        lost.push(undeliveredOf(oldest));
+        this.undelivered.set(space, lost);
       }
       this.pending.set(space, queue);
       return;
     }
+    void this.dispatchBatch(space, [payload]);
+  }
+
+  /**
+   * Run one turn for `payloads` (one, or the backlog that built up while the
+   * previous turn ran), then hand the space's WHOLE queue to one more turn.
+   * The space stays in `inflight` across the deferral, so a dispatch that
+   * lands in between joins the queue instead of starting a second turn on
+   * the thread, and whenIdle cannot resolve in the gap.
+   */
+  private async dispatchBatch(space: string, payloads: Payload[]): Promise<void> {
     this.inflight.add(space);
     try {
-      await this.runTurn(space, payload);
+      await this.runTurn(space, payloads);
     } catch (error) {
-      this.opts.log(`${space}: turn error: ${error instanceof Error ? error.message : String(error)}`);
+      const why = error instanceof Error ? error.message : String(error);
+      this.opts.log(`${space}: turn error: ${why}`);
+      // A turn that never started is a loss the space would not otherwise see.
+      if (UUID.test(space)) {
+        void this.channel.push("typing", { space_id: space, typing: false });
+        await this.channel
+          .push("reply", { space_id: space, content: `I could not start a turn for ${payloads.length} message(s) — \`${why}\`.` })
+          .catch((e: unknown) => this.opts.log(`${space}: could not report the turn error: ${e instanceof Error ? e.message : String(e)}`));
+      }
     } finally {
-      this.inflight.delete(space);
-      const queue = this.pending.get(space);
-      const next = queue?.shift();
-      if (queue !== undefined && queue.length === 0) this.pending.delete(space);
-      if (next !== undefined) setTimeout(() => void this.dispatch(next), 0);
-      else if (this.inflight.size === 0 && this.pending.size === 0) for (const r of this.idle.splice(0)) r();
+      const queue = this.pending.get(space) ?? [];
+      this.pending.delete(space);
+      const next = queue.splice(0);
+      if (next.length > 0) {
+        // Deferred so this finally does not recurse into the next turn.
+        setTimeout(() => void this.dispatchBatch(space, next), 0);
+      } else {
+        this.inflight.delete(space);
+        if (this.inflight.size === 0 && this.pending.size === 0) for (const r of this.idle.splice(0)) r();
+      }
     }
   }
 
@@ -305,11 +417,28 @@ export class CodexBridge {
     return r.thread.id;
   }
 
-  private async runTurn(space: string, payload: Payload): Promise<void> {
+  private async runTurn(space: string, payloads: Payload[]): Promise<void> {
     const realSpace = UUID.test(space);
     if (realSpace) void this.channel.push("typing", { space_id: space, typing: true });
+    const lost = this.undelivered.get(space) ?? [];
+    this.undelivered.delete(space);
+    if (lost.length > 0) {
+      if (realSpace) {
+        // Once per drain, before the turn: the reply is the agent's runtime's,
+        // so the space sees which agent missed them, and each sender is named.
+        await this.channel
+          .push("reply", { space_id: space, content: renderUndeliveredNotice(lost) })
+          .catch((e: unknown) => this.opts.log(`${space}: could not post the undelivered notice: ${e instanceof Error ? e.message : String(e)}`));
+        this.opts.log(`${space}: backlog over limit, ${lost.length} not delivered, notice posted`);
+      } else {
+        // NO_SPACE (or any key that is not a space UUID) has no space to post
+        // into, so the loss is logged and the agent is told in the turn text.
+        this.opts.log(`${space}: backlog over limit, undelivered ${lost.length} (no space to notify)`);
+      }
+    }
     const threadId = await this.ensureThread(space);
-    const text = renderAttention(payload, !this.historySent.has(space));
+    const dropped = lost.length > 0 ? { count: lost.length, told: realSpace } : null;
+    const text = renderBatch(payloads, !this.historySent.has(space), dropped);
     this.historySent.add(space);
 
     const done = new Promise<TurnCompletedNotification>((resolve) => this.turnWaiters.set(threadId, resolve));
