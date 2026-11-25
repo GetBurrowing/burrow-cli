@@ -7,7 +7,7 @@
  */
 import { describe, expect, test } from "bun:test";
 import { AppServerClient, type Transport } from "../src/codex/app_server.ts";
-import { CodexBridge, DEVELOPER_INSTRUCTIONS, renderAttention, renderBatch, type ApprovalPolicy, type SandboxChoice } from "../src/codex/bridge.ts";
+import { CodexBridge, DEVELOPER_INSTRUCTIONS, MAX_PENDING_CHARS, MAX_PENDING_PER_SPACE, NO_SPACE, renderAttention, renderBatch, type ApprovalPolicy, type SandboxChoice } from "../src/codex/bridge.ts";
 import type { Payload } from "../src/codex/phoenix.ts";
 
 const SPACE_A = "019f0000-0000-7000-8000-00000000000a";
@@ -119,12 +119,14 @@ class FakeAppServer implements Transport {
 
 class FakeChannel {
   readonly pushes: { event: string; payload: Payload }[] = [];
+  onPush: ((event: string) => void) | null = null;
   private readonly handlers = new Map<string, (p: Payload) => void>();
   on(event: string, fn: (p: Payload) => void): void {
     this.handlers.set(event, fn);
   }
   async push(event: string, payload: Payload) {
     this.pushes.push({ event, payload });
+    this.onPush?.(event);
     return { status: "ok", response: {} };
   }
   deliver(event: string, payload: Payload): void {
@@ -339,6 +341,12 @@ describe("a dispatch becomes a turn on the space's thread", () => {
     await t.bridge.whenIdle();
     expect(t.channel.events("reply")).toEqual([{ space_id: SPACE_A, content: "I could not start a turn for 1 message(s) — `turn/start refused`." }]);
     expect(t.logs).toContain(`${SPACE_A}: turn error: turn/start refused`);
+    // Typing is cleared after the failed start, before the batch turn turns it on again.
+    expect(t.channel.events("typing").slice(0, 2)).toEqual([
+      { space_id: SPACE_A, typing: true },
+      { space_id: SPACE_A, typing: false },
+    ]);
+    expect(t.channel.events("typing").at(-1)).toEqual({ space_id: SPACE_A, typing: false });
     const text = turnTexts(t)[1]!;
     expect(text.startsWith("3 messages arrived")).toBe(true);
     for (let i = 0; i < 3; i++) expect(text).toContain(`\nq${i}\n`);
@@ -384,6 +392,92 @@ describe("a dispatch becomes a turn on the space's thread", () => {
     t.channel.deliver("attention", attention(SPACE_A, "hello"));
     await t.bridge.whenIdle();
     expect(t.channel.events("reply")).toEqual([{ space_id: SPACE_A, content: "I could not complete that turn — `usage limit reached`." }]);
+  });
+});
+
+describe("the backlog backstop", () => {
+  const sender = (space: string | null, i: number, body = `q${i}`): Payload => ({
+    signal: { reason: "mention", ...(space !== null ? { space_id: space } : {}), message_id: `m-q${i}` },
+    message: { content: body, author: i % 2 === 0 ? "Even Sender" : "Odd Sender", author_id: `u-${i % 2}` },
+  });
+  const idsIn = (text: string) => [...text.matchAll(/message_id="(m-q\d+)"/g)].map((m) => m[1] as string);
+
+  /** 1 running turn, then `queued` built by `make`; returns the second turn's text and the turn/start count at each reply. */
+  async function overflow(space: string | null, queued: Payload[]) {
+    const t = setup();
+    t.server.autoComplete = null;
+    const turnsAtReply: number[] = [];
+    t.channel.onPush = (event) => {
+      if (event === "reply") turnsAtReply.push(t.server.calls("turn/start").length);
+    };
+    t.channel.deliver("attention", space !== null ? attention(space, "running") : { signal: { reason: "watch", prompt: "running" } });
+    await until(() => t.server.openTurns.length === 1);
+    for (const p of queued) t.channel.deliver("attention", p);
+    t.server.finishNext();
+    await until(() => t.server.openTurns.length === 1 && t.server.calls("turn/start").length === 2);
+    t.server.finishNext();
+    await t.bridge.whenIdle();
+    return { t, text: turnTexts(t)[1]!, turnsAtReply };
+  }
+
+  test("crossing the backstop posts ONE notice naming how many and from whom", async () => {
+    const n = MAX_PENDING_PER_SPACE + 3;
+    const sent = Array.from({ length: n }, (_, i) => sender(SPACE_A, i));
+    const { t, text, turnsAtReply } = await overflow(SPACE_A, sent);
+    const replies = t.channel.events("reply");
+    expect(replies.length).toBe(1);
+    expect(turnsAtReply).toEqual([1]);
+    const notice = replies[0]!.content as string;
+    expect(replies[0]!.space_id).toBe(SPACE_A);
+    expect(notice.startsWith("3 message(s) sent to me in this space while I was busy were NOT delivered to me")).toBe(true);
+    expect(notice).toContain(`backlog limit ${MAX_PENDING_PER_SPACE} messages / ${MAX_PENDING_CHARS} characters`);
+    expect(notice).toContain("from Even Sender (message m-q0), from Odd Sender (message m-q1), from Even Sender (message m-q2).");
+    expect(notice).toContain("Please resend anything still needed.");
+    // The batch is the newest MAX_PENDING_PER_SPACE, in order, newest last.
+    const inTurn = idsIn(text);
+    expect(inTurn).toEqual(Array.from({ length: MAX_PENDING_PER_SPACE }, (_, i) => `m-q${i + 3}`));
+    expect(text.endsWith(renderAttention(sent[n - 1]!, false))).toBe(true);
+    expect(text).toContain("3 earlier messages in this backlog were dropped and the space was told.");
+    // Nothing is both missing from the turn and missing from the notice.
+    const inNotice = [...notice.matchAll(/message (m-q\d+)/g)].map((m) => m[1] as string);
+    expect(new Set([...inTurn, ...inNotice])).toEqual(new Set(sent.map((_, i) => `m-q${i}`)));
+    expect(t.logs).toContain(`${SPACE_A}: backlog over limit, 3 not delivered, notice posted`);
+  });
+
+  test("a notice names the first ten and counts the rest", async () => {
+    const sent = Array.from({ length: MAX_PENDING_PER_SPACE + 12 }, (_, i) => sender(SPACE_A, i));
+    const { t } = await overflow(SPACE_A, sent);
+    const notice = t.channel.events("reply")[0]!.content as string;
+    expect(notice.startsWith("12 message(s)")).toBe(true);
+    expect([...notice.matchAll(/message (m-q\d+)/g)].map((m) => m[1])).toEqual(Array.from({ length: 10 }, (_, i) => `m-q${i}`));
+    expect(notice).toContain(", and 2 more. Please resend");
+  });
+
+  test("the character bound trips the same way", async () => {
+    const big = "x".repeat(90_000);
+    const sent = Array.from({ length: 4 }, (_, i) => sender(SPACE_A, i, `${big} q${i}`));
+    const { t, text } = await overflow(SPACE_A, sent);
+    const replies = t.channel.events("reply");
+    expect(replies.length).toBe(1);
+    expect(replies[0]!.content as string).toContain("2 message(s)");
+    expect(replies[0]!.content as string).toContain("(message m-q0), from Odd Sender (message m-q1).");
+    expect(idsIn(text)).toEqual(["m-q2", "m-q3"]);
+  });
+
+  test("under the backstop nothing is posted", async () => {
+    const { t, text } = await overflow(SPACE_A, Array.from({ length: 10 }, (_, i) => sender(SPACE_A, i)));
+    expect(t.channel.events("reply")).toEqual([]);
+    expect(text).not.toContain("dropped");
+    expect(idsIn(text).length).toBe(10);
+  });
+
+  test("NO_SPACE over the backstop: no reply push, the loss is logged and told to the agent", async () => {
+    const sent = Array.from({ length: MAX_PENDING_PER_SPACE + 2 }, (_, i) => sender(null, i));
+    const { t, text } = await overflow(null, sent);
+    expect(t.channel.events("reply")).toEqual([]);
+    expect(t.logs).toContain(`${NO_SPACE}: backlog over limit, undelivered 2 (no space to notify)`);
+    expect(text).toContain("2 earlier messages in this backlog were dropped; there was no space to tell.");
+    expect(idsIn(text)[0]).toBe("m-q2");
   });
 });
 
