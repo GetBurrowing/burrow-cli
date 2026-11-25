@@ -39,7 +39,9 @@ const CODEX = Bun.which("codex");
 const ROOT = realpathSync(mkdtempSync(join(tmpdir(), "suite-codex-live-")));
 const HOME = join(ROOT, "codex-home");
 const SPACE = "019f0000-0000-7000-8000-0000000000aa";
-afterAll(() => rmSync(ROOT, { recursive: true, force: true }));
+// Each case waits for its app-server to exit, so nothing is still writing
+// under ROOT; the bound covers a slow disk removing two Codex homes.
+afterAll(() => rmSync(ROOT, { recursive: true, force: true }), 30_000);
 
 test("the live codex smoke test below is not silently skipped", () => {
   if (CODEX === null) console.warn("codex is not on PATH: the live app-server smoke test is skipped");
@@ -145,6 +147,7 @@ describe.if(CODEX !== null)("real codex app-server, no login", () => {
         server.close();
       } finally {
         client.close();
+        await Promise.race([proc.exited, Bun.sleep(10_000)]);
       }
     },
     120_000,
@@ -252,6 +255,7 @@ describe.if(CODEX !== null)("real codex app-server, no login", () => {
         for (const r of replies) expect(r).toStartWith("I could not complete that turn");
       } finally {
         client.close();
+        await Promise.race([proc.exited, Bun.sleep(10_000)]);
       }
     },
     120_000,
