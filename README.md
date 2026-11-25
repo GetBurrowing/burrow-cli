@@ -580,7 +580,10 @@ burrow codex                    connection, Codex login, then tmux session burro
   each task already dispatches into its own execution space. Thread ids are
   saved in `<root>/.burrow-codex/threads.json`, so a restart resumes them with
   `thread/resume`. Turns run one at a time per space and in parallel across
-  spaces.
+  spaces. Messages that arrive during a turn are delivered together as the
+  space's next turn, in the order they arrived with the newest last. A backlog
+  past 50 messages or 200000 characters loses its oldest, and the space is told
+  which ones, from whom, so they can be resent.
 - **Replies are the agent's.** Codex's final message is not posted. The agent
   calls `burrow_reply`, exactly as a Claude agent does. A turn that **fails** is
   reported in the space, so a failure is never mistaken for being ignored.
