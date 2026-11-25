@@ -7,7 +7,7 @@
  */
 import { describe, expect, test } from "bun:test";
 import { AppServerClient, type Transport } from "../src/codex/app_server.ts";
-import { CodexBridge, DEVELOPER_INSTRUCTIONS, MAX_PENDING_PER_SPACE, renderAttention, type ApprovalPolicy, type SandboxChoice } from "../src/codex/bridge.ts";
+import { CodexBridge, DEVELOPER_INSTRUCTIONS, renderAttention, renderBatch, type ApprovalPolicy, type SandboxChoice } from "../src/codex/bridge.ts";
 import type { Payload } from "../src/codex/phoenix.ts";
 
 const SPACE_A = "019f0000-0000-7000-8000-00000000000a";
@@ -27,6 +27,9 @@ class FakeAppServer implements Transport {
   private turnSeq = 0;
   readonly openTurns: { threadId: string; turnId: string }[] = [];
   autoComplete: "completed" | "failed" | null = "completed";
+  /** Answer the next turn/start with an RPC error, held until {@link releaseTurnStartError}. */
+  failNextTurnStart = false;
+  heldTurnStartError: (() => void) | null = null;
   resumable = new Set<string>();
   private serverReqSeq = 1000;
   private readonly serverReplies = new Map<number, (l: Line) => void>();
@@ -52,6 +55,11 @@ class FakeAppServer implements Transport {
         if (this.resumable.has(msg.params.threadId)) return reply({ thread: { id: msg.params.threadId }, model: "fake-model" });
         return this.send({ id: msg.id, error: { code: -32600, message: `no rollout found for thread id ${msg.params.threadId}` } });
       case "turn/start": {
+        if (this.failNextTurnStart) {
+          this.failNextTurnStart = false;
+          this.heldTurnStartError = () => this.send({ id: msg.id, error: { code: -32603, message: "turn/start refused" } });
+          return;
+        }
         const turnId = `turn-${++this.turnSeq}`;
         reply({ turn: { id: turnId, status: "inProgress", error: null, items: [] } });
         this.send({ method: "turn/started", params: { threadId: msg.params.threadId, turn: { id: turnId, status: "inProgress" } } });
@@ -73,6 +81,12 @@ class FakeAppServer implements Transport {
         }),
       0,
     );
+  }
+
+  releaseTurnStartError(): void {
+    const fail = this.heldTurnStartError;
+    this.heldTurnStartError = null;
+    fail?.();
   }
 
   finishNext(status: "completed" | "failed" = "completed"): void {
@@ -163,6 +177,8 @@ async function until(cond: () => boolean): Promise<void> {
   expect(cond()).toBe(true);
 }
 
+const turnTexts = (t: ReturnType<typeof setup>): string[] => t.server.calls("turn/start").map((c) => c.params.input[0].text as string);
+
 const attention = (space: string, content: string, extra: Record<string, unknown> = {}): Payload => ({
   signal: { reason: "mention", space_id: space, message_id: `m-${content}`, ...extra },
   message: { content, author: "Ryan", author_id: "u-1" },
@@ -230,22 +246,121 @@ describe("a dispatch becomes a turn on the space's thread", () => {
     await t.bridge.whenIdle();
   });
 
-  test("a full queue drops the OLDEST waiting dispatch and says so", async () => {
+  test("a burst of 10 during an in-flight turn: every message reaches the next turn", async () => {
     const t = setup();
     t.server.autoComplete = null;
     t.channel.deliver("attention", attention(SPACE_A, "running"));
     await until(() => t.server.openTurns.length === 1);
-    for (let i = 0; i < MAX_PENDING_PER_SPACE + 1; i++) t.channel.deliver("attention", attention(SPACE_A, `q${i}`));
-    expect(t.logs.filter((l) => l.includes("dropped the oldest")).length).toBe(1);
-    for (let n = 1; n <= MAX_PENDING_PER_SPACE + 1; n++) {
-      await until(() => t.server.openTurns.length === 1 && t.server.calls("turn/start").length === n);
-      t.server.finishNext();
-    }
+    for (let i = 0; i < 10; i++) t.channel.deliver("attention", attention(SPACE_A, `q${i}`));
+    await Bun.sleep(20);
+    expect(t.server.calls("turn/start").length).toBe(1);
+    t.server.finishNext();
+    await until(() => t.server.openTurns.length === 1 && t.server.calls("turn/start").length === 2);
+    t.server.finishNext();
+    // One turn for the whole backlog: nothing else may start after it.
+    await Bun.sleep(20);
+    expect(t.server.calls("turn/start").length).toBe(2);
+    expect(t.server.openTurns.length).toBe(0);
     await t.bridge.whenIdle();
-    const texts = t.server.calls("turn/start").map((c) => c.params.input[0].text as string);
-    expect(texts.length).toBe(MAX_PENDING_PER_SPACE + 1);
-    expect(texts.some((x) => x.includes("\nq0\n"))).toBe(false);
-    expect(texts.some((x) => x.includes(`\nq${MAX_PENDING_PER_SPACE}\n`))).toBe(true);
+    const texts = turnTexts(t);
+    expect(texts.length).toBe(2);
+    for (let i = 0; i < 10; i++) expect(texts[1]!.split(`\nq${i}\n`).length - 1).toBe(1);
+    expect(texts[1]!.split("<channel ").length - 1).toBe(10);
+    expect(t.logs.filter((l) => /dropped/.test(l))).toEqual([]);
+    expect(t.channel.events("reply")).toEqual([]);
+  });
+
+  test("the batch is in arrival order with the newest last", async () => {
+    const t = setup();
+    t.server.autoComplete = null;
+    t.channel.deliver("attention", attention(SPACE_A, "running"));
+    await until(() => t.server.openTurns.length === 1);
+    for (let i = 0; i < 10; i++) t.channel.deliver("attention", attention(SPACE_A, `q${i}`));
+    t.server.finishNext();
+    await until(() => t.server.openTurns.length === 1 && t.server.calls("turn/start").length === 2);
+    t.server.finishNext();
+    await t.bridge.whenIdle();
+    const text = turnTexts(t)[1]!;
+    expect(text.startsWith("10 messages arrived in this space while your previous turn was running. ")).toBe(true);
+    expect(text).toContain("the LAST is the newest and may supersede earlier ones");
+    const at = Array.from({ length: 10 }, (_, i) => text.indexOf(`\nq${i}\n`));
+    expect(at.every((x) => x >= 0)).toBe(true);
+    expect([...at].sort((a, b) => a - b)).toEqual(at);
+    const newest = renderAttention(attention(SPACE_A, "q9"), false);
+    expect(text.endsWith(newest)).toBe(true);
+    expect(text.lastIndexOf("<channel ")).toBe(text.length - newest.length);
+    expect(t.server.calls("turn/start")[1]!.params.input.length).toBe(1);
+  });
+
+  test("one dispatch with no turn in flight starts immediately and renders as before", async () => {
+    const t = setup();
+    t.server.autoComplete = null;
+    t.channel.deliver("attention", attention(SPACE_A, "hello"));
+    await until(() => t.server.calls("turn/start").length === 1);
+    expect(t.server.openTurns.length).toBe(1);
+    expect(turnTexts(t)).toEqual([`<channel source="burrow" space_id="${SPACE_A}" message_id="m-hello" reason="mention" author="Ryan" author_id="u-1">\nhello\n</channel>`]);
+    expect(renderBatch([attention(SPACE_A, "hello")], true)).toBe(renderAttention(attention(SPACE_A, "hello"), true));
+    expect(t.channel.events("typing")).toEqual([{ space_id: SPACE_A, typing: true }]);
+    t.server.finishNext();
+    await t.bridge.whenIdle();
+    expect(t.channel.events("typing")).toEqual([
+      { space_id: SPACE_A, typing: true },
+      { space_id: SPACE_A, typing: false },
+    ]);
+    expect(t.channel.events("reply")).toEqual([]);
+  });
+
+  test("a failed turn still drains the queue", async () => {
+    const t = setup();
+    t.server.autoComplete = null;
+    t.channel.deliver("attention", attention(SPACE_A, "running"));
+    await until(() => t.server.openTurns.length === 1);
+    for (let i = 0; i < 3; i++) t.channel.deliver("attention", attention(SPACE_A, `q${i}`));
+    t.server.finishNext("failed");
+    await until(() => t.server.openTurns.length === 1 && t.server.calls("turn/start").length === 2);
+    t.server.finishNext();
+    await t.bridge.whenIdle();
+    expect(t.channel.events("reply")).toEqual([{ space_id: SPACE_A, content: "I could not complete that turn — `usage limit reached`." }]);
+    const text = turnTexts(t)[1]!;
+    expect(text.startsWith("3 messages arrived")).toBe(true);
+    for (let i = 0; i < 3; i++) expect(text).toContain(`\nq${i}\n`);
+  });
+
+  test("a turn that throws still drains the queue and says so in the space", async () => {
+    const t = setup();
+    t.server.autoComplete = null;
+    t.server.failNextTurnStart = true;
+    t.channel.deliver("attention", attention(SPACE_A, "running"));
+    await until(() => t.server.heldTurnStartError !== null);
+    for (let i = 0; i < 3; i++) t.channel.deliver("attention", attention(SPACE_A, `q${i}`));
+    t.server.releaseTurnStartError();
+    await until(() => t.server.openTurns.length === 1 && t.server.calls("turn/start").length === 2);
+    t.server.finishNext();
+    await t.bridge.whenIdle();
+    expect(t.channel.events("reply")).toEqual([{ space_id: SPACE_A, content: "I could not start a turn for 1 message(s) — `turn/start refused`." }]);
+    expect(t.logs).toContain(`${SPACE_A}: turn error: turn/start refused`);
+    const text = turnTexts(t)[1]!;
+    expect(text.startsWith("3 messages arrived")).toBe(true);
+    for (let i = 0; i < 3; i++) expect(text).toContain(`\nq${i}\n`);
+  });
+
+  test("whenIdle resolves only after the batch", async () => {
+    const t = setup();
+    t.server.autoComplete = null;
+    t.channel.deliver("attention", attention(SPACE_A, "running"));
+    await until(() => t.server.openTurns.length === 1);
+    for (let i = 0; i < 3; i++) t.channel.deliver("attention", attention(SPACE_A, `q${i}`));
+    let idle = false;
+    void t.bridge.whenIdle().then(() => {
+      idle = true;
+    });
+    t.server.finishNext();
+    await until(() => t.server.openTurns.length === 1 && t.server.calls("turn/start").length === 2);
+    await Bun.sleep(20);
+    expect(idle).toBe(false);
+    t.server.finishNext();
+    await until(() => idle);
+    expect(t.server.calls("turn/start").length).toBe(2);
   });
 
   test("the same dispatch twice inside the dedupe window is one turn", async () => {

@@ -14,9 +14,10 @@
  *  - task work already arrives per space — each task dispatches into its own
  *    execution space — so per space is also per task, without a second rule;
  *  - two turns on one thread interleave into nonsense, so turns are serialised
- *    per space (later dispatches queue, oldest dropped past
- *    {@link MAX_PENDING_PER_SPACE}, said out loud), while different spaces run
- *    concurrently instead of waiting behind each other.
+ *    per space: dispatches that arrive during a turn wait, and when it ends the
+ *    WHOLE backlog becomes the space's next turn, in arrival order with the
+ *    newest last ({@link renderBatch}); different spaces run concurrently
+ *    instead of waiting behind each other.
  *
  * A dispatch with no space (a responsibility with no `metadata.space_id`)
  * shares one thread, keyed {@link NO_SPACE}.
@@ -50,6 +51,7 @@ import { CLI_NAME } from "../version.ts";
 import { canonicalToolName } from "./reply_mcp.ts";
 
 export const NO_SPACE = "suite:no-space";
+/** Not enforced by the queue: a backlog is delivered whole (see dispatchBatch). */
 export const MAX_PENDING_PER_SPACE = 5;
 export const HISTORY_TURNS = 20;
 /** Two copies of one dispatch closer together than this are one dispatch. */
@@ -182,6 +184,22 @@ export function renderAttention(payload: Payload, withHistory: boolean): string 
   return `<channel source="burrow"${attrs}>\n${body.replace(/<\/channel>/gi, "<\\/channel>")}\n</channel>`;
 }
 
+/**
+ * (the backlog a space built up during a turn, is this the first turn in its
+ * space since start) → ONE turn text. Two or more attentions get a header and
+ * follow in arrival order, newest last, so the agent sees the whole backlog,
+ * including a later message that supersedes an earlier one, before it acts.
+ * History goes with the first envelope only, so it is prepended at most once.
+ * A single attention renders exactly as {@link renderAttention}.
+ */
+export function renderBatch(payloads: Payload[], withHistory: boolean): string {
+  if (payloads.length === 1) return renderAttention(payloads[0] as Payload, withHistory);
+  const header =
+    `${payloads.length} messages arrived in this space while your previous turn was running. ` +
+    "They follow in the order they arrived; the LAST is the newest and may supersede earlier ones. Read all of them before acting.";
+  return [header, ...payloads.map((p, i) => renderAttention(p, withHistory && i === 0))].join("\n\n");
+}
+
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /** The tools `burrow-channel` offers, and the socket event each becomes. */
@@ -246,30 +264,50 @@ export class CodexBridge {
     void this.dispatch(payload);
   }
 
-  private async dispatch(payload: Payload): Promise<void> {
+  private dispatch(payload: Payload): void {
     const space = spaceKey(payload);
     if (this.inflight.has(space)) {
+      // Everything that waits is delivered: the whole queue becomes the
+      // space's next turn (see dispatchBatch). Nothing is dropped here.
       const queue = this.pending.get(space) ?? [];
       queue.push(payload);
-      while (queue.length > MAX_PENDING_PER_SPACE) {
-        queue.shift();
-        this.opts.log(`${space}: queue full, dropped the oldest waiting dispatch`);
-      }
       this.pending.set(space, queue);
       return;
     }
+    void this.dispatchBatch(space, [payload]);
+  }
+
+  /**
+   * Run one turn for `payloads` (one, or the backlog that built up while the
+   * previous turn ran), then hand the space's WHOLE queue to one more turn.
+   * The space stays in `inflight` across the deferral, so a dispatch that
+   * lands in between joins the queue instead of starting a second turn on
+   * the thread, and whenIdle cannot resolve in the gap.
+   */
+  private async dispatchBatch(space: string, payloads: Payload[]): Promise<void> {
     this.inflight.add(space);
     try {
-      await this.runTurn(space, payload);
+      await this.runTurn(space, payloads);
     } catch (error) {
-      this.opts.log(`${space}: turn error: ${error instanceof Error ? error.message : String(error)}`);
+      const why = error instanceof Error ? error.message : String(error);
+      this.opts.log(`${space}: turn error: ${why}`);
+      // A turn that never started is a loss the space would not otherwise see.
+      if (UUID.test(space)) {
+        await this.channel
+          .push("reply", { space_id: space, content: `I could not start a turn for ${payloads.length} message(s) — \`${why}\`.` })
+          .catch((e: unknown) => this.opts.log(`${space}: could not report the turn error: ${e instanceof Error ? e.message : String(e)}`));
+      }
     } finally {
-      this.inflight.delete(space);
-      const queue = this.pending.get(space);
-      const next = queue?.shift();
-      if (queue !== undefined && queue.length === 0) this.pending.delete(space);
-      if (next !== undefined) setTimeout(() => void this.dispatch(next), 0);
-      else if (this.inflight.size === 0 && this.pending.size === 0) for (const r of this.idle.splice(0)) r();
+      const queue = this.pending.get(space) ?? [];
+      this.pending.delete(space);
+      const next = queue.splice(0);
+      if (next.length > 0) {
+        // Deferred so this finally does not recurse into the next turn.
+        setTimeout(() => void this.dispatchBatch(space, next), 0);
+      } else {
+        this.inflight.delete(space);
+        if (this.inflight.size === 0 && this.pending.size === 0) for (const r of this.idle.splice(0)) r();
+      }
     }
   }
 
@@ -305,11 +343,11 @@ export class CodexBridge {
     return r.thread.id;
   }
 
-  private async runTurn(space: string, payload: Payload): Promise<void> {
+  private async runTurn(space: string, payloads: Payload[]): Promise<void> {
     const realSpace = UUID.test(space);
     if (realSpace) void this.channel.push("typing", { space_id: space, typing: true });
     const threadId = await this.ensureThread(space);
-    const text = renderAttention(payload, !this.historySent.has(space));
+    const text = renderBatch(payloads, !this.historySent.has(space));
     this.historySent.add(space);
 
     const done = new Promise<TurnCompletedNotification>((resolve) => this.turnWaiters.set(threadId, resolve));
